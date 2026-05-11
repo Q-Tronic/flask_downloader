@@ -1,0 +1,73 @@
+
+<section class="page-card">
+    <h1 class="page-title">Lista Serwisów</h1>
+    <p class="muted">
+        Lista jest generowana na podstawie aktualnie zainstalowanej wersji <code>yt-dlp</code>, więc zmienia się razem z obsługiwanymi extractorami.
+    </p>
+
+    <div class="info-grid" style="margin-top: 18px;">
+        <div class="info-label">Wersja yt-dlp</div>
+        <div class="info-value"><strong>{{ services_state.version }}</strong></div>
+
+        <div class="info-label">Liczba serwisów</div>
+        <div class="info-value">{{ services_state.count }}</div>
+
+        <div class="info-label">Wygenerowano</div>
+        <div class="info-value">{{ services_state.generated_at_text }}</div>
+    </div>
+
+    {% if services_state.error %}
+    <div class="error" style="margin-top: 18px;">{{ services_state.error }}</div>
+    {% endif %}
+
+    <div class="services-toolbar">
+        <div class="services-summary">
+            <div class="inline-note">Wpisz fragment nazwy serwisu, aby zawęzić listę bez przeładowywania strony.</div>
+        </div>
+        <div>
+            <label class="field-label" for="serviceFilterInput">Filtr serwisów</label>
+            <input id="serviceFilterInput" type="text" placeholder="np. youtube, tvp, vimeo">
+        </div>
+    </div>
+
+    <div id="servicesGrid" class="services-grid">
+        {% for service in services_state.services %}
+        <div class="service-pill" data-service-name="{{ service|lower }}">{{ service }}</div>
+        {% endfor %}
+    </div>
+
+    <div id="servicesEmptyState" class="source-detail-empty" style="display:none; margin-top: 18px;">
+        Brak serwisów pasujących do podanego filtra.
+    </div>
+</section>
+
+<script>
+(function() {
+    const filterInput = document.getElementById("serviceFilterInput");
+    const grid = document.getElementById("servicesGrid");
+    const emptyState = document.getElementById("servicesEmptyState");
+
+    if (!filterInput || !grid || !emptyState) {
+        return;
+    }
+
+    function applyServiceFilter() {
+        const query = String(filterInput.value || "").trim().toLowerCase();
+        const items = Array.from(grid.querySelectorAll(".service-pill"));
+        let visibleCount = 0;
+
+        items.forEach(function(item) {
+            const name = String(item.dataset.serviceName || "");
+            const visible = !query || name.includes(query);
+            item.style.display = visible ? "" : "none";
+            if (visible) {
+                visibleCount += 1;
+            }
+        });
+
+        emptyState.style.display = visibleCount ? "none" : "";
+    }
+
+    filterInput.addEventListener("input", applyServiceFilter);
+})();
+</script>

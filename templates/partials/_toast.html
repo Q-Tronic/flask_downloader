@@ -1,0 +1,9 @@
+<div class="toast-host" aria-live="polite" aria-atomic="true">
+{% if flash %}
+    <div id="uiToast" class="toast {{ 'success' if flash.kind == 'success' else 'error' }}" role="status">
+        {{ flash.message }}
+    </div>
+{% endif %}
+    <div id="sourceContextToastStack" class="toast-stack"></div>
+    <div id="downloadToastStack" class="toast-stack"></div>
+</div>

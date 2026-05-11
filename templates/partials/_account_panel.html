@@ -1,0 +1,54 @@
+<section class="sidebar-panel">
+    <div class="sidebar-title">Konto</div>
+
+    {% if logged_in %}
+        <div class="admin-shell">
+            <div class="admin-summary">
+                <div class="admin-header">
+                    <div class="admin-chip">{% if admin_logged_in %}Tryb administratora{% else %}Zalogowany użytkownik{% endif %}</div>
+                    <div class="admin-user">
+                        <span>Aktywna sesja</span>
+                        <strong>{{ current_user.username }}</strong>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="account-tools">
+            <details class="account-change-password">
+                <summary>Zmień własne hasło</summary>
+                <div class="account-change-password-note">
+                    Zmiana działa dla aktualnie zalogowanego konta i odświeża widok bez pełnego reloadu strony.
+                </div>
+                <form method="post" action="/account/change-password" class="auth-form" data-shell-async="true">
+                    <input type="hidden" name="next" value="{{ current_path }}">
+                    <label class="field-label" for="accountCurrentPassword">Aktualne hasło</label>
+                    <input id="accountCurrentPassword" type="password" name="current_password" autocomplete="current-password" required>
+                    <label class="field-label" for="accountNewPassword">Nowe hasło</label>
+                    <input id="accountNewPassword" type="password" name="new_password" autocomplete="new-password" placeholder="minimum 4 znaki" required>
+                    <label class="field-label" for="accountConfirmPassword">Powtórz nowe hasło</label>
+                    <input id="accountConfirmPassword" type="password" name="confirm_new_password" autocomplete="new-password" placeholder="powtórz nowe hasło" required>
+                    <button type="submit" class="btn btn-secondary full-width">Zapisz nowe hasło</button>
+                </form>
+            </details>
+            <form method="post" action="/admin/logout" class="auth-form" data-shell-async="true">
+                <input type="hidden" name="next" value="{{ current_path }}">
+                <button type="submit" class="btn btn-danger full-width">Wyloguj</button>
+            </form>
+        </div>
+    {% else %}
+        <div class="admin-login-shell">
+            <div class="admin-login-title">Logowanie</div>
+            <div class="admin-login-subtitle">
+                Zaloguj się, aby zobaczyć swoje pliki, swoje pobrania i rozpocząć nowe zadania.
+            </div>
+        </div>
+        <form method="post" action="/admin/login" class="auth-form" data-shell-async="true">
+            <input type="hidden" name="next" value="{{ current_path }}">
+            <label class="field-label" for="authUsername">Login</label>
+            <input id="authUsername" type="text" name="username" autocomplete="username" value="admin" required>
+            <label class="field-label" for="authPassword">Hasło</label>
+            <input id="authPassword" type="password" name="password" autocomplete="current-password" required>
+            <button type="submit" class="btn full-width">Zaloguj</button>
+        </form>
+    {% endif %}
+</section>

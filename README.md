@@ -1,0 +1,99 @@
+# flask_downloader
+
+Panel Flask do ekstrakcji źródeł przez `yt-dlp`, kolejkowania pobrań na serwer, zarządzania lokalnymi plikami oraz obsługi biblioteki DLNA opartej o `Gerbera`.
+
+## Najważniejsze cechy
+- UI i komunikaty po polsku
+- rozdzielone role `admin` / `user`
+- kolejka pobrań audio i wideo
+- lokalnie zarządzany `ffmpeg` dla `yt-dlp`
+- panel utrzymania `yt-dlp`, `ffmpeg` i `DLNA`
+- AJAXowa nawigacja i odświeżanie stanu bez pełnych reloadów
+- biblioteka DLNA z bukietami, whitelistą IP i automatycznym sprzątaniem martwych wpisów
+
+## Struktura projektu
+```text
+app.py
+flask_downloader/
+  config.py
+  legacy_app.py
+  paths.py
+  routes/
+  stores/
+  utils/
+templates/
+static/
+data/
+scripts/
+deploy/
+```
+
+## Dane i sekrety
+Prawdziwe dane aplikacji nie powinny trafiać do repozytorium.
+
+Katalog `data/` w środowisku roboczym zawiera:
+- `data/config.json`
+- `data/jobs.json`
+- `data/users.json`
+
+Do repo trafiają tylko przykłady:
+- `data/config.example.json`
+- `data/jobs.example.json`
+- `data/users.example.json`
+
+Sekrety i ustawienia środowiskowe trzymaj w lokalnym `.env`. W repo jest tylko `.env.example`.
+
+## Szybki start lokalny
+```bash
+python -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+python app.py
+```
+
+Windows PowerShell:
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
+python app.py
+```
+
+## Instalacja na Debianie
+Docelowy instalator jest w:
+- `scripts/install.sh`
+
+Przykład:
+```bash
+sudo bash scripts/install.sh
+```
+
+Instalator:
+- wykrywa Debiana 10+
+- pyta o port aplikacji z timeoutem 30 sekund i domyślnym `9999`
+- tworzy użytkownika Linux dla usługi
+- tworzy `.env`
+- tworzy pierwszego administratora aplikacji
+- nie nadpisuje istniejących danych w `data/`
+
+## Aktualizacja / deploy
+Skrypty pomocnicze:
+- `scripts/deploy.sh` dla systemów Unix-like
+- `scripts/deploy.ps1` dla PowerShell / Windows
+
+Oba skrypty:
+- robią backup kodu na serwerze
+- nie naruszają `data/`
+- nie powinny nadpisywać `.env`
+- restartują usługę aplikacji po wdrożeniu
+
+## GitHub
+Przed publikacją dopilnuj:
+- `.env` nie trafia do repo
+- `data/*.json` z realnymi danymi nie trafiają do repo
+- logi, runtime DLNA i lokalne cache nie trafiają do repo
+
+## Uwaga o DLNA
+Serwer DLNA jest zarządzany z panelu administratora. Nowsze wersje `Gerbera` są preferowane, bo poprawnie obsługują logiczny układ `bukiet -> pliki` i izolację klientów.

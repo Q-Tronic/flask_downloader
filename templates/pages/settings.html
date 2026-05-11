@@ -1,0 +1,1079 @@
+
+<section class="page-card">
+    <h1 class="page-title">Konfiguracja</h1>
+    <p class="muted">
+        Tu ustawisz retencję wpisów z pobrań i główną lokalizację zapisu. Każde pobranie trafia automatycznie do podfolderu z datą w formacie <code>YYYY-MM-DD</code>.
+    </p>
+
+    {% if mount.online %}
+        <div id="settingsMountStatus" class="mount-ok">{{ mount.message }}</div>
+    {% else %}
+        <div id="settingsMountStatus" class="mount-bad">{{ mount.message }}</div>
+    {% endif %}
+
+    <div class="settings-overview-grid">
+        <div class="overview-tile">
+            <span>Katalog bazowy użytkowników</span>
+            <strong><code id="settingsUserStorageRootValue">{{ config.user_storage_root }}</code></strong>
+        </div>
+        <div class="overview-tile">
+            <span>Katalog admin / video</span>
+            <strong><code id="settingsDownloadRootValue">{{ config.download_root }}</code></strong>
+        </div>
+        <div class="overview-tile">
+            <span>Katalog admin / audio</span>
+            <strong><code id="settingsAudioDownloadRootValue">{{ config.audio_download_root }}</code></strong>
+        </div>
+        <div class="overview-tile">
+            <span>Dzisiejszy folder admin / video</span>
+            <strong><code id="settingsTodayDownloadDirValue">{{ today_download_dir }}</code></strong>
+        </div>
+        <div class="overview-tile">
+            <span>Dzisiejszy folder admin / audio</span>
+            <strong><code id="settingsTodayAudioDownloadDirValue">{{ today_audio_download_dir }}</code></strong>
+        </div>
+        <div class="overview-tile">
+            <span>Retencja wpisów</span>
+            <strong id="settingsRetentionDaysValue">{{ config.job_retention_days }} dni</strong>
+        </div>
+        <div class="overview-tile">
+            <span>Minimalny poprawny plik</span>
+            <strong>1 MB</strong>
+            <div class="inline-note">Mniejsze pliki są usuwane automatycznie, a zadanie dostaje status niepowodzenia.</div>
+        </div>
+    </div>
+</section>
+
+<section id="settingsMaintenancePage" class="page-card">
+    <h2 class="section-title">Panel utrzymania</h2>
+    <p class="muted">Najważniejsze ustawienia, aktualizacja <code>yt-dlp</code>, instalacja <code>ffmpeg</code> oraz kontrola usługi Flask są zebrane w jednym miejscu.</p>
+    <div class="settings-grid">
+        <div class="stack-card">
+            <div class="card-heading">
+                <div class="card-title">Ustawienia zapisu</div>
+                <div class="card-subtitle">
+                    Zmienisz tutaj retencję wpisów i katalog główny. Każde nowe pobranie dalej trafi do dziennego podfolderu z bieżącą datą.
+                </div>
+            </div>
+
+            <form id="settingsConfigForm" method="post" action="/settings" class="auth-form" data-settings-async="true">
+                <label class="field-label" for="jobRetentionDays">Usuwanie zakończonych wpisów po ilu dniach</label>
+                <input id="jobRetentionDays" type="text" name="job_retention_days" value="{{ config.job_retention_days }}" inputmode="numeric" required>
+
+                <label class="field-label" for="userStorageRoot">Katalog bazowy użytkowników</label>
+                <input id="userStorageRoot" type="text" name="user_storage_root" value="{{ config.user_storage_root }}" required>
+
+                <div class="inline-note">
+                    Każdy użytkownik dostaje własne katalogi w układzie <code>{{ config.user_storage_root }}/login/video/{{ today_download_dir.split('/')[-1] }}/plik.mp4</code>.
+                </div>
+                <div class="inline-note">
+                    Audio zapisuje się analogicznie, np. <code>{{ config.user_storage_root }}/login/audio/{{ today_audio_download_dir.split('/')[-1] }}/utwor.mp3</code>.
+                </div>
+                <div class="inline-note">
+                    Pliki audio są konwertowane przez <code>ffmpeg</code> do <code>mp3</code> z ustawieniem najwyższej jakości VBR (<code>q=0</code>), ale źródłowe <code>m4a</code> z YouTube nadal pozostaje formatem stratnym.
+                </div>
+
+                <button type="submit" class="btn">Zapisz konfigurację</button>
+            </form>
+        </div>
+
+        <div class="stack-card">
+            <div class="card-heading">
+                <div class="card-title">Użytkownicy i role</div>
+                <div class="card-subtitle">
+                    Administrator tworzy tutaj konta, edytuje loginy i role, ręcznie resetuje hasła oraz usuwa użytkowników wraz z ich plikami, zadaniami oraz wpisami powiązanymi z biblioteką.
+                </div>
+            </div>
+
+            <form id="settingsCreateUserForm" method="post" action="/settings/users/create" class="auth-form" data-settings-async="true" data-reset-after-success="true">
+                <label class="field-label" for="newUsername">Login użytkownika</label>
+                <input id="newUsername" type="text" name="username" placeholder="np. marta" required>
+
+                <label class="field-label" for="newUserPassword">Hasło startowe</label>
+                <input id="newUserPassword" type="password" name="password" placeholder="minimum 4 znaki" required>
+
+                <label class="field-label" for="newUserRole">Rola</label>
+                <select id="newUserRole" name="role">
+                    <option value="user" selected>Użytkownik</option>
+                    <option value="admin">Administrator</option>
+                </select>
+
+                <button type="submit" class="btn">Dodaj użytkownika</button>
+            </form>
+
+            <div class="inline-note">
+                Konto startowe pozostaje <code>admin / admin</code> do momentu ręcznej zmiany hasła. Własne hasło każdy zalogowany użytkownik zmienia z panelu <code>Konto</code> w bocznej kolumnie.
+            </div>
+
+            <div id="userManagementList" class="dlna-list">
+                {% for user in user_rows %}
+                    <div class="dlna-item">
+                        <div class="dlna-item-head">
+                            <div>
+                                <div class="dlna-item-title">{{ user.username }}</div>
+                                <div class="dlna-item-meta">
+                                    Rola: {{ user.role }} • Pliki: {{ user.file_count }} • Zadania: {{ user.job_count }} • Utworzono: {{ user.created_at_text or "-" }}
+                                </div>
+                            </div>
+                            <div class="dlna-item-head-actions">
+                                <span class="service-status-pill {% if user.role == 'admin' %}success{% else %}muted{% endif %}">{{ "Administrator" if user.role == "admin" else "Użytkownik" }}</span>
+                            </div>
+                        </div>
+                        <div class="dlna-item-body" style="display:grid;gap:12px;">
+                            {% if user.can_edit %}
+                            <form method="post" action="/settings/users/update" class="dlna-inline-form is-wide" data-settings-async="true" data-busy-label="Zapisywanie użytkownika...">
+                                <input type="hidden" name="original_username" value="{{ user.username }}">
+                                <div class="field-group">
+                                    <label class="field-label">Login</label>
+                                    <input type="text" name="username" value="{{ user.username }}" required>
+                                </div>
+                                <div class="field-group">
+                                    <label class="field-label">Rola</label>
+                                    <select name="role">
+                                        <option value="user" {% if user.role == "user" %}selected{% endif %}>Użytkownik</option>
+                                        <option value="admin" {% if user.role == "admin" %}selected{% endif %}>Administrator</option>
+                                    </select>
+                                </div>
+                                <div class="field-group">
+                                    <label class="field-label">&nbsp;</label>
+                                    <button type="submit" class="btn full-width">Zapisz zmiany</button>
+                                </div>
+                            </form>
+                            {% endif %}
+
+                            {% if user.can_admin_reset_password %}
+                            <form method="post" action="/settings/users/reset-password" class="dlna-inline-form is-wide" data-settings-async="true" data-reset-after-success="true" data-busy-label="Resetowanie hasła...">
+                                <input type="hidden" name="username" value="{{ user.username }}">
+                                <div class="field-group">
+                                    <label class="field-label">Nowe hasło</label>
+                                    <input type="password" name="new_password" placeholder="minimum 4 znaki" required>
+                                </div>
+                                <div class="field-group">
+                                    <label class="field-label">&nbsp;</label>
+                                    <div class="inline-note">Administrator ustawia nowe hasło bez znajomości starego.</div>
+                                </div>
+                                <div class="field-group">
+                                    <label class="field-label">&nbsp;</label>
+                                    <button type="submit" class="btn btn-secondary full-width">Resetuj hasło</button>
+                                </div>
+                            </form>
+                            {% endif %}
+
+                            {% if user.can_delete %}
+                            <form method="post" action="/settings/users/delete" class="dlna-inline-form is-single" data-settings-async="true" data-busy-label="Usuwanie użytkownika..." data-confirm-message="Usunąć użytkownika {{ user.username }} wraz z jego plikami i zadaniami?">
+                                <input type="hidden" name="username" value="{{ user.username }}">
+                                <button type="submit" class="btn btn-delete">Usuń użytkownika</button>
+                            </form>
+                            {% endif %}
+
+                            {% if user.is_current_user %}
+                            <div class="inline-note">Własnego loginu i roli nie zmienisz w tym panelu. Własne hasło zmienisz z sekcji <code>Konto</code> po lewej stronie.</div>
+                            {% endif %}
+                            {% if user.is_default_admin %}
+                            <div class="inline-note">To jest domyślne konto administratora. Nie usuniesz go ani nie zmienisz mu loginu lub roli w tym panelu.</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="settings-side-stack">
+            <div class="stack-card update-card">
+                <div class="card-heading">
+                    <div class="card-title">Aktualizacja yt-dlp</div>
+                    <div class="card-subtitle">
+                        Sprawdzisz tutaj wersję zainstalowaną na serwerze i porównasz ją z najnowszym wydaniem z kanału używanego przez aplikację.
+                    </div>
+                </div>
+
+                <div class="service-status-row">
+                    <span id="ytDlpStatusPill" class="service-status-pill {{ yt_dlp_state.status_pill_kind }}">{{ yt_dlp_state.status_pill_label }}</span>
+                    <div id="ytDlpCheckedAt" class="small">Ostatnie sprawdzenie: {{ yt_dlp_state.checked_at_text }}</div>
+                </div>
+
+                <div class="settings-overview-grid">
+                    <div class="overview-tile">
+                        <span>Wersja na serwerze</span>
+                        <strong id="ytDlpCurrentVersion">{{ yt_dlp_state.current_version }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Najnowsza wersja</span>
+                        <strong id="ytDlpLatestVersion">{{ yt_dlp_state.latest_version }}</strong>
+                    </div>
+                </div>
+
+                <div id="ytDlpCheckErrorBox" class="error" {% if not yt_dlp_state.check_error %}hidden{% endif %}>
+                    <span id="ytDlpCheckErrorText">{% if yt_dlp_state.check_error %}Ostatnia próba sprawdzenia zakończyła się błędem: {{ yt_dlp_state.check_error }}{% endif %}</span>
+                </div>
+
+                <div class="service-metric">
+                    <span>Mechanizm aktualizacji</span>
+                    <strong><code>python -m pip install -U --pre "yt-dlp[default]"</code></strong>
+                </div>
+
+                <div class="inline-note">
+                    Po udanej aktualizacji backend może wymagać restartu, aby zaczął korzystać z nowej wersji pakietu.
+                </div>
+
+                <form id="ytDlpCheckForm" method="post" action="/settings/yt-dlp-check" class="auth-form" data-maintenance-lock="yt_dlp_update" data-settings-async="true">
+                    <button type="submit" class="btn btn-secondary full-width">Sprawdź czy jest nowsza wersja</button>
+                </form>
+
+                <form id="ytDlpActionForm" method="post" action="/settings/yt-dlp-update" class="auth-form" data-maintenance-lock="yt_dlp_update" data-maintenance-start="yt_dlp_update" data-settings-async="true" {% if not yt_dlp_state.action_needed %}hidden{% endif %}>
+                    <button id="ytDlpActionButton" type="submit" class="btn btn-green full-width">{{ yt_dlp_state.action_button_label }}</button>
+                </form>
+
+                <div id="ytDlpActionNote" class="inline-note" {% if yt_dlp_state.action_needed %}hidden{% endif %}>
+                    Aktualizacja nie jest teraz wymagana.
+                </div>
+
+                <div id="ytDlpTaskPanel" class="maintenance-task-panel" {% if not maintenance_tasks.yt_dlp_update.visible %}hidden{% endif %}>
+                    <div class="service-status-row">
+                        <span id="ytDlpTaskStatusPill" class="service-status-pill {{ maintenance_tasks.yt_dlp_update.status_kind }}">{{ maintenance_tasks.yt_dlp_update.status_label }}</span>
+                        <div id="ytDlpTaskTime" class="small">
+                            {% if maintenance_tasks.yt_dlp_update.active %}
+                                Start: {{ maintenance_tasks.yt_dlp_update.started_at_text }}
+                            {% elif maintenance_tasks.yt_dlp_update.finished_at_text %}
+                                Zakończono: {{ maintenance_tasks.yt_dlp_update.finished_at_text }}
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="maintenance-task-head">
+                        <div id="ytDlpTaskLabel" class="maintenance-task-label">{{ maintenance_tasks.yt_dlp_update.title or "Aktualizacja yt-dlp" }}</div>
+                        <div id="ytDlpTaskPercent" class="maintenance-task-percent">
+                            {% if maintenance_tasks.yt_dlp_update.progress_percent is not none %}
+                                {{ "%.1f"|format(maintenance_tasks.yt_dlp_update.progress_percent) }}%
+                            {% else %}
+                                ...
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div id="ytDlpTaskProgress" class="progress{% if maintenance_tasks.yt_dlp_update.progress_percent is none %} is-indeterminate{% endif %}">
+                        <div id="ytDlpTaskBar" class="progress-bar {% if maintenance_tasks.yt_dlp_update.active %}downloading{% elif maintenance_tasks.yt_dlp_update.status == 'success' %}completed{% elif maintenance_tasks.yt_dlp_update.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if maintenance_tasks.yt_dlp_update.progress_percent is not none %}{{ maintenance_tasks.yt_dlp_update.progress_percent }}{% else %}38{% endif %}%;"></div>
+                    </div>
+                    <div id="ytDlpTaskDetail" class="maintenance-task-detail">{{ maintenance_tasks.yt_dlp_update.detail or "Po uruchomieniu aktualizacji zobaczysz tutaj kolejne etapy pracy." }}</div>
+                </div>
+            </div>
+
+            <div class="stack-card update-card">
+                <div class="card-heading">
+                    <div class="card-title">Instalacja ffmpeg</div>
+                    <div class="card-subtitle">
+                        Ta binarka jest potrzebna do łączenia osobnego obrazu i dźwięku. Aplikacja pobiera build z repozytorium <code>yt-dlp/FFmpeg-Builds</code> i podaje jego ścieżkę bezpośrednio do <code>yt-dlp</code>.
+                    </div>
+                </div>
+
+                <div class="service-status-row">
+                    <span id="ffmpegStatusPill" class="service-status-pill {{ ffmpeg_state.status_pill_kind }}">{{ ffmpeg_state.status_pill_label }}</span>
+                    <div id="ffmpegCheckedAt" class="small">Ostatnie sprawdzenie: {{ ffmpeg_state.checked_at_text }}</div>
+                </div>
+
+                <div class="settings-overview-grid">
+                    <div class="overview-tile">
+                        <span>Wersja na serwerze</span>
+                        <strong id="ffmpegCurrentVersion">{{ ffmpeg_state.current_version }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Najnowszy build</span>
+                        <strong id="ffmpegLatestVersion">{{ ffmpeg_state.latest_version }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Źródło</span>
+                        <strong id="ffmpegCurrentSource">{{ ffmpeg_state.current_source_label }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Używany build</span>
+                        <strong id="ffmpegCurrentBuild">{{ ffmpeg_state.current_build_label }}</strong>
+                    </div>
+                </div>
+
+                <div id="ffmpegCheckErrorBox" class="error" {% if not ffmpeg_state.check_error %}hidden{% endif %}>
+                    <span id="ffmpegCheckErrorText">{% if ffmpeg_state.check_error %}Ostatnia próba sprawdzenia zakończyła się błędem: {{ ffmpeg_state.check_error }}{% endif %}</span>
+                </div>
+
+                <div class="service-metric">
+                    <span>Ścieżka dla yt-dlp</span>
+                    <strong><code id="ffmpegCurrentPath">{{ ffmpeg_state.current_path }}</code></strong>
+                </div>
+
+                <div class="inline-note">
+                    To rozwiązuje błąd o braku <code>ffmpeg</code> przy łączeniu wielu formatów. Po instalacji nowe zadania pobierania od razu zaczną korzystać z tej binarki.
+                </div>
+
+                <div id="ffmpegExternalNote" class="inline-note" {% if ffmpeg_state.managed or not ffmpeg_state.installed %}hidden{% endif %}>
+                    Obecnie wykryto zewnętrzny <code>ffmpeg</code> z systemowego <code>PATH</code>. Instalacja z panelu przełączy aplikację na lokalny build zarządzany przez ten projekt.
+                </div>
+
+                <form id="ffmpegCheckForm" method="post" action="/settings/ffmpeg-check" class="auth-form" data-maintenance-lock="ffmpeg_install" data-settings-async="true">
+                    <button type="submit" class="btn btn-secondary full-width">Sprawdź najnowszy build ffmpeg</button>
+                </form>
+
+                <form id="ffmpegActionForm" method="post" action="/settings/ffmpeg-install" class="auth-form" data-maintenance-lock="ffmpeg_install" data-maintenance-start="ffmpeg_install" data-settings-async="true" {% if not ffmpeg_state.action_needed %}hidden{% endif %}>
+                    <button id="ffmpegActionButton" type="submit" class="btn btn-green full-width">{{ ffmpeg_state.action_button_label }}</button>
+                </form>
+
+                <div id="ffmpegActionNote" class="inline-note" {% if ffmpeg_state.action_needed %}hidden{% endif %}>
+                    Aktualizacja nie jest teraz wymagana.
+                </div>
+
+                <div id="ffmpegTaskPanel" class="maintenance-task-panel" {% if not maintenance_tasks.ffmpeg_install.visible %}hidden{% endif %}>
+                    <div class="service-status-row">
+                        <span id="ffmpegTaskStatusPill" class="service-status-pill {{ maintenance_tasks.ffmpeg_install.status_kind }}">{{ maintenance_tasks.ffmpeg_install.status_label }}</span>
+                        <div id="ffmpegTaskTime" class="small">
+                            {% if maintenance_tasks.ffmpeg_install.active %}
+                                Start: {{ maintenance_tasks.ffmpeg_install.started_at_text }}
+                            {% elif maintenance_tasks.ffmpeg_install.finished_at_text %}
+                                Zakończono: {{ maintenance_tasks.ffmpeg_install.finished_at_text }}
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="maintenance-task-head">
+                        <div id="ffmpegTaskLabel" class="maintenance-task-label">{{ maintenance_tasks.ffmpeg_install.title or "Instalacja ffmpeg" }}</div>
+                        <div id="ffmpegTaskPercent" class="maintenance-task-percent">
+                            {% if maintenance_tasks.ffmpeg_install.progress_percent is not none %}
+                                {{ "%.1f"|format(maintenance_tasks.ffmpeg_install.progress_percent) }}%
+                            {% else %}
+                                ...
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div id="ffmpegTaskProgress" class="progress{% if maintenance_tasks.ffmpeg_install.progress_percent is none %} is-indeterminate{% endif %}">
+                        <div id="ffmpegTaskBar" class="progress-bar {% if maintenance_tasks.ffmpeg_install.active %}downloading{% elif maintenance_tasks.ffmpeg_install.status == 'success' %}completed{% elif maintenance_tasks.ffmpeg_install.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if maintenance_tasks.ffmpeg_install.progress_percent is not none %}{{ maintenance_tasks.ffmpeg_install.progress_percent }}{% else %}38{% endif %}%;"></div>
+                    </div>
+                    <div id="ffmpegTaskDetail" class="maintenance-task-detail">{{ maintenance_tasks.ffmpeg_install.detail or "Po uruchomieniu instalacji zobaczysz tutaj kolejne etapy pracy." }}</div>
+                </div>
+            </div>
+
+            <div class="stack-card service-card">
+                <div class="card-heading">
+                    <div class="card-title">Serwer DLNA</div>
+                    <div class="card-subtitle">
+                        Pakiet <code>gerbera</code>, stan usługi <code>{{ dlna_service_state.service_name }}</code> i szybkie przejście do pełnego zarządzania kolekcjami, klientami oraz mediami DLNA.
+                    </div>
+                </div>
+
+                <div class="service-status-row">
+                    <span id="settingsDlnaPackageStatusPill" class="service-status-pill {{ dlna_package_state.status_pill_kind }}">{{ dlna_package_state.status_pill_label }}</span>
+                    <div id="settingsDlnaPackageCheckedAt" class="small">Ostatnie sprawdzenie: {{ dlna_package_state.checked_at_text }}</div>
+                </div>
+
+                <div class="settings-overview-grid">
+                    <div class="overview-tile">
+                        <span>Wersja na serwerze</span>
+                        <strong id="settingsDlnaCurrentVersion">{{ dlna_package_state.current_version }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Kandydat z apt</span>
+                        <strong id="settingsDlnaLatestVersion">{{ dlna_package_state.latest_version }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Status usługi</span>
+                        <strong id="settingsDlnaServiceStatus">{{ dlna_service_state.status_label }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Autostart</span>
+                        <strong id="settingsDlnaUnitState">{{ dlna_service_state.unit_file_label }}</strong>
+                    </div>
+                </div>
+
+                <div id="settingsDlnaPackageErrorBox" class="error" {% if not dlna_package_state.check_error %}hidden{% endif %}>
+                    <span id="settingsDlnaPackageErrorText">{% if dlna_package_state.check_error %}Ostatnia próba sprawdzenia zakończyła się błędem: {{ dlna_package_state.check_error }}{% endif %}</span>
+                </div>
+
+                <div id="settingsDlnaServiceErrorBox" class="error" {% if not dlna_service_state.error %}hidden{% endif %}>
+                    <span id="settingsDlnaServiceErrorText">{% if dlna_service_state.error %}Nie udało się odczytać pełnego statusu usługi DLNA: {{ dlna_service_state.error }}{% endif %}</span>
+                </div>
+
+                <div class="service-metric">
+                    <span>Eksport DLNA</span>
+                    <strong><code id="settingsDlnaExportRoot">{{ dlna_service_state.export_root }}</code></strong>
+                </div>
+
+                <form id="settingsDlnaCheckForm" method="post" action="/settings/dlna-check" class="auth-form" data-maintenance-lock="dlna_install" data-settings-async="true">
+                    <button type="submit" class="btn btn-secondary full-width">Sprawdź pakiet DLNA</button>
+                </form>
+
+                <form id="settingsDlnaActionForm" method="post" action="/settings/dlna-install" class="auth-form" data-maintenance-lock="dlna_install" data-maintenance-start="dlna_install" data-settings-async="true" {% if not dlna_package_state.action_needed %}hidden{% endif %}>
+                    <button id="settingsDlnaActionButton" type="submit" class="btn btn-green full-width">{{ dlna_package_state.action_button_label }}</button>
+                </form>
+
+                <div id="settingsDlnaActionNote" class="inline-note" {% if dlna_package_state.action_needed %}hidden{% endif %}>
+                    Pakiet DLNA nie wymaga teraz aktualizacji.
+                </div>
+
+                <div id="settingsDlnaTaskPanel" class="maintenance-task-panel" {% if not maintenance_tasks.dlna_install.visible %}hidden{% endif %}>
+                    <div class="service-status-row">
+                        <span id="settingsDlnaTaskStatusPill" class="service-status-pill {{ maintenance_tasks.dlna_install.status_kind }}">{{ maintenance_tasks.dlna_install.status_label }}</span>
+                        <div id="settingsDlnaTaskTime" class="small">
+                            {% if maintenance_tasks.dlna_install.active %}
+                                Start: {{ maintenance_tasks.dlna_install.started_at_text }}
+                            {% elif maintenance_tasks.dlna_install.finished_at_text %}
+                                Zakończono: {{ maintenance_tasks.dlna_install.finished_at_text }}
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="maintenance-task-head">
+                        <div id="settingsDlnaTaskLabel" class="maintenance-task-label">{{ maintenance_tasks.dlna_install.title or "Instalacja serwera DLNA" }}</div>
+                        <div id="settingsDlnaTaskPercent" class="maintenance-task-percent">
+                            {% if maintenance_tasks.dlna_install.progress_percent is not none %}
+                                {{ "%.1f"|format(maintenance_tasks.dlna_install.progress_percent) }}%
+                            {% else %}
+                                ...
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div id="settingsDlnaTaskProgress" class="progress{% if maintenance_tasks.dlna_install.progress_percent is none %} is-indeterminate{% endif %}">
+                        <div id="settingsDlnaTaskBar" class="progress-bar {% if maintenance_tasks.dlna_install.active %}downloading{% elif maintenance_tasks.dlna_install.status == 'success' %}completed{% elif maintenance_tasks.dlna_install.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if maintenance_tasks.dlna_install.progress_percent is not none %}{{ maintenance_tasks.dlna_install.progress_percent }}{% else %}38{% endif %}%;"></div>
+                    </div>
+                    <div id="settingsDlnaTaskDetail" class="maintenance-task-detail">{{ maintenance_tasks.dlna_install.detail or "Po uruchomieniu instalacji zobaczysz tutaj kolejne etapy pracy." }}</div>
+                </div>
+
+                <form id="settingsDlnaToggleForm" method="post" action="/settings/dlna-toggle-service" class="auth-form" data-settings-async="true">
+                    <input type="hidden" name="enabled" value="{{ '0' if dlna_service_state.desired_enabled else '1' }}">
+                    <button id="settingsDlnaToggleButton" type="submit" class="btn btn-green full-width">{{ dlna_service_state.toggle_button_label }}</button>
+                </form>
+
+                <form id="settingsDlnaRestartForm" method="post" action="/settings/dlna-restart-service" class="auth-form" data-settings-async="true">
+                    <button id="settingsDlnaRestartButton" type="submit" class="btn btn-stop full-width">Uruchom ponownie serwer DLNA</button>
+                </form>
+
+                <div class="actions" style="margin-top: 4px;">
+                    <a class="btn btn-secondary" href="/dlna" data-shell-nav="true">Otwórz pełną zakładkę DLNA</a>
+                </div>
+            </div>
+
+            <div class="stack-card service-card">
+                <div class="card-heading">
+                    <div class="card-title">Usługa Flask</div>
+                    <div class="card-subtitle">
+                        Podejrzysz stan procesu, uptime i ostatni restart, a w razie potrzeby wyślesz restart usługi <code>{{ service_state.service_name }}</code>.
+                    </div>
+                </div>
+
+                <div class="service-status-row">
+                    <span id="serviceStatusPill" class="service-status-pill {{ service_state.status_kind }}">{{ service_state.status_label }}</span>
+                    <div id="servicePidText" class="small">
+                        {% if service_state.main_pid %}
+                            PID: {{ service_state.main_pid }}{% if service_state.sub_state %} | {{ service_state.sub_state }}{% endif %}
+                        {% else %}
+                            {% if service_state.sub_state %}{{ service_state.sub_state }}{% else %}Brak PID{% endif %}
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="settings-overview-grid">
+                    <div class="overview-tile">
+                        <span>Uptime aplikacji</span>
+                        <strong id="serviceAppUptime">{{ service_state.app_uptime_text }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Uptime usługi</span>
+                        <strong id="serviceUptime">{{ service_state.service_uptime_text }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Ostatni restart</span>
+                        <strong id="serviceLastRestart">{{ service_state.last_restart_text }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Nazwa usługi</span>
+                        <strong><code id="serviceName">{{ service_state.service_name }}</code></strong>
+                    </div>
+                </div>
+
+                <div id="serviceErrorBox" class="error" {% if not service_state.error %}hidden{% endif %}>
+                    <span id="serviceErrorText">{% if service_state.error %}Nie udało się odczytać pełnego statusu usługi: {{ service_state.error }}{% endif %}</span>
+                </div>
+
+                <div class="inline-note">
+                    Restart wysyła polecenie do <code>systemd</code>. Po kliknięciu panel może przez kilka sekund pokazywać poprzedni stan, zanim usługa wstanie ponownie.
+                </div>
+
+                <form id="restartServiceForm" method="post" action="/settings/restart-service" class="auth-form" data-settings-async="true">
+                    <button id="restartServiceButton" type="submit" class="btn btn-stop full-width">Uruchom ponownie usługę Flask</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</section>
+
+<script>
+(function() {
+    const root = document.getElementById("settingsMaintenancePage");
+    if (!root) {
+        return;
+    }
+
+    const pollIntervalMs = 1000;
+    let pollTimer = null;
+
+    function escapeHtml(value) {
+        return String(value ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#039;");
+    }
+
+    function setText(id, value) {
+        const node = document.getElementById(id);
+        if (!node) {
+            return;
+        }
+        node.textContent = String(value ?? "");
+    }
+
+    function setValue(id, value) {
+        const node = document.getElementById(id);
+        if (!node) {
+            return;
+        }
+        node.value = String(value ?? "");
+    }
+
+    function setHidden(id, hidden) {
+        const node = document.getElementById(id);
+        if (!node) {
+            return;
+        }
+        node.hidden = !!hidden;
+    }
+
+    function setPill(id, kind, label) {
+        const node = document.getElementById(id);
+        if (!node) {
+            return;
+        }
+        node.className = "service-status-pill " + String(kind || "muted");
+        node.textContent = String(label || "");
+    }
+
+    function showToast(message, kind) {
+        const host = document.querySelector(".toast-host");
+        if (!host) {
+            return;
+        }
+
+        const toast = document.createElement("div");
+        toast.className = "toast " + String(kind || "success");
+        toast.setAttribute("role", "status");
+        toast.textContent = String(message || "");
+        host.appendChild(toast);
+
+        setTimeout(function() {
+            toast.classList.add("is-leaving");
+            setTimeout(function() {
+                if (toast.parentNode) {
+                    toast.parentNode.removeChild(toast);
+                }
+            }, 600);
+        }, 4200);
+    }
+
+    function formatPercent(value) {
+        if (value === null || value === undefined || Number.isNaN(Number(value))) {
+            return "...";
+        }
+        return Number(value).toFixed(1) + "%";
+    }
+
+    function getTaskProgressBarClass(task) {
+        if (!task) {
+            return "queued";
+        }
+        if (task.active) {
+            return "downloading";
+        }
+        if (task.status === "success") {
+            return "completed";
+        }
+        if (task.status === "error") {
+            return "error";
+        }
+        return "queued";
+    }
+
+    function setFormBusy(form, busy, busyLabel) {
+        const button = form ? form.querySelector("button") : null;
+        if (!button) {
+            return;
+        }
+
+        if (!button.dataset.idleLabel) {
+            button.dataset.idleLabel = String(button.textContent || "").trim();
+        }
+
+        button.disabled = !!busy;
+        button.textContent = busy ? String(busyLabel || "Trwa...") : (button.dataset.idleLabel || button.textContent);
+    }
+
+    function updateTaskPanel(prefix, task, runningLabelFallback) {
+        const panel = document.getElementById(prefix + "TaskPanel");
+        const progress = document.getElementById(prefix + "TaskProgress");
+        const bar = document.getElementById(prefix + "TaskBar");
+        if (!panel || !progress || !bar) {
+            return;
+        }
+
+        const visible = !!(task && task.visible);
+        panel.hidden = !visible;
+
+        if (!visible) {
+            return;
+        }
+
+        setPill(prefix + "TaskStatusPill", task.status_kind, task.status_label || runningLabelFallback);
+        setText(prefix + "TaskLabel", task.title || runningLabelFallback);
+        setText(prefix + "TaskPercent", formatPercent(task.progress_percent));
+        setText(prefix + "TaskDetail", task.detail || task.message || "Trwa przetwarzanie zadania.");
+
+        let timeText = "";
+        if (task.active && task.started_at_text) {
+            timeText = "Start: " + task.started_at_text;
+        } else if (task.finished_at_text) {
+            timeText = "Zakończono: " + task.finished_at_text;
+        }
+        setText(prefix + "TaskTime", timeText);
+
+        if (task.progress_percent === null || task.progress_percent === undefined) {
+            progress.classList.add("is-indeterminate");
+            bar.style.width = "38%";
+        } else {
+            progress.classList.remove("is-indeterminate");
+            bar.style.width = Math.max(0, Math.min(100, Number(task.progress_percent) || 0)) + "%";
+        }
+
+        bar.className = "progress-bar " + getTaskProgressBarClass(task);
+    }
+
+    function setGroupBusy(taskKey, task, busyLabel) {
+        const forms = root.querySelectorAll('[data-maintenance-lock="' + taskKey + '"]');
+        const active = !!(task && task.active);
+
+        forms.forEach(function(form) {
+            if (form.dataset.maintenanceStart) {
+                setFormBusy(form, active, busyLabel);
+            } else {
+                setFormBusy(form, active, "");
+            }
+        });
+    }
+
+    function applyMountState(mount) {
+        if (!mount) {
+            return;
+        }
+
+        const node = document.getElementById("settingsMountStatus");
+        if (!node) {
+            return;
+        }
+
+        node.className = mount.online ? "mount-ok" : "mount-bad";
+        node.textContent = String(mount.message || "");
+    }
+
+    function applyConfigState(config, todayDownloadDir, todayAudioDownloadDir) {
+        if (!config) {
+            return;
+        }
+
+        setText("settingsUserStorageRootValue", config.user_storage_root || "");
+        setText("settingsDownloadRootValue", config.download_root || "");
+        setText("settingsAudioDownloadRootValue", config.audio_download_root || "");
+        setText("settingsTodayDownloadDirValue", todayDownloadDir || "");
+        setText("settingsTodayAudioDownloadDirValue", todayAudioDownloadDir || "");
+        setText("settingsRetentionDaysValue", String(config.job_retention_days || "") + " dni");
+
+        setValue("userStorageRoot", config.user_storage_root || "");
+        setValue("jobRetentionDays", config.job_retention_days || "");
+    }
+
+    function renderUserRows(rows) {
+        const container = document.getElementById("userManagementList");
+        if (!container) {
+            return;
+        }
+
+        if (!Array.isArray(rows) || !rows.length) {
+            container.innerHTML = '<div class="empty">Brak użytkowników w systemie.</div>';
+            return;
+        }
+
+        container.innerHTML = rows.map(function(user) {
+            const username = escapeHtml(user.username || "");
+            const role = escapeHtml(user.role || "user");
+            const createdAtText = escapeHtml(user.created_at_text || "");
+            const editHtml = user.can_edit
+                ? `
+                    <form method="post" action="/settings/users/update" class="dlna-inline-form is-wide" data-settings-async="true" data-busy-label="Zapisywanie użytkownika...">
+                        <input type="hidden" name="original_username" value="${username}">
+                        <div class="field-group">
+                            <label class="field-label">Login</label>
+                            <input type="text" name="username" value="${username}" required>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label">Rola</label>
+                            <select name="role">
+                                <option value="user"${role === "user" ? " selected" : ""}>Użytkownik</option>
+                                <option value="admin"${role === "admin" ? " selected" : ""}>Administrator</option>
+                            </select>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label">&nbsp;</label>
+                            <button type="submit" class="btn full-width">Zapisz zmiany</button>
+                        </div>
+                    </form>
+                `
+                : "";
+            const resetPasswordHtml = user.can_admin_reset_password
+                ? `
+                    <form method="post" action="/settings/users/reset-password" class="dlna-inline-form is-wide" data-settings-async="true" data-reset-after-success="true" data-busy-label="Resetowanie hasła...">
+                        <input type="hidden" name="username" value="${username}">
+                        <div class="field-group">
+                            <label class="field-label">Nowe hasło</label>
+                            <input type="password" name="new_password" placeholder="minimum 4 znaki" required>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label">&nbsp;</label>
+                            <div class="inline-note">Administrator ustawia nowe hasło bez znajomości starego.</div>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label">&nbsp;</label>
+                            <button type="submit" class="btn btn-secondary full-width">Resetuj hasło</button>
+                        </div>
+                    </form>
+                `
+                : "";
+            const deleteHtml = user.can_delete
+                ? `
+                    <form method="post" action="/settings/users/delete" class="dlna-inline-form is-single" data-settings-async="true" data-busy-label="Usuwanie użytkownika..." data-confirm-message="Usunąć użytkownika ${username} wraz z jego plikami i zadaniami?">
+                        <input type="hidden" name="username" value="${username}">
+                        <button type="submit" class="btn btn-delete">Usuń użytkownika</button>
+                    </form>
+                `
+                : "";
+            const noteParts = [];
+            if (user.is_current_user) {
+                noteParts.push('<div class="inline-note">Własnego loginu i roli nie zmienisz w tym panelu. Własne hasło zmienisz z sekcji <code>Konto</code> po lewej stronie.</div>');
+            }
+            if (user.is_default_admin) {
+                noteParts.push('<div class="inline-note">To jest domyślne konto administratora. Nie usuniesz go ani nie zmienisz mu loginu lub roli w tym panelu.</div>');
+            }
+            const notesHtml = noteParts.join("");
+
+            return `
+                <div class="dlna-item">
+                    <div class="dlna-item-head">
+                        <div>
+                            <div class="dlna-item-title">${username}</div>
+                            <div class="dlna-item-meta">
+                                Rola: ${role} • Pliki: ${escapeHtml(user.file_count || 0)} • Zadania: ${escapeHtml(user.job_count || 0)} • Utworzono: ${createdAtText || "-"}
+                            </div>
+                        </div>
+                        <div class="dlna-item-head-actions">
+                            <span class="service-status-pill ${role === "admin" ? "success" : "muted"}">${role === "admin" ? "Administrator" : "Użytkownik"}</span>
+                        </div>
+                    </div>
+                    <div class="dlna-item-body" style="display:grid;gap:12px;">
+                        ${editHtml}
+                        ${resetPasswordHtml}
+                        ${deleteHtml}
+                        ${notesHtml}
+                    </div>
+                </div>
+            `;
+        }).join("");
+    }
+
+    function applyServiceState(service) {
+        if (!service) {
+            return;
+        }
+
+        setPill("serviceStatusPill", service.status_kind, service.status_label);
+        setText("serviceAppUptime", service.app_uptime_text || "");
+        setText("serviceUptime", service.service_uptime_text || "");
+        setText("serviceLastRestart", service.last_restart_text || "");
+        setText("serviceName", service.service_name || "");
+
+        let pidText = "";
+        if (service.main_pid) {
+            pidText = "PID: " + String(service.main_pid || "");
+            if (service.sub_state) {
+                pidText += " | " + String(service.sub_state);
+            }
+        } else if (service.sub_state) {
+            pidText = String(service.sub_state);
+        } else {
+            pidText = "Brak PID";
+        }
+        setText("servicePidText", pidText);
+
+        const hasError = !!service.error;
+        setHidden("serviceErrorBox", !hasError);
+        setText("serviceErrorText", hasError ? ("Nie udało się odczytać pełnego statusu usługi: " + service.error) : "");
+    }
+
+    function applyYtDlpState(state, task) {
+        if (!state) {
+            return;
+        }
+
+        const taskActive = !!(task && task.active);
+        const pillKind = taskActive ? "queued" : state.status_pill_kind;
+        const pillLabel = taskActive ? "Trwa aktualizacja yt-dlp" : state.status_pill_label;
+
+        setPill("ytDlpStatusPill", pillKind, pillLabel);
+        setText("ytDlpCheckedAt", "Ostatnie sprawdzenie: " + String(state.checked_at_text || ""));
+        setText("ytDlpCurrentVersion", state.current_version || "");
+        setText("ytDlpLatestVersion", state.latest_version || "");
+
+        const hasError = !!state.check_error;
+        setHidden("ytDlpCheckErrorBox", !hasError);
+        setText("ytDlpCheckErrorText", hasError ? ("Ostatnia próba sprawdzenia zakończyła się błędem: " + state.check_error) : "");
+
+        const actionForm = document.getElementById("ytDlpActionForm");
+        if (actionForm) {
+            actionForm.hidden = !taskActive && !state.action_needed;
+        }
+        setHidden("ytDlpActionNote", taskActive || !!state.action_needed);
+        setGroupBusy("yt_dlp_update", task, "Aktualizacja trwa...");
+        updateTaskPanel("ytDlp", task, "Aktualizacja yt-dlp");
+    }
+
+    function applyFfmpegState(state, task) {
+        if (!state) {
+            return;
+        }
+
+        const taskActive = !!(task && task.active);
+        const pillKind = taskActive ? "queued" : state.status_pill_kind;
+        const pillLabel = taskActive ? "Trwa instalacja ffmpeg" : state.status_pill_label;
+
+        setPill("ffmpegStatusPill", pillKind, pillLabel);
+        setText("ffmpegCheckedAt", "Ostatnie sprawdzenie: " + String(state.checked_at_text || ""));
+        setText("ffmpegCurrentVersion", state.current_version || "");
+        setText("ffmpegLatestVersion", state.latest_version || "");
+        setText("ffmpegCurrentSource", state.current_source_label || "");
+        setText("ffmpegCurrentBuild", state.current_build_label || "");
+        setText("ffmpegCurrentPath", state.current_path || "");
+
+        const hasError = !!state.check_error;
+        setHidden("ffmpegCheckErrorBox", !hasError);
+        setText("ffmpegCheckErrorText", hasError ? ("Ostatnia próba sprawdzenia zakończyła się błędem: " + state.check_error) : "");
+
+        const actionForm = document.getElementById("ffmpegActionForm");
+        if (actionForm) {
+            actionForm.hidden = !taskActive && !state.action_needed;
+        }
+        setHidden("ffmpegActionNote", taskActive || !!state.action_needed);
+        setHidden("ffmpegExternalNote", !!state.managed || !state.installed);
+        setGroupBusy("ffmpeg_install", task, "Instalacja trwa...");
+        updateTaskPanel("ffmpeg", task, "Instalacja ffmpeg");
+    }
+
+    function applyDlnaPackageState(state, task) {
+        if (!state) {
+            return;
+        }
+
+        const taskActive = !!(task && task.active);
+        const pillKind = taskActive ? "queued" : state.status_pill_kind;
+        const pillLabel = taskActive ? "Trwa instalacja serwera DLNA" : state.status_pill_label;
+
+        setPill("settingsDlnaPackageStatusPill", pillKind, pillLabel);
+        setText("settingsDlnaPackageCheckedAt", "Ostatnie sprawdzenie: " + String(state.checked_at_text || ""));
+        setText("settingsDlnaCurrentVersion", state.current_version || "");
+        setText("settingsDlnaLatestVersion", state.latest_version || "");
+
+        const hasError = !!state.check_error;
+        setHidden("settingsDlnaPackageErrorBox", !hasError);
+        setText("settingsDlnaPackageErrorText", hasError ? ("Ostatnia próba sprawdzenia zakończyła się błędem: " + state.check_error) : "");
+
+        const actionForm = document.getElementById("settingsDlnaActionForm");
+        if (actionForm) {
+            actionForm.hidden = !taskActive && !state.action_needed;
+        }
+        const actionButton = document.getElementById("settingsDlnaActionButton");
+        if (actionButton) {
+            actionButton.textContent = state.action_button_label || actionButton.textContent;
+            actionButton.dataset.idleLabel = actionButton.textContent;
+        }
+        setHidden("settingsDlnaActionNote", taskActive || !!state.action_needed);
+        setGroupBusy("dlna_install", task, "Instalacja trwa...");
+        updateTaskPanel("settingsDlna", task, "Instalacja serwera DLNA");
+    }
+
+    function applyDlnaServiceState(state) {
+        if (!state) {
+            return;
+        }
+
+        setText("settingsDlnaServiceStatus", state.status_label || "");
+        setText("settingsDlnaUnitState", state.unit_file_label || "");
+        setText("settingsDlnaExportRoot", state.export_root || "");
+
+        const toggleForm = document.getElementById("settingsDlnaToggleForm");
+        if (toggleForm) {
+            const hiddenInput = toggleForm.querySelector('input[name="enabled"]');
+            if (hiddenInput) {
+                hiddenInput.value = state.desired_enabled ? "0" : "1";
+            }
+        }
+
+        const toggleButton = document.getElementById("settingsDlnaToggleButton");
+        if (toggleButton) {
+            toggleButton.textContent = state.toggle_button_label || toggleButton.textContent;
+            toggleButton.dataset.idleLabel = toggleButton.textContent;
+        }
+
+        const hasError = !!state.error;
+        setHidden("settingsDlnaServiceErrorBox", !hasError);
+        setText("settingsDlnaServiceErrorText", hasError ? ("Nie udało się odczytać pełnego statusu usługi DLNA: " + state.error) : "");
+    }
+
+    function applyStateEnvelope(envelope) {
+        const state = (envelope && (envelope.settings_state || envelope.state)) ? (envelope.settings_state || envelope.state) : envelope;
+        if (!state) {
+            return;
+        }
+
+        const tasks = state.maintenance_tasks || state.tasks || {};
+        applyMountState(state.mount || null);
+        applyConfigState(state.config || null, state.today_download_dir || "", state.today_audio_download_dir || "");
+        if (Object.prototype.hasOwnProperty.call(state, "user_rows")) {
+            renderUserRows(state.user_rows || []);
+        }
+        applyServiceState(state.service_state || null);
+        applyYtDlpState(state.yt_dlp_state || {}, tasks.yt_dlp_update || null);
+        applyFfmpegState(state.ffmpeg_state || {}, tasks.ffmpeg_install || null);
+        applyDlnaPackageState(state.dlna_package_state || {}, tasks.dlna_install || null);
+        applyDlnaServiceState(state.dlna_service_state || null);
+    }
+
+    async function fetchSettingsState() {
+        try {
+            const response = await fetch("/api/settings/state", {
+                headers: {
+                    "Accept": "application/json",
+                    "X-Requested-With": "fetch"
+                }
+            });
+            if (!response.ok) {
+                return;
+            }
+            const data = await response.json();
+            applyStateEnvelope(data);
+        } catch (err) {
+            // Stan ustawień jest odświeżany w tle. W razie chwilowego błędu po prostu próbujemy ponownie później.
+        }
+    }
+
+    async function handleAsyncFormSubmit(form) {
+        if (!(form instanceof HTMLFormElement)) {
+            return;
+        }
+
+        let busyLabel = String(form.dataset.busyLabel || "").trim();
+        if (!busyLabel) {
+            busyLabel = "Trwa...";
+            if (form.id === "settingsConfigForm") {
+                busyLabel = "Zapisywanie...";
+            } else if (form.id === "settingsCreateUserForm") {
+                busyLabel = "Tworzenie użytkownika...";
+            } else if (form.id === "restartServiceForm") {
+                busyLabel = "Wysyłanie restartu...";
+            } else if (form.id === "ytDlpCheckForm" || form.id === "ffmpegCheckForm" || form.id === "settingsDlnaCheckForm") {
+                busyLabel = "Sprawdzanie...";
+            } else if (form.id === "ytDlpActionForm" || form.id === "ffmpegActionForm" || form.id === "settingsDlnaActionForm") {
+                busyLabel = "Uruchamianie...";
+            } else if (form.id === "settingsDlnaToggleForm") {
+                busyLabel = "Przełączanie...";
+            } else if (form.id === "settingsDlnaRestartForm") {
+                busyLabel = "Restartowanie...";
+            }
+        }
+
+        setFormBusy(form, true, busyLabel);
+
+        try {
+            const response = await fetch(form.action, {
+                method: "POST",
+                body: new FormData(form),
+                headers: {
+                    "Accept": "application/json",
+                    "X-Requested-With": "fetch"
+                }
+            });
+            const data = await response.json().catch(function() {
+                return null;
+            });
+
+            if (data && (data.settings_state || data.state)) {
+                applyStateEnvelope(data);
+            }
+
+            if (!response.ok || !data || data.ok === false) {
+                showToast((data && (data.error || data.message)) || "Nie udało się wykonać operacji.", "error");
+                return;
+            }
+
+            if (form.dataset.resetAfterSuccess === "true") {
+                form.reset();
+            }
+
+            if (data.message) {
+                showToast(data.message, data.kind || "success");
+            }
+
+            fetchSettingsState();
+        } catch (err) {
+            showToast("Nie udało się połączyć z serwerem.", "error");
+        } finally {
+            if (!form.dataset.maintenanceStart) {
+                setFormBusy(form, false, "");
+            }
+        }
+    }
+
+    function handleSettingsSubmit(event) {
+        const form = event.target;
+        if (!(form instanceof HTMLFormElement)) {
+            return;
+        }
+        if (!root.contains(form)) {
+            return;
+        }
+        if (form.dataset.settingsAsync !== "true") {
+            return;
+        }
+
+        if (form.dataset.confirmMessage && !confirm(form.dataset.confirmMessage)) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        handleAsyncFormSubmit(form);
+    }
+
+    document.addEventListener("submit", handleSettingsSubmit, true);
+
+    renderUserRows({{ user_rows|tojson }});
+    fetchSettingsState();
+    pollTimer = setInterval(fetchSettingsState, pollIntervalMs);
+
+    if (typeof window.registerPageCleanup === "function") {
+        window.registerPageCleanup(function() {
+            if (pollTimer) {
+                clearInterval(pollTimer);
+            }
+            document.removeEventListener("submit", handleSettingsSubmit, true);
+        });
+    }
+})();
+</script>

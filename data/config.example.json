@@ -1,0 +1,35 @@
+{
+  "user_storage_root": "/srv/flask_downloader/share/flask_downloader_users",
+  "user_storage_layout_version": 2,
+  "download_root": "/srv/flask_downloader/share/flask_downloader_users/admin/video",
+  "audio_download_root": "/srv/flask_downloader/share/flask_downloader_users/admin/audio",
+  "job_retention_days": 3,
+  "yt_dlp_update_state": {
+    "latest_version": "",
+    "checked_at": 0.0,
+    "check_error": ""
+  },
+  "ffmpeg_update_state": {
+    "latest_version": "",
+    "latest_build_id": "",
+    "checked_at": 0.0,
+    "check_error": ""
+  },
+  "dlna_update_state": {
+    "latest_version": "",
+    "checked_at": 0.0,
+    "check_error": ""
+  },
+  "dlna": {
+    "enabled": false,
+    "server_name": "Flask Downloader DLNA",
+    "bind_ip": "",
+    "port": 49152,
+    "collections": [],
+    "clients": [],
+    "media_rules": [],
+    "layout_version": 0,
+    "last_sync_at": 0.0,
+    "last_sync_error": ""
+  }
+}

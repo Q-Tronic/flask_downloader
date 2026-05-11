@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "users": [
+    {
+      "username": "admin",
+      "role": "admin",
+      "password_hash": "GENERATED_DURING_INSTALL",
+      "enabled": true,
+      "created_at": 0.0
+    }
+  ]
+}
