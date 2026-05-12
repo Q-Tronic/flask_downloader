@@ -184,7 +184,7 @@ def register_dlna_routes(app, deps):
             return auth_error
 
         try:
-            sync_dlna_runtime(restart_service_if_active=True)
+            sync_dlna_runtime(restart_service_if_active=True, force_full_rescan=True)
             return build_dlna_json_response(message="Biblioteka DLNA została zsynchronizowana.", kind="success")
         except Exception as exc:
             return build_dlna_json_response(ok=False, message=str(exc), kind="error", status_code=500)
@@ -228,6 +228,7 @@ def register_dlna_routes(app, deps):
                     description=payload.get("description"),
                     enabled=parse_boolean_flag(payload.get("enabled"), default=True),
                     collection_ids=payload.get("collection_ids") or [],
+                    usernames=payload.get("usernames") or [],
                 )
                 return build_dlna_json_response(message="Dodano klienta DLNA do whitelisty.", kind="success")
             if action == "update":
@@ -237,6 +238,7 @@ def register_dlna_routes(app, deps):
                     description=payload.get("description"),
                     enabled=parse_boolean_flag(payload.get("enabled"), default=True),
                     collection_ids=payload.get("collection_ids") or [],
+                    usernames=payload.get("usernames") or [],
                 )
                 return build_dlna_json_response(message="Zapisano klienta DLNA.", kind="success")
             if action == "delete":

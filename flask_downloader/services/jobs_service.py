@@ -310,7 +310,7 @@ class DownloadJobsService:
                         job["relative_path"] = ""
                 self._write_download_jobs_locked()
 
-            self._sync_dlna_runtime_safe(restart_service_if_active=False)
+            self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
             return True, "", 200
         except Exception as exc:
             return False, str(exc), 500

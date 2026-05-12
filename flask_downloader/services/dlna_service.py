@@ -28,6 +28,7 @@ class DlnaLibraryService:
         normalize_dlna_client_ip,
         normalize_dlna_description,
         sync_dlna_runtime_safe,
+        get_users_snapshot,
         default_admin_username,
         dlna_all_collection_id,
         dlna_all_collection_name,
@@ -57,6 +58,7 @@ class DlnaLibraryService:
         self._normalize_dlna_client_ip = normalize_dlna_client_ip
         self._normalize_dlna_description = normalize_dlna_description
         self._sync_dlna_runtime_safe = sync_dlna_runtime_safe
+        self._get_users_snapshot = get_users_snapshot
         self._default_admin_username = default_admin_username
         self._dlna_all_collection_id = dlna_all_collection_id
         self._dlna_all_collection_name = dlna_all_collection_name
@@ -93,6 +95,20 @@ class DlnaLibraryService:
                 "builtin": False,
             })
         return catalog
+
+    def get_available_users(self):
+        users = []
+        for user in self._get_users_snapshot() or []:
+            username = str((user or {}).get("username") or "").strip()
+            if not username:
+                continue
+            users.append({
+                "username": username,
+                "role": str((user or {}).get("role") or "user").strip().lower() or "user",
+                "enabled": bool((user or {}).get("enabled", True)),
+            })
+        users.sort(key=lambda item: (0 if item["role"] == "admin" else 1, item["username"].lower()))
+        return users
 
     def get_named_collection_map(self, dlna_config=None):
         config = dlna_config or self._get_dlna_config_snapshot()
@@ -198,6 +214,22 @@ class DlnaLibraryService:
             result.append(value)
         return result
 
+    def normalize_client_usernames(self, usernames):
+        valid_usernames = {
+            str(item.get("username") or "").strip()
+            for item in (self.get_available_users() or [])
+            if str(item.get("username") or "").strip()
+        }
+        result = []
+        seen = set()
+        for item in usernames or []:
+            value = str(item or "").strip()
+            if not value or value in seen or value not in valid_usernames:
+                continue
+            seen.add(value)
+            result.append(value)
+        return result
+
     def normalize_media_rule_collection_ids(self, collection_ids, dlna_config=None):
         config = dlna_config or self._get_dlna_config_snapshot()
         named_collection_ids = set(self.get_named_collection_map(config).keys())
@@ -281,6 +313,9 @@ class DlnaLibraryService:
             return {self._dlna_all_collection_id}
         return set(collection_ids)
 
+    def get_client_assigned_usernames(self, client):
+        return self.normalize_client_usernames((client or {}).get("usernames") or [])
+
     def build_media_rule_summaries(self, dlna_config=None, files=None):
         config = dlna_config or self._get_dlna_config_snapshot()
         files = files if files is not None else self._get_server_files()
@@ -318,20 +353,38 @@ class DlnaLibraryService:
 
     def build_client_summaries(self, dlna_config=None, files=None):
         config = dlna_config or self._get_dlna_config_snapshot()
+        files = files if files is not None else self._get_server_files()
         effective_map = self.get_effective_file_map(config, files=files)
         collection_catalog = {item["id"]: item for item in self.get_collection_catalog(config)}
+        available_users = {item["username"]: item for item in self.get_available_users()}
         client_items = []
 
         for client in config.get("clients") or []:
             visible_collection_ids = self.get_client_visible_collection_ids(client, config)
-            visible_files = []
+            assigned_usernames = self.get_client_assigned_usernames(client)
+            visible_file_keys = set()
 
             for item in effective_map.values():
                 if self._dlna_all_collection_id in visible_collection_ids:
-                    visible_files.append(item)
+                    visible_file_keys.add((
+                        self._normalize_storage_kind(item.get("storage_kind") or "video"),
+                        self._safe_relative_download_path(item.get("relative_path") or ""),
+                    ))
                     continue
                 if item["collection_ids"] & visible_collection_ids:
-                    visible_files.append(item)
+                    visible_file_keys.add((
+                        self._normalize_storage_kind(item.get("storage_kind") or "video"),
+                        self._safe_relative_download_path(item.get("relative_path") or ""),
+                    ))
+
+            for file_item in files:
+                owner_username = str(file_item.get("owner_username") or "").strip()
+                if owner_username not in assigned_usernames:
+                    continue
+                visible_file_keys.add((
+                    self._normalize_storage_kind(file_item.get("storage_kind") or "video"),
+                    self._safe_relative_download_path(file_item.get("relative_path") or ""),
+                ))
 
             client_items.append({
                 "id": client["id"],
@@ -344,7 +397,12 @@ class DlnaLibraryService:
                     for item in visible_collection_ids
                     if item in collection_catalog
                 ],
-                "visible_media_count": len(visible_files),
+                "usernames": assigned_usernames,
+                "user_labels": [
+                    ("%s%s" % (username, " (admin)" if (available_users.get(username) or {}).get("role") == "admin" else ""))
+                    for username in assigned_usernames
+                ],
+                "visible_media_count": len(visible_file_keys),
             })
 
         client_items.sort(key=lambda item: item["ip"])
@@ -397,6 +455,7 @@ class DlnaLibraryService:
             "mount": mount,
             "dlna_config": dlna_config,
             "collections": self.get_collection_catalog(dlna_config),
+            "available_users": self.get_available_users(),
             "media_rules": self.build_media_rule_summaries(dlna_config, files=files),
             "clients": self.build_client_summaries(dlna_config, files=files),
             "summary": self.get_summary_state(dlna_config, files=files),
@@ -603,7 +662,7 @@ class DlnaLibraryService:
 
         if changed:
             self._set_dlna_config(dlna_config)
-            self._sync_dlna_runtime_safe(restart_service_if_active=True)
+            self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
 
         return {
             "changed": changed,
@@ -726,7 +785,7 @@ class DlnaLibraryService:
         dlna_config["bind_ip"] = self._normalize_dlna_bind_ip(bind_ip)
         dlna_config["port"] = self._normalize_dlna_port(port)
         self._set_dlna_config(dlna_config)
-        self._sync_dlna_runtime_safe(restart_service_if_active=True)
+        self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
         return self._get_dlna_config_snapshot()
 
     def create_collection(self, name, description=""):
@@ -743,7 +802,7 @@ class DlnaLibraryService:
         }
         dlna_config.setdefault("collections", []).append(collection)
         self._set_dlna_config(dlna_config)
-        self._sync_dlna_runtime_safe(restart_service_if_active=True)
+        self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
         return collection
 
     def update_collection(self, collection_id, name, description=""):
@@ -770,7 +829,7 @@ class DlnaLibraryService:
             raise ValueError("Nie znaleziono wskazanej kolekcji.")
 
         self._set_dlna_config(dlna_config)
-        self._sync_dlna_runtime_safe(restart_service_if_active=True)
+        self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
 
     def delete_collection(self, collection_id):
         collection_id = str(collection_id or "").strip()
@@ -794,9 +853,9 @@ class DlnaLibraryService:
             rule["collection_ids"] = [item for item in (rule.get("collection_ids") or []) if item != collection_id]
 
         self._set_dlna_config(dlna_config)
-        self._sync_dlna_runtime_safe(restart_service_if_active=True)
+        self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
 
-    def create_client(self, ip, description="", enabled=True, collection_ids=None):
+    def create_client(self, ip, description="", enabled=True, collection_ids=None, usernames=None):
         dlna_config = self._get_dlna_config_snapshot()
         normalized_ip = self._normalize_dlna_client_ip(ip)
         if any(item["ip"] == normalized_ip for item in (dlna_config.get("clients") or [])):
@@ -808,13 +867,14 @@ class DlnaLibraryService:
             "description": self._normalize_dlna_description(description, max_len=200),
             "enabled": bool(enabled),
             "collection_ids": self.normalize_client_collection_ids(collection_ids or [], dlna_config),
+            "usernames": self.normalize_client_usernames(usernames or []),
         }
         dlna_config.setdefault("clients", []).append(client)
         self._set_dlna_config(dlna_config)
-        self._sync_dlna_runtime_safe(restart_service_if_active=True)
+        self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
         return client
 
-    def update_client(self, client_id, ip, description="", enabled=True, collection_ids=None):
+    def update_client(self, client_id, ip, description="", enabled=True, collection_ids=None, usernames=None):
         client_id = str(client_id or "").strip()
         if not client_id:
             raise ValueError("Brak identyfikatora klienta.")
@@ -833,6 +893,7 @@ class DlnaLibraryService:
             item["description"] = self._normalize_dlna_description(description, max_len=200)
             item["enabled"] = bool(enabled)
             item["collection_ids"] = self.normalize_client_collection_ids(collection_ids or [], dlna_config)
+            item["usernames"] = self.normalize_client_usernames(usernames or [])
             found = True
             break
 
@@ -840,7 +901,7 @@ class DlnaLibraryService:
             raise ValueError("Nie znaleziono wskazanego klienta.")
 
         self._set_dlna_config(dlna_config)
-        self._sync_dlna_runtime_safe(restart_service_if_active=True)
+        self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
 
     def delete_client(self, client_id):
         client_id = str(client_id or "").strip()
@@ -854,7 +915,7 @@ class DlnaLibraryService:
             raise ValueError("Nie znaleziono wskazanego klienta.")
 
         self._set_dlna_config(dlna_config)
-        self._sync_dlna_runtime_safe(restart_service_if_active=True)
+        self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
 
     def create_media_rule(self, kind, storage_kind, relative_path, collection_ids=None, enabled=True):
         dlna_config = self._get_dlna_config_snapshot()
@@ -885,7 +946,7 @@ class DlnaLibraryService:
         }
         dlna_config.setdefault("media_rules", []).append(rule)
         self._set_dlna_config(dlna_config)
-        self._sync_dlna_runtime_safe(restart_service_if_active=True)
+        self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
         return rule
 
     def update_media_rule(self, rule_id, collection_ids=None, enabled=True):
@@ -907,7 +968,7 @@ class DlnaLibraryService:
             raise ValueError("Nie znaleziono wskazanego wpisu DLNA.")
 
         self._set_dlna_config(dlna_config)
-        self._sync_dlna_runtime_safe(restart_service_if_active=True)
+        self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
 
     def delete_media_rule(self, rule_id):
         rule_id = str(rule_id or "").strip()
@@ -921,4 +982,4 @@ class DlnaLibraryService:
             raise ValueError("Nie znaleziono wskazanego wpisu DLNA.")
 
         self._set_dlna_config(dlna_config)
-        self._sync_dlna_runtime_safe(restart_service_if_active=True)
+        self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)

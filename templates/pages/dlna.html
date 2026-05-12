@@ -197,6 +197,11 @@
                         <div class="field-label">Kolekcje widoczne dla nowego klienta</div>
                         <div id="dlnaNewClientCollections" class="dlna-checkbox-grid"></div>
                     </div>
+
+                    <div style="margin-top: 16px;">
+                        <div class="field-label">Użytkownicy widoczni dla nowego klienta</div>
+                        <div id="dlnaNewClientUsers" class="dlna-checkbox-grid"></div>
+                    </div>
                 </form>
 
                 <div class="dlna-list-header">
@@ -519,6 +524,31 @@
         }).join("");
     }
 
+    function renderUserCheckboxes(selectedUsernames, scopeName) {
+        const selectedSet = new Set((selectedUsernames || []).map(function(item) { return String(item || ""); }));
+        const availableUsers = currentState.available_users || [];
+        if (!availableUsers.length) {
+            return '<div class="dlna-empty">Brak użytkowników do przypisania.</div>';
+        }
+        return availableUsers.map(function(item) {
+            const username = String(item.username || "");
+            const checked = selectedSet.has(username);
+            const roleLabel = item.role === "admin" ? "Administrator" : "Użytkownik";
+            const detail = item.enabled === false
+                ? (roleLabel + " • konto wyłączone")
+                : roleLabel;
+            return `
+                <label class="dlna-checkbox">
+                    <input type="checkbox" value="${escapeHtml(username)}" data-checkbox-scope="${escapeHtml(scopeName)}" ${checked ? "checked" : ""}>
+                    <span class="dlna-checkbox-text">
+                        <strong>${escapeHtml(username)}</strong>
+                        <span class="small">${escapeHtml(detail)}</span>
+                    </span>
+                </label>
+            `;
+        }).join("");
+    }
+
     function readCheckboxScope(scopeName, container) {
         return Array.from((container || root).querySelectorAll('input[data-checkbox-scope="' + scopeName + '"]:checked')).map(function(input) {
             return String(input.value || "");
@@ -687,6 +717,7 @@
 
     function renderCollections() {
         document.getElementById("dlnaNewClientCollections").innerHTML = renderCollectionCheckboxes([], true, "new-client");
+        document.getElementById("dlnaNewClientUsers").innerHTML = renderUserCheckboxes([], "new-client-user");
         syncLibraryControlValues();
 
         const list = document.getElementById("dlnaCollectionsList");
@@ -738,6 +769,7 @@
 
         list.innerHTML = clients.map(function(client) {
             const expanded = isExpanded("clients", client.id);
+            const userLabels = client.user_labels || client.usernames || [];
             return `
                 <div class="dlna-item" data-client-id="${escapeHtml(client.id)}">
                     <div class="dlna-item-head">
@@ -745,6 +777,7 @@
                             <div class="dlna-item-title">${escapeHtml(client.ip)}</div>
                             <div class="dlna-item-meta">${escapeHtml(client.description || "Brak opisu")} • Widoczne media: ${escapeHtml(client.visible_media_count || 0)}</div>
                             <div class="dlna-token-list" style="margin-top: 8px;">${renderTokenList(client.collection_names || [], "Brak kolekcji")}</div>
+                            <div class="dlna-token-list" style="margin-top: 8px;">${renderTokenList(userLabels, "Brak użytkowników")}</div>
                         </div>
                         <div class="dlna-item-head-actions">
                             <span class="status ${client.enabled ? "completed" : "canceled"}">${client.enabled ? "Aktywny" : "Wyłączony"}</span>
@@ -768,6 +801,10 @@
                             <div>
                                 <div class="field-label">Kolekcje widoczne dla klienta</div>
                                 <div class="dlna-checkbox-grid">${renderCollectionCheckboxes(client.collection_ids || [], true, "client-" + client.id)}</div>
+                            </div>
+                            <div>
+                                <div class="field-label">Użytkownicy widoczni dla klienta</div>
+                                <div class="dlna-checkbox-grid">${renderUserCheckboxes(client.usernames || [], "client-user-" + client.id)}</div>
                             </div>
                         </div>
                         <div class="dlna-item-actions">
@@ -1132,7 +1169,8 @@
                     ip: (card.querySelector('[data-client-field="ip"]') || {}).value || "",
                     description: (card.querySelector('[data-client-field="description"]') || {}).value || "",
                     enabled: !!((card.querySelector('[data-client-field="enabled"]') || {}).checked),
-                    collection_ids: readCheckboxScope("client-" + (card.dataset.clientId || ""), card)
+                    collection_ids: readCheckboxScope("client-" + (card.dataset.clientId || ""), card),
+                    usernames: readCheckboxScope("client-user-" + (card.dataset.clientId || ""), card)
                 });
             });
         }
@@ -1284,11 +1322,16 @@
                     ip: form.ip.value,
                     description: form.description.value,
                     enabled: !!form.enabled.checked,
-                    collection_ids: readCheckboxScope("new-client")
+                    collection_ids: readCheckboxScope("new-client"),
+                    usernames: readCheckboxScope("new-client-user")
                 });
             }).then(function(ok) {
                 if (ok) {
                     form.reset();
+                    const newClientUsers = document.getElementById("dlnaNewClientUsers");
+                    if (newClientUsers) {
+                        newClientUsers.innerHTML = renderUserCheckboxes([], "new-client-user");
+                    }
                 }
             });
         }

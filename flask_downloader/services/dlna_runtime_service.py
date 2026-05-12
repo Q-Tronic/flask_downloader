@@ -90,7 +90,7 @@ class DlnaRuntimeService:
             reset_failed_after_stop=reset_failed_after_stop,
         )
 
-    def sync_runtime(self, restart_service_if_active=False):
+    def sync_runtime(self, restart_service_if_active=False, force_full_rescan=False):
         with self._sync_lock:
             self._ensure_dlna_runtime_dirs()
             ok, _ = self._ensure_share_ready(auto_remount=True)
@@ -118,11 +118,15 @@ class DlnaRuntimeService:
             service_was_active = current_service_state.get("active_state") == "active"
             should_restart_after_sync = bool(restart_service_if_active) and service_was_active
 
+            if force_full_rescan and service_was_active:
+                self.ensure_service_stopped(timeout=90)
+                should_restart_after_sync = True
+
             if layout_upgraded and service_was_active:
                 self.ensure_service_stopped(timeout=90)
                 should_restart_after_sync = True
 
-            if layout_upgraded:
+            if layout_upgraded or force_full_rescan:
                 self._clear_dlna_database_files()
 
             export_state = self._write_dlna_gerbera_config(dlna_config)
@@ -138,9 +142,12 @@ class DlnaRuntimeService:
             self._save_dlna_runtime_status(last_sync_at=time.time(), last_sync_error="")
             return export_state
 
-    def sync_runtime_safe(self, restart_service_if_active=False):
+    def sync_runtime_safe(self, restart_service_if_active=False, force_full_rescan=False):
         try:
-            self.sync_runtime(restart_service_if_active=restart_service_if_active)
+            self.sync_runtime(
+                restart_service_if_active=restart_service_if_active,
+                force_full_rescan=force_full_rescan,
+            )
         except Exception as exc:
             self._save_dlna_runtime_status(last_sync_error=str(exc))
 

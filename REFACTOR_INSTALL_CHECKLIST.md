@@ -203,6 +203,18 @@
 - [x] Wydzielić logikę kolekcji, klientów i biblioteki do `flask_downloader/services/dlna_service.py`.
 - [ ] Wydzielić konfigurację Gerbery do osobnego modułu/serwisu.
 - [x] Wydzielić sync eksportu DLNA do osobnego serwisu.
+- [x] Wymusić pełny rebuild eksportu i bazy Gerbera po zmianach strukturalnych DLNA:
+  - kolekcje
+  - klienci
+  - przypisani użytkownicy
+  - wpisy mediów
+  - zmiany plików po usunięciu albo zakończeniu pobierania
+- [x] Dodać model przypisań `IP urządzenia <-> użytkownicy`.
+- [x] Dodać root użytkownika w DLNA:
+  - `username/Video/Wszystkie Pliki`
+  - `username/Video/YYYY-MM-DD`
+  - `username/Audio/Wszystkie Pliki`
+  - `username/Audio/YYYY-MM-DD`
 - [ ] Wydzielić logikę whitelist i dostępu klientów.
 - [ ] Wydzielić logikę restartu/startu/stopu usługi DLNA.
 - [ ] Wydzielić logikę walidacji `config.xml`.
@@ -220,11 +232,12 @@
   - log DLNA
   - status usługi
   - restart odporny na stare błędy `Gerbera 1.1.x`
+- [ ] Zbić do minimum chwilowe rozjazdy layoutu u klientów po rebuildu i ocenić, na ile pozostałe `Object not found` wynikają już tylko z cache klienta.
 
 ### Bramka jakości
 - [x] Zakładka DLNA działa po AJAX bez reloadów.
 - [ ] Kolekcje, klienci i edytor bukietów działają.
-- [ ] Reguły dostępu klientów działają.
+- [ ] Reguły dostępu klientów działają dla bukietów i przypisanych użytkowników.
 - [ ] TV/laptop widzą właściwe media po sync.
 - [x] Log DLNA i diagnostyka nadal działają.
 

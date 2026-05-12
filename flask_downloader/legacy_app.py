@@ -520,11 +520,17 @@ def update_user_account(username, new_username, role):
                     if next_relative_path != rule.get("relative_path"):
                         rule["relative_path"] = next_relative_path
                         config_changed = True
+                for client in dlna_config.get("clients") or []:
+                    usernames = list(client.get("usernames") or [])
+                    next_usernames = [next_owner if item == previous_owner else item for item in usernames]
+                    if next_usernames != usernames:
+                        client["usernames"] = next_usernames
+                        config_changed = True
                 if config_changed:
                     APP_CONFIG["dlna"] = normalize_dlna_config(dlna_config)
                     write_app_config_locked()
 
-            sync_dlna_runtime_safe(restart_service_if_active=False)
+            sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
 
         with USER_STORE_LOCK:
             target_user = None
@@ -674,6 +680,13 @@ def delete_user_account(username):
             filtered_rules.append(rule)
         if changed:
             dlna_config["media_rules"] = filtered_rules
+        for client in dlna_config.get("clients") or []:
+            usernames = list(client.get("usernames") or [])
+            next_usernames = [item for item in usernames if item != normalized_username]
+            if next_usernames != usernames:
+                client["usernames"] = next_usernames
+                changed = True
+        if changed:
             APP_CONFIG["dlna"] = normalize_dlna_config(dlna_config)
             write_app_config_locked()
 
@@ -688,7 +701,7 @@ def delete_user_account(username):
     if os.path.isdir(user_root):
         shutil.rmtree(user_root)
 
-    sync_dlna_runtime_safe(restart_service_if_active=False)
+    sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
     return deleted_user
 
 
@@ -944,7 +957,7 @@ def normalize_dlna_client_ip(value):
     return str(address)
 
 
-def normalize_dlna_client_entry(raw, valid_collection_ids):
+def normalize_dlna_client_entry(raw, valid_collection_ids, valid_usernames):
     if not isinstance(raw, dict):
         return None
 
@@ -964,12 +977,25 @@ def normalize_dlna_client_entry(raw, valid_collection_ids):
         seen.add(value)
         collection_ids.append(value)
 
+    usernames = []
+    seen_usernames = set()
+    for item in raw.get("usernames") or []:
+        try:
+            value = normalize_username(item)
+        except Exception:
+            continue
+        if not value or value in seen_usernames or value not in valid_usernames:
+            continue
+        seen_usernames.add(value)
+        usernames.append(value)
+
     return {
         "id": normalize_dlna_collection_id(raw.get("id")),
         "ip": ip,
         "description": normalize_dlna_description(raw.get("description"), max_len=200),
         "enabled": bool(raw.get("enabled", True)),
         "collection_ids": collection_ids,
+        "usernames": usernames,
     }
 
 
@@ -1051,10 +1077,15 @@ def normalize_dlna_config(value):
             collection_items.append(item)
 
     valid_collection_ids = {item["id"] for item in collection_items}
+    valid_usernames = {
+        str(item.get("username") or "").strip()
+        for item in (get_users_snapshot() or [])
+        if str(item.get("username") or "").strip()
+    }
     client_items = []
     seen_ips = set()
     for raw in value.get("clients") or []:
-        item = normalize_dlna_client_entry(raw, valid_collection_ids)
+        item = normalize_dlna_client_entry(raw, valid_collection_ids, valid_usernames)
         if not item or item["ip"] in seen_ips:
             continue
         seen_ips.add(item["ip"])
@@ -3026,7 +3057,7 @@ def download_worker(job_id):
             relative_path=relative_path,
             persist=True,
         )
-        sync_dlna_runtime_safe(restart_service_if_active=False)
+        sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
 
     except DownloadCancelledError as exc:
         cleanup_download_artifacts(seen_paths)
@@ -3166,8 +3197,9 @@ DOWNLOAD_JOBS_SERVICE = DownloadJobsService(
     resolve_download_path=resolve_download_path,
     cleanup_empty_download_dirs=cleanup_empty_download_dirs,
     ensure_share_ready=ensure_share_ready,
-    sync_dlna_runtime_safe=lambda restart_service_if_active=True: sync_dlna_runtime_safe(
-        restart_service_if_active=restart_service_if_active
+    sync_dlna_runtime_safe=lambda restart_service_if_active=True, force_full_rescan=False: sync_dlna_runtime_safe(
+        restart_service_if_active=restart_service_if_active,
+        force_full_rescan=force_full_rescan,
     ),
     get_relative_download_path=get_relative_download_path,
     build_managed_file_url=build_managed_file_url,
@@ -3313,43 +3345,130 @@ def cleanup_dlna_legacy_export_root():
     remove_path_if_exists(legacy_root)
 
 
-def build_dlna_collection_title_map(dlna_config, collection_dir_map):
-    named_collections = get_dlna_named_collection_map(dlna_config)
-    title_map = {}
-    for collection_id, dir_name in (collection_dir_map or {}).items():
+def build_dlna_user_root_id(username):
+    return "user:%s" % normalize_username(username)
+
+
+def parse_dlna_user_root_username(root_id):
+    text = str(root_id or "").strip()
+    if not text.startswith("user:"):
+        return ""
+    try:
+        return normalize_username(text.split(":", 1)[1])
+    except Exception:
+        return ""
+
+
+def get_dlna_client_assigned_usernames(client):
+    valid_usernames = {
+        str(item.get("username") or "").strip()
+        for item in (get_users_snapshot() or [])
+        if str(item.get("username") or "").strip()
+    }
+    result = []
+    seen = set()
+    for raw_value in (client or {}).get("usernames") or []:
+        try:
+            username = normalize_username(raw_value)
+        except Exception:
+            continue
+        if not username or username in seen or username not in valid_usernames:
+            continue
+        seen.add(username)
+        result.append(username)
+    return result
+
+
+def get_dlna_referenced_usernames(dlna_config=None):
+    config = dlna_config or get_dlna_config_snapshot()
+    usernames = []
+    seen = set()
+    for client in config.get("clients") or []:
+        for username in get_dlna_client_assigned_usernames(client):
+            if username in seen:
+                continue
+            seen.add(username)
+            usernames.append(username)
+    return usernames
+
+
+def build_dlna_client_visible_root_ids(client, dlna_config=None):
+    visible_root_ids = set(get_dlna_client_visible_collection_ids(client, dlna_config))
+    for username in get_dlna_client_assigned_usernames(client):
+        visible_root_ids.add(build_dlna_user_root_id(username))
+    return visible_root_ids
+
+
+def build_dlna_root_entry_map(dlna_config=None):
+    config = dlna_config or get_dlna_config_snapshot()
+    result = {}
+    used_names = set()
+
+    def add_root(root_id, title, kind, username=""):
+        base_name = dlna_safe_dir_segment(title, default="kolekcja" if kind == "collection" else "uzytkownik")
+        candidate = base_name
+        suffix = 1
+        while candidate.lower() in used_names:
+            suffix += 1
+            candidate = "%s (%s)" % (base_name, suffix)
+        used_names.add(candidate.lower())
+        result[root_id] = {
+            "id": root_id,
+            "kind": kind,
+            "title": str(title or candidate),
+            "dir_name": candidate,
+            "username": str(username or "").strip(),
+        }
+
+    add_root(DLNA_ALL_COLLECTION_ID, DLNA_ALL_COLLECTION_NAME, "collection")
+    for item in config.get("collections") or []:
+        add_root(item["id"], item["name"], "collection")
+    for username in get_dlna_referenced_usernames(config):
+        add_root(build_dlna_user_root_id(username), username, "user", username=username)
+    return result
+
+
+def build_dlna_root_layout_map(root_entry_map):
+    layout_map = {}
+    for root_id, entry in (root_entry_map or {}).items():
+        dir_name = str((entry or {}).get("dir_name") or "").strip()
         if not dir_name:
             continue
-        if collection_id == DLNA_ALL_COLLECTION_ID:
-            title_map[str(dir_name)] = DLNA_ALL_COLLECTION_NAME
-            continue
-        title_map[str(dir_name)] = str((named_collections.get(collection_id) or {}).get("name") or dir_name)
-    return title_map
+        layout_map[dir_name] = {
+            "id": str(root_id or ""),
+            "kind": str((entry or {}).get("kind") or "collection"),
+            "title": str((entry or {}).get("title") or dir_name),
+            "username": str((entry or {}).get("username") or "").strip(),
+        }
+    return layout_map
 
 
 def build_dlna_dynamic_container_specs(dlna_config, collection_dir_map):
     config = dlna_config or get_dlna_config_snapshot()
-    title_map = build_dlna_collection_title_map(config, collection_dir_map)
+    root_entry_map = build_dlna_root_entry_map(config)
+    layout_map = build_dlna_root_layout_map(root_entry_map)
     enabled_clients = [item for item in (config.get("clients") or []) if item.get("enabled", True)]
-    relevant_collection_ids = set()
+    relevant_root_ids = set()
 
     if enabled_clients:
         for client in enabled_clients:
-            relevant_collection_ids.update(get_dlna_client_visible_collection_ids(client, config))
+            relevant_root_ids.update(build_dlna_client_visible_root_ids(client, config))
     else:
-        relevant_collection_ids.update(collection_dir_map.keys())
+        relevant_root_ids.update(root_entry_map.keys())
 
     specs = []
-    for collection_id, dir_name in (collection_dir_map or {}).items():
+    for root_id, entry in (root_entry_map or {}).items():
+        dir_name = str((entry or {}).get("dir_name") or "").strip()
         if not dir_name:
             continue
-        if relevant_collection_ids and collection_id not in relevant_collection_ids:
+        if relevant_root_ids and root_id not in relevant_root_ids:
             continue
         physical_dir = os.path.join(DLNA_EXPORT_ROOT, str(dir_name)).replace("\\", "/").rstrip("/") + "/"
         filter_path = physical_dir.replace('"', '\\"')
         specs.append({
-            "collection_id": collection_id,
+            "collection_id": root_id,
             "location": "/" + str(dir_name),
-            "title": str(title_map.get(str(dir_name)) or dir_name),
+            "title": str((layout_map.get(str(dir_name)) or {}).get("title") or dir_name),
             "filter": 'upnp:class derivedfrom "object.item" and location contains "%s"' % filter_path,
         })
 
@@ -3357,11 +3476,11 @@ def build_dlna_dynamic_container_specs(dlna_config, collection_dir_map):
     return specs
 
 
-def build_dlna_virtual_layout_script(collection_title_map):
+def build_dlna_virtual_layout_script(root_layout_map):
     encoded_root = json.dumps(DLNA_EXPORT_ROOT.replace("\\", "/"), ensure_ascii=False)
-    encoded_titles = json.dumps(collection_title_map or {}, ensure_ascii=False, indent=2, sort_keys=True)
+    encoded_layout = json.dumps(root_layout_map or {}, ensure_ascii=False, indent=2, sort_keys=True)
     return """var DLNA_EXPORT_ROOT = %s;
-var DLNA_COLLECTION_TITLES = %s;
+var DLNA_ROOT_LAYOUT = %s;
 
 function dlnaNormalizePath(value) {
   return String(value || '').replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/\\/$/, '');
@@ -3392,15 +3511,15 @@ function dlnaGetRelativeParts(location, rootPath) {
   return result;
 }
 
-function dlnaGetCollectionTitle(parts) {
-  var collectionKey = parts.length ? parts[0] : '';
-  if (collectionKey && DLNA_COLLECTION_TITLES[collectionKey]) {
-    return DLNA_COLLECTION_TITLES[collectionKey];
+function dlnaGetRootMeta(parts) {
+  var rootKey = parts.length ? parts[0] : '';
+  if (rootKey && DLNA_ROOT_LAYOUT[rootKey]) {
+    return DLNA_ROOT_LAYOUT[rootKey];
   }
-  return collectionKey || 'Pozostałe';
+  return { title: rootKey || 'Pozostałe', kind: 'collection' };
 }
 
-function dlnaCreateCollectionContainer(obj, cont, title) {
+function dlnaCreateNamedContainer(title) {
   return {
     title: title,
     objectType: OBJECT_TYPE_CONTAINER,
@@ -3410,12 +3529,35 @@ function dlnaCreateCollectionContainer(obj, cont, title) {
   };
 }
 
+function dlnaBuildContainerDefs(parts) {
+  var rootMeta = dlnaGetRootMeta(parts);
+  var titles = [];
+  if (rootMeta.title) {
+    titles.push(rootMeta.title);
+  }
+  if (rootMeta.kind === 'user') {
+    if (parts.length > 1 && parts[1]) {
+      titles.push(parts[1]);
+    }
+    if (parts.length > 2 && parts[2]) {
+      titles.push(parts[2]);
+    }
+  }
+  if (!titles.length) {
+    titles.push('Pozostałe');
+  }
+  var defs = [];
+  for (var idx = 0; idx < titles.length; idx++) {
+    defs.push(dlnaCreateNamedContainer(titles[idx]));
+  }
+  return defs;
+}
+
 function dlnaImportByCollection(obj, cont, rootPath, autoscanId, containerType) {
   var parts = dlnaGetRelativeParts(obj.location, rootPath);
-  var collectionTitle = dlnaGetCollectionTitle(parts);
   obj.sortKey = '';
   obj.title = obj.title || dlnaBasename(obj.location);
-  var container = addContainerTree([dlnaCreateCollectionContainer(obj, cont, collectionTitle)]);
+  var container = addContainerTree(dlnaBuildContainerDefs(parts));
   var result = [];
   result.push(addCdsObject(obj, container, rootPath));
   return result;
@@ -3432,14 +3574,14 @@ function importImage(obj, cont, rootPath, autoscanId, containerType) {
 function importVideo(obj, cont, rootPath, autoscanId, containerType) {
   return dlnaImportByCollection(obj, cont, rootPath, autoscanId, containerType);
 }
-""" % (encoded_root, encoded_titles)
+""" % (encoded_root, encoded_layout)
 
 
-def build_dlna_legacy_import_script(collection_title_map):
+def build_dlna_legacy_import_script(root_layout_map):
     encoded_root = json.dumps(DLNA_EXPORT_ROOT.replace("\\", "/"), ensure_ascii=False)
-    encoded_titles = json.dumps(collection_title_map or {}, ensure_ascii=False, indent=2, sort_keys=True)
+    encoded_layout = json.dumps(root_layout_map or {}, ensure_ascii=False, indent=2, sort_keys=True)
     return """var DLNA_EXPORT_ROOT = %s;
-var DLNA_COLLECTION_TITLES = %s;
+var DLNA_ROOT_LAYOUT = %s;
 
 function dlnaNormalizePath(value) {
   return String(value || '').replace(/\\\\/g, '/').replace(/\\/+/g, '/').replace(/\\/$/, '');
@@ -3470,18 +3612,27 @@ function dlnaGetRelativeParts(location) {
   return result;
 }
 
-function dlnaGetCollectionTitle(parts) {
-  var collectionKey = parts.length ? parts[0] : '';
-  if (collectionKey && DLNA_COLLECTION_TITLES[collectionKey]) {
-    return DLNA_COLLECTION_TITLES[collectionKey];
+function dlnaGetRootMeta(parts) {
+  var rootKey = parts.length ? parts[0] : '';
+  if (rootKey && DLNA_ROOT_LAYOUT[rootKey]) {
+    return DLNA_ROOT_LAYOUT[rootKey];
   }
-  return collectionKey || 'Pozostałe';
+  return { title: rootKey || 'Pozostałe', kind: 'collection' };
 }
 
 function dlnaLegacyBuildChain(obj) {
   var parts = dlnaGetRelativeParts(obj.location);
-  var collectionTitle = dlnaGetCollectionTitle(parts);
-  return new Array(collectionTitle);
+  var rootMeta = dlnaGetRootMeta(parts);
+  var chain = new Array(rootMeta.title || 'Pozostałe');
+  if (rootMeta.kind === 'user') {
+    if (parts.length > 1 && parts[1]) {
+      chain.push(parts[1]);
+    }
+    if (parts.length > 2 && parts[2]) {
+      chain.push(parts[2]);
+    }
+  }
+  return chain;
 }
 
 function dlnaLegacyAddByCollection(obj) {
@@ -3501,19 +3652,19 @@ function addImage(obj) {
 function addVideo(obj) {
   dlnaLegacyAddByCollection(obj);
 }
-""" % (encoded_root, encoded_titles)
+""" % (encoded_root, encoded_layout)
 
 
-def write_dlna_virtual_layout_scripts(dlna_config, collection_dir_map):
+def write_dlna_virtual_layout_scripts(dlna_config, root_entry_map):
     ensure_dlna_runtime_dirs()
-    collection_title_map = build_dlna_collection_title_map(dlna_config, collection_dir_map)
+    root_layout_map = build_dlna_root_layout_map(root_entry_map)
     clear_directory_contents(DLNA_CUSTOM_SCRIPT_DIR)
     with open(DLNA_VIRTUAL_LAYOUT_SCRIPT_FILE, "w", encoding="utf-8") as fh:
-        fh.write(build_dlna_virtual_layout_script(collection_title_map))
+        fh.write(build_dlna_virtual_layout_script(root_layout_map))
     clear_directory_contents(DLNA_LEGACY_SCRIPT_DIR)
     with open(DLNA_LEGACY_IMPORT_SCRIPT_FILE, "w", encoding="utf-8") as fh:
-        fh.write(build_dlna_legacy_import_script(collection_title_map))
-    return collection_title_map
+        fh.write(build_dlna_legacy_import_script(root_layout_map))
+    return root_layout_map
 
 
 def dlna_safe_dir_segment(value, default="kolekcja"):
@@ -4265,7 +4416,10 @@ def prune_missing_dlna_media_rules(files=None, sync_runtime=True, restart_servic
         updated_config = copy.deepcopy(APP_CONFIG["dlna"])
 
     if sync_runtime:
-        sync_dlna_runtime_safe(restart_service_if_active=restart_service_if_active)
+        sync_dlna_runtime_safe(
+            restart_service_if_active=restart_service_if_active,
+            force_full_rescan=True,
+        )
 
     return {
         "changed": True,
@@ -4392,7 +4546,7 @@ def rebuild_dlna_export_tree(dlna_config=None, files=None):
     config = dlna_config or get_dlna_config_snapshot()
     files = files if files is not None else get_server_files()
     effective_map = get_dlna_effective_file_map(config, files=files)
-    collection_dir_map = get_dlna_collection_dir_map(config)
+    root_entry_map = build_dlna_root_entry_map(config)
     package_state = get_dlna_package_state_snapshot()
     feature_support = get_dlna_feature_support(package_state.get("current_version_raw"))
 
@@ -4409,7 +4563,8 @@ def rebuild_dlna_export_tree(dlna_config=None, files=None):
             collection_ids.add(DLNA_ALL_COLLECTION_ID)
 
         for collection_id in collection_ids:
-            export_dir_name = collection_dir_map.get(collection_id)
+            export_entry = root_entry_map.get(collection_id) or {}
+            export_dir_name = export_entry.get("dir_name")
             if not export_dir_name:
                 continue
 
@@ -4425,10 +4580,55 @@ def rebuild_dlna_export_tree(dlna_config=None, files=None):
             os.symlink(absolute_path, export_path)
             created_links += 1
 
+    referenced_usernames = get_dlna_referenced_usernames(config)
+    for username in referenced_usernames:
+        root_entry = root_entry_map.get(build_dlna_user_root_id(username)) or {}
+        root_dir_name = str(root_entry.get("dir_name") or "").strip()
+        if not root_dir_name:
+            continue
+
+        user_files = [
+            item for item in files
+            if normalize_username(item.get("owner_username") or DEFAULT_ADMIN_USERNAME) == username
+        ]
+
+        for item in user_files:
+            storage_kind = normalize_storage_kind(item.get("storage_kind") or "video")
+            storage_dir_name = "Audio" if storage_kind == "audio" else "Video"
+            user_relative_path = safe_relative_download_path(item.get("user_relative_path") or "")
+            date_bucket = "Pozostałe"
+            if user_relative_path:
+                first_segment = user_relative_path.split("/", 1)[0]
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", first_segment):
+                    date_bucket = first_segment
+            for bucket_name in ("Wszystkie Pliki", date_bucket):
+                export_dir_key = "%s/%s/%s" % (root_dir_name, storage_dir_name, bucket_name)
+                used_names = used_names_by_export_dir.setdefault(export_dir_key.lower(), set())
+                export_file_name = build_dlna_export_link_name(item, used_names)
+                export_relative_path = os.path.join(root_dir_name, storage_dir_name, bucket_name, export_file_name)
+                export_path = os.path.abspath(os.path.join(DLNA_EXPORT_ROOT, export_relative_path))
+                ensure_directory(os.path.dirname(export_path))
+                if os.path.lexists(export_path):
+                    remove_path_if_exists(export_path)
+                absolute_path = resolve_download_path(
+                    item.get("relative_path") or "",
+                    storage_kind,
+                    owner_username=username,
+                )
+                if not absolute_path or not os.path.isfile(absolute_path):
+                    continue
+                os.symlink(absolute_path, export_path)
+                created_links += 1
+
     return {
         "effective_media_count": len(effective_map),
         "created_links": created_links,
-        "collection_dir_map": collection_dir_map,
+        "collection_dir_map": {
+            root_id: entry.get("dir_name")
+            for root_id, entry in root_entry_map.items()
+            if str((entry or {}).get("kind") or "") == "collection"
+        },
+        "root_entry_map": root_entry_map,
     }
 
 
@@ -4623,11 +4823,11 @@ def write_dlna_gerbera_config(dlna_config=None):
     ensure_dlna_export_root_directory()
     cleanup_dlna_legacy_export_root()
     export_state = rebuild_dlna_export_tree(config)
-    collection_dir_map = export_state["collection_dir_map"]
+    root_entry_map = export_state["root_entry_map"]
     package_state = get_dlna_package_state_snapshot()
     package_version = package_state.get("current_version_raw")
     supports_custom_virtual_layout = dlna_version_at_least(package_version, 2, 0, 0)
-    write_dlna_virtual_layout_scripts(config, collection_dir_map)
+    write_dlna_virtual_layout_scripts(config, root_entry_map)
     feature_support = get_dlna_feature_support(package_state.get("current_version_raw"))
     tree = generate_gerbera_default_config_tree()
     root = tree.getroot()
@@ -4738,10 +4938,11 @@ def write_dlna_gerbera_config(dlna_config=None):
     clients_el = gerbera_ensure(root, "clients")
     clients_el.set("enabled", "yes")
     clear_xml_children(clients_el)
-    all_collection_ids = set(collection_dir_map.keys())
+    all_root_ids = set(root_entry_map.keys())
 
-    def build_collection_hide_locations(collection_id):
-        collection_dir_name = collection_dir_map.get(collection_id)
+    def build_root_hide_locations(root_id):
+        root_entry = root_entry_map.get(root_id) or {}
+        collection_dir_name = root_entry.get("dir_name")
         if not collection_dir_name:
             return []
         physical_location = os.path.join(DLNA_EXPORT_ROOT, collection_dir_name)
@@ -4755,8 +4956,8 @@ def write_dlna_gerbera_config(dlna_config=None):
         if feature_support["supports_group_allowed"]:
             default_group_el.set("allowed", "no")
 
-        for collection_id in sorted(all_collection_ids):
-            for hide_location in build_collection_hide_locations(collection_id):
+        for root_id in sorted(all_root_ids):
+            for hide_location in build_root_hide_locations(root_id):
                 hide_el = gerbera_sub_element(default_group_el, "hide")
                 hide_el.set("location", hide_location)
 
@@ -4780,10 +4981,10 @@ def write_dlna_gerbera_config(dlna_config=None):
             if feature_support["supports_group_allowed"]:
                 group_el.set("allowed", "yes" if client.get("enabled", True) else "no")
 
-            visible_collection_ids = get_dlna_client_visible_collection_ids(client, config)
-            hidden_collection_ids = all_collection_ids - visible_collection_ids
-            for collection_id in sorted(hidden_collection_ids):
-                for hide_location in build_collection_hide_locations(collection_id):
+            visible_root_ids = build_dlna_client_visible_root_ids(client, config)
+            hidden_root_ids = all_root_ids - visible_root_ids
+            for root_id in sorted(hidden_root_ids):
+                for hide_location in build_root_hide_locations(root_id):
                     hide_el = gerbera_sub_element(group_el, "hide")
                     hide_el.set("location", hide_location)
 
@@ -5115,12 +5316,18 @@ DLNA_RUNTIME_SERVICE = DlnaRuntimeService(
 )
 
 
-def sync_dlna_runtime(restart_service_if_active=False):
-    return DLNA_RUNTIME_SERVICE.sync_runtime(restart_service_if_active=restart_service_if_active)
+def sync_dlna_runtime(restart_service_if_active=False, force_full_rescan=False):
+    return DLNA_RUNTIME_SERVICE.sync_runtime(
+        restart_service_if_active=restart_service_if_active,
+        force_full_rescan=force_full_rescan,
+    )
 
 
-def sync_dlna_runtime_safe(restart_service_if_active=False):
-    return DLNA_RUNTIME_SERVICE.sync_runtime_safe(restart_service_if_active=restart_service_if_active)
+def sync_dlna_runtime_safe(restart_service_if_active=False, force_full_rescan=False):
+    return DLNA_RUNTIME_SERVICE.sync_runtime_safe(
+        restart_service_if_active=restart_service_if_active,
+        force_full_rescan=force_full_rescan,
+    )
 
 
 def get_dlna_service_state():
@@ -5359,12 +5566,12 @@ def normalize_dlna_client_collection_ids(collection_ids, dlna_config=None):
     return DLNA_LIBRARY_SERVICE.normalize_client_collection_ids(collection_ids, dlna_config)
 
 
-def create_dlna_client(ip, description="", enabled=True, collection_ids=None):
-    return DLNA_LIBRARY_SERVICE.create_client(ip, description, enabled, collection_ids)
+def create_dlna_client(ip, description="", enabled=True, collection_ids=None, usernames=None):
+    return DLNA_LIBRARY_SERVICE.create_client(ip, description, enabled, collection_ids, usernames)
 
 
-def update_dlna_client(client_id, ip, description="", enabled=True, collection_ids=None):
-    return DLNA_LIBRARY_SERVICE.update_client(client_id, ip, description, enabled, collection_ids)
+def update_dlna_client(client_id, ip, description="", enabled=True, collection_ids=None, usernames=None):
+    return DLNA_LIBRARY_SERVICE.update_client(client_id, ip, description, enabled, collection_ids, usernames)
 
 
 def delete_dlna_client(client_id):
@@ -5416,6 +5623,7 @@ DLNA_LIBRARY_SERVICE = DlnaLibraryService(
     normalize_dlna_client_ip=normalize_dlna_client_ip,
     normalize_dlna_description=normalize_dlna_description,
     sync_dlna_runtime_safe=sync_dlna_runtime_safe,
+    get_users_snapshot=get_users_snapshot,
     default_admin_username=DEFAULT_ADMIN_USERNAME,
     dlna_all_collection_id=DLNA_ALL_COLLECTION_ID,
     dlna_all_collection_name=DLNA_ALL_COLLECTION_NAME,
