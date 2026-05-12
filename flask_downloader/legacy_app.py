@@ -84,7 +84,9 @@ from flask_downloader.routes.downloads import register_download_routes
 from flask_downloader.routes.main import register_main_routes
 from flask_downloader.routes.settings import register_settings_routes
 from flask_downloader.routes.users import register_user_management_routes
+from flask_downloader.services.jobs_service import JobViewService
 from flask_downloader.services.maintenance_service import MaintenanceTaskService
+from flask_downloader.services.storage_service import ManagedStorageService
 from flask_downloader.stores.config_store import (
     load_app_config as config_store_load_app_config,
     write_app_config as config_store_write_app_config,
@@ -1251,138 +1253,65 @@ def normalize_storage_kind(value):
     return "audio" if str(value or "").strip().lower() == "audio" else "video"
 
 
+STORAGE_SERVICE = ManagedStorageService(
+    get_config_snapshot=get_config_snapshot,
+    normalize_username=normalize_username,
+    normalize_storage_kind=normalize_storage_kind,
+    get_current_username=lambda: get_current_username(),
+    default_admin_username=DEFAULT_ADMIN_USERNAME,
+    has_request_context=has_request_context,
+    is_admin_authenticated=lambda: is_admin_authenticated(),
+    ensure_share_ready=lambda auto_remount=True: ensure_share_ready(auto_remount=auto_remount),
+    format_ts=lambda ts: format_ts(ts),
+)
+
+
 def get_user_storage_base_root():
-    return get_config_snapshot()["user_storage_root"]
+    return STORAGE_SERVICE.get_user_storage_base_root()
 
 
 def get_user_root(username):
-    return os.path.join(get_user_storage_base_root(), normalize_username(username))
+    return STORAGE_SERVICE.get_user_root(username)
 
 
 def get_user_storage_root(username, storage_kind="video"):
-    return os.path.join(get_user_root(username), normalize_storage_kind(storage_kind))
+    return STORAGE_SERVICE.get_user_storage_root(username, storage_kind)
 
 
 def build_managed_relative_path(owner_username, storage_kind="video", user_relative_path=""):
-    owner = normalize_username(owner_username)
-    kind = normalize_storage_kind(storage_kind)
-    relative_path = safe_relative_download_path(user_relative_path)
-    if relative_path:
-        return "%s/%s/%s" % (owner, kind, relative_path)
-    return "%s/%s" % (owner, kind)
+    return STORAGE_SERVICE.build_managed_relative_path(owner_username, storage_kind, user_relative_path)
 
 
 def parse_managed_relative_path(value):
-    relative_path = safe_relative_download_path(value)
-    if not relative_path:
-        return None
-
-    parts = relative_path.split("/")
-    if len(parts) < 3:
-        return None
-
-    try:
-        owner_username = normalize_username(parts[0])
-    except Exception:
-        return None
-
-    raw_storage_kind = str(parts[1] or "").strip().lower()
-    if raw_storage_kind not in ("video", "audio"):
-        return None
-    storage_kind = raw_storage_kind
-    user_relative_path = "/".join(parts[2:]).strip("/")
-    if not user_relative_path:
-        return None
-    return {
-        "owner_username": owner_username,
-        "storage_kind": storage_kind,
-        "relative_path": relative_path,
-        "user_relative_path": user_relative_path,
-    }
+    return STORAGE_SERVICE.parse_managed_relative_path(value)
 
 
 def get_managed_path_info(path):
-    candidate = os.path.abspath(str(path or ""))
-    base_root = os.path.abspath(get_user_storage_base_root())
-    if not candidate:
-        return None
-
-    try:
-        if os.path.commonpath([base_root, candidate]) != base_root:
-            return None
-    except Exception:
-        return None
-
-    try:
-        relative_path = os.path.relpath(candidate, base_root).replace("\\", "/")
-    except Exception:
-        return None
-
-    return parse_managed_relative_path(relative_path)
+    return STORAGE_SERVICE.get_managed_path_info(path)
 
 
 def get_storage_root(storage_kind="video", owner_username=None):
-    if owner_username:
-        return get_user_storage_root(owner_username, storage_kind)
-    return get_user_storage_base_root()
+    return STORAGE_SERVICE.get_storage_root(storage_kind, owner_username)
 
 
 def get_managed_storage_roots():
-    roots = []
-    base_root = os.path.abspath(get_user_storage_base_root())
-    if not os.path.isdir(base_root):
-        return roots
-
-    for entry in sorted(os.listdir(base_root)):
-        candidate_user_root = os.path.join(base_root, entry)
-        if not os.path.isdir(candidate_user_root):
-            continue
-        try:
-            owner_username = normalize_username(entry)
-        except Exception:
-            continue
-        for storage_kind in ("video", "audio"):
-            candidate_root = os.path.join(candidate_user_root, storage_kind)
-            roots.append((owner_username, storage_kind, candidate_root))
-    return roots
+    return STORAGE_SERVICE.get_managed_storage_roots()
 
 
 def get_storage_kind_for_path(path):
-    info = get_managed_path_info(path)
-    if info:
-        return info["storage_kind"]
-    return "video"
+    return STORAGE_SERVICE.get_storage_kind_for_path(path)
 
 
 def get_path_owner_username(path):
-    info = get_managed_path_info(path)
-    return (info or {}).get("owner_username") or DEFAULT_ADMIN_USERNAME
+    return STORAGE_SERVICE.get_path_owner_username(path)
 
 
 def format_relative_path_for_user(relative_path, viewer_username="", is_admin=False):
-    parsed = parse_managed_relative_path(relative_path)
-    if not parsed:
-        return safe_relative_download_path(relative_path)
-
-    viewer = str(viewer_username or "").strip().lower()
-    suffix = parsed["user_relative_path"]
-    if is_admin:
-        return parsed["relative_path"]
-    if suffix:
-        return "%s/%s" % (parsed["storage_kind"], suffix)
-    return parsed["storage_kind"]
+    return STORAGE_SERVICE.format_relative_path_for_user(relative_path, viewer_username=viewer_username, is_admin=is_admin)
 
 
 def build_managed_file_url(owner_username, storage_kind, relative_path):
-    parsed = parse_managed_relative_path(relative_path)
-    user_relative_path = safe_relative_download_path(parsed["user_relative_path"] if parsed else relative_path)
-    owner = normalize_username((parsed or {}).get("owner_username") or owner_username or DEFAULT_ADMIN_USERNAME)
-    kind = normalize_storage_kind((parsed or {}).get("storage_kind") or storage_kind or "video")
-    return "/server-files/%s/%s/%s" % (
-        quote(owner, safe=""),
-        quote(kind, safe=""),
-        quote(user_relative_path, safe="/"),
-    )
+    return STORAGE_SERVICE.build_managed_file_url(owner_username, storage_kind, relative_path)
 
 
 def get_completed_job_retention_seconds():
@@ -1390,98 +1319,31 @@ def get_completed_job_retention_seconds():
 
 
 def get_daily_folder_name(ts=None):
-    return time.strftime("%Y-%m-%d", time.localtime(ts or time.time()))
+    return STORAGE_SERVICE.get_daily_folder_name(ts)
 
 
 def get_daily_download_dir(ts=None, media_kind="video", owner_username=None):
-    owner = normalize_username(owner_username or get_current_username() or DEFAULT_ADMIN_USERNAME)
-    return os.path.join(get_user_storage_root(owner, media_kind), get_daily_folder_name(ts))
+    return STORAGE_SERVICE.get_daily_download_dir(ts, media_kind=media_kind, owner_username=owner_username)
 
 
 def get_relative_download_path(path, media_kind=None, owner_username=None):
-    candidate = os.path.abspath(str(path or ""))
-    if not candidate:
-        return ""
-
-    info = get_managed_path_info(candidate)
-    if info:
-        return info["relative_path"]
-
-    if owner_username:
-        try:
-            storage_kind = normalize_storage_kind(media_kind or "video")
-            owner = normalize_username(owner_username)
-            user_root = os.path.abspath(get_user_storage_root(owner, storage_kind))
-            if os.path.commonpath([user_root, candidate]) == user_root:
-                user_relative_path = os.path.relpath(candidate, user_root).replace("\\", "/")
-                return build_managed_relative_path(owner, storage_kind, user_relative_path)
-        except Exception:
-            return ""
-    return ""
+    return STORAGE_SERVICE.get_relative_download_path(path, media_kind=media_kind, owner_username=owner_username)
 
 
 def safe_relative_download_path(value):
-    path = str(value or "").strip().replace("\\", "/")
-    if not path:
-        return ""
-
-    normalized = os.path.normpath(path).replace("\\", "/").lstrip("/")
-    if normalized in ("", ".", "..") or normalized.startswith("../"):
-        return ""
-
-    return normalized
+    return STORAGE_SERVICE.safe_relative_download_path(value)
 
 
 def resolve_download_path(relative_path, media_kind="video", owner_username=None):
-    managed_info = parse_managed_relative_path(relative_path)
-    if managed_info:
-        global_relative_path = managed_info["relative_path"]
-    else:
-        safe_path = safe_relative_download_path(relative_path)
-        if not safe_path:
-            return ""
-        try:
-            owner = normalize_username(owner_username or get_current_username() or DEFAULT_ADMIN_USERNAME)
-        except Exception:
-            owner = DEFAULT_ADMIN_USERNAME
-        global_relative_path = build_managed_relative_path(owner, media_kind, safe_path)
-
-    base_root = os.path.abspath(get_user_storage_base_root())
-    path = os.path.abspath(os.path.join(base_root, global_relative_path))
-
-    try:
-        if os.path.commonpath([base_root, path]) != base_root:
-            return ""
-    except Exception:
-        return ""
-
-    return path
+    return STORAGE_SERVICE.resolve_download_path(relative_path, media_kind=media_kind, owner_username=owner_username)
 
 
 def cleanup_empty_download_dirs(path):
-    info = get_managed_path_info(path)
-    if not info:
-        return
-
-    root = os.path.abspath(get_user_storage_root(info["owner_username"], info["storage_kind"]))
-    current = os.path.abspath(os.path.dirname(path))
-
-    while current.startswith(root) and current != root:
-        try:
-            os.rmdir(current)
-        except OSError:
-            break
-        current = os.path.abspath(os.path.dirname(current))
+    return STORAGE_SERVICE.cleanup_empty_download_dirs(path)
 
 
 def is_temporary_download_artifact_name(name):
-    lower = str(name or "").lower()
-    return (
-        lower.endswith(".part")
-        or ".part-" in lower
-        or lower.endswith(".ytdl")
-        or ".ytdl" in lower
-    )
+    return STORAGE_SERVICE.is_temporary_download_artifact_name(name)
 
 
 def get_download_artifact_roots(path):
@@ -4653,88 +4515,20 @@ def schedule_flask_service_restart():
     return schedule_systemd_service_restart(SYSTEMD_SERVICE_NAME)
 
 
-def filter_jobs_for_viewer(jobs, scope_username=""):
-    viewer_username = get_current_username()
-    admin_view = is_admin_authenticated()
-    selected_owner = ""
-    if admin_view and scope_username:
-        try:
-            selected_owner = normalize_username(scope_username)
-        except Exception:
-            selected_owner = ""
+JOB_VIEW_SERVICE = JobViewService(
+    get_current_username=get_current_username,
+    is_admin_authenticated=is_admin_authenticated,
+    normalize_username=normalize_username,
+    default_admin_username=DEFAULT_ADMIN_USERNAME,
+)
 
-    visible_jobs = []
-    for job in jobs:
-        owner_username = normalize_username(job.get("owner_username") or DEFAULT_ADMIN_USERNAME)
-        if admin_view:
-            if selected_owner and owner_username != selected_owner:
-                continue
-        elif owner_username != viewer_username:
-            continue
-        visible_jobs.append(job)
-    return visible_jobs
+
+def filter_jobs_for_viewer(jobs, scope_username=""):
+    return JOB_VIEW_SERVICE.filter_jobs_for_viewer(jobs, scope_username=scope_username)
 
 
 def get_server_files(scope_username=""):
-    ok, _ = ensure_share_ready(auto_remount=True)
-    if not ok:
-        return []
-
-    files = []
-    seen_paths = set()
-    try:
-        viewer_username = get_current_username() if has_request_context() else DEFAULT_ADMIN_USERNAME
-        admin_view = is_admin_authenticated() if has_request_context() else True
-        selected_owner = ""
-        if admin_view and scope_username:
-            try:
-                selected_owner = normalize_username(scope_username)
-            except Exception:
-                selected_owner = ""
-
-        for owner_username, storage_kind, root in get_managed_storage_roots():
-            if selected_owner and owner_username != selected_owner:
-                continue
-            if not admin_view and owner_username != viewer_username:
-                continue
-            if not os.path.isdir(root):
-                continue
-
-            for current_root, _, filenames in os.walk(root):
-                for name in filenames:
-                    if is_temporary_download_artifact_name(name):
-                        continue
-
-                    path = os.path.abspath(os.path.join(current_root, name))
-                    if path in seen_paths:
-                        continue
-                    seen_paths.add(path)
-
-                    try:
-                        st = os.stat(path)
-                    except Exception:
-                        continue
-
-                    relative_path = get_relative_download_path(path, storage_kind, owner_username)
-                    display_path = format_relative_path_for_user(relative_path, viewer_username=viewer_username, is_admin=admin_view)
-                    files.append({
-                        "owner_username": owner_username,
-                        "name": name,
-                        "storage_kind": storage_kind,
-                        "storage_label": "Audio" if storage_kind == "audio" else "Wideo",
-                        "relative_path": relative_path,
-                        "user_relative_path": safe_relative_download_path((parse_managed_relative_path(relative_path) or {}).get("user_relative_path") or ""),
-                        "display_path": display_path,
-                        "size": st.st_size,
-                        "mtime": st.st_mtime,
-                        "mtime_text": format_ts(st.st_mtime),
-                        "url": build_managed_file_url(owner_username, storage_kind, relative_path),
-                    })
-    except Exception:
-        return []
-
-    files.sort(key=lambda item: item["mtime"], reverse=True)
-    return files
+    return STORAGE_SERVICE.get_server_files(scope_username=scope_username)
 
 
 def gerbera_namespace_for(node):
