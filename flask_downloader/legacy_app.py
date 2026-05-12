@@ -90,6 +90,8 @@ from flask_downloader.services.storage_service import ManagedStorageService
 from flask_downloader.services.system_service import SystemServiceHelper
 from flask_downloader.services.download_service import DownloadPathService
 from flask_downloader.services.source_service import SourceMediaService
+from flask_downloader.services.ffmpeg_service import FfmpegMaintenanceService
+from flask_downloader.services.ytdlp_service import YtDlpMaintenanceService
 from flask_downloader.stores.config_store import (
     load_app_config as config_store_load_app_config,
     write_app_config as config_store_write_app_config,
@@ -1832,20 +1834,11 @@ def get_ffmpeg_location_for_yt_dlp():
 
 
 def apply_ffmpeg_location(options):
-    location = get_ffmpeg_location_for_yt_dlp()
-    if location:
-        options["ffmpeg_location"] = location
-    return options
+    return FFMPEG_SERVICE.apply_ffmpeg_location(options)
 
 
 def ensure_ffmpeg_available_for_audio_conversion():
-    binary_path, _ = resolve_ffmpeg_binary()
-    if binary_path:
-        return binary_path
-
-    raise RuntimeError(
-        "Pobieranie audio jako MP3 wymaga ffmpeg. Zainstaluj go w Konfiguracji przed rozpoczęciem pobierania audio."
-    )
+    return FFMPEG_SERVICE.ensure_ffmpeg_available_for_audio_conversion()
 
 
 def get_installed_ffmpeg_version(binary_path=None):
@@ -2113,6 +2106,20 @@ def save_ffmpeg_update_state(latest_version, latest_build_id, checked_at, check_
         write_app_config_locked()
 
 
+def read_ffmpeg_update_state():
+    with APP_CONFIG_LOCK:
+        return normalize_ffmpeg_update_state(APP_CONFIG.get("ffmpeg_update_state"))
+
+
+def is_ffmpeg_scheduler_started():
+    return bool(FFMPEG_SCHEDULER_STARTED)
+
+
+def set_ffmpeg_scheduler_started(value):
+    global FFMPEG_SCHEDULER_STARTED
+    FFMPEG_SCHEDULER_STARTED = bool(value)
+
+
 def get_last_due_ffmpeg_check_dt(now=None):
     current = now or datetime.now()
     scheduled = current.replace(hour=FFMPEG_CHECK_HOUR, minute=0, second=0, microsecond=0)
@@ -2138,81 +2145,11 @@ def needs_scheduled_ffmpeg_check(last_checked_at, now=None):
 
 
 def get_ffmpeg_update_state_snapshot():
-    current_path, source_key = resolve_ffmpeg_binary()
-    current_version = get_installed_ffmpeg_version(current_path)
-    manifest = load_ffmpeg_manifest() if source_key == "managed" else {}
-
-    with APP_CONFIG_LOCK:
-        raw_state = normalize_ffmpeg_update_state(APP_CONFIG.get("ffmpeg_update_state"))
-
-    latest_version = raw_state["latest_version"]
-    latest_build_id = raw_state["latest_build_id"]
-    checked_at = raw_state["checked_at"]
-    check_error = raw_state["check_error"]
-    installed_build_id = str(manifest.get("build_id") or "").strip()
-    managed = source_key == "managed"
-    installed = bool(current_path)
-    can_compare_updates = managed and bool(installed_build_id) and bool(latest_build_id)
-    update_available = bool(can_compare_updates and latest_build_id != installed_build_id)
-    if check_error:
-        status_pill_kind = "error"
-        status_pill_label = "Błąd sprawdzania wersji"
-    elif not installed:
-        status_pill_kind = "error"
-        status_pill_label = "ffmpeg nie jest zainstalowany"
-    elif update_available:
-        status_pill_kind = "queued"
-        status_pill_label = "Dostępna jest aktualizacja"
-    elif managed:
-        status_pill_kind = "success"
-        status_pill_label = "Gotowy do łączenia audio i wideo"
-    else:
-        status_pill_kind = "success"
-        status_pill_label = "Wykryto systemowy ffmpeg"
-
-    return {
-        "current_version": current_version,
-        "current_path": current_path or "nie znaleziono",
-        "current_source_label": get_ffmpeg_install_source_label(source_key),
-        "current_build_label": str(manifest.get("version_label") or "").strip() or ("instalacja zewnętrzna" if source_key == "system" else "brak"),
-        "installed": installed,
-        "managed": managed,
-        "latest_version": latest_version or "jeszcze nie sprawdzono",
-        "latest_version_raw": latest_version,
-        "latest_build_id_raw": latest_build_id,
-        "checked_at": checked_at,
-        "checked_at_text": format_ts(checked_at) if checked_at else "jeszcze nie sprawdzono",
-        "check_error": check_error,
-        "update_available": update_available,
-        "can_compare_updates": can_compare_updates,
-        "action_button_label": "Zaktualizuj ffmpeg" if managed and update_available else "Zainstaluj ffmpeg",
-        "action_needed": (not installed) or update_available,
-        "status_pill_kind": status_pill_kind,
-        "status_pill_label": status_pill_label,
-    }
+    return FFMPEG_SERVICE.get_update_state_snapshot()
 
 
 def refresh_ffmpeg_update_state(force=False):
-    snapshot = get_ffmpeg_update_state_snapshot()
-    should_check = force or not snapshot["latest_build_id_raw"] or needs_scheduled_ffmpeg_check(snapshot["checked_at"])
-
-    if not should_check:
-        return snapshot
-
-    latest_version = snapshot["latest_version_raw"]
-    latest_build_id = snapshot["latest_build_id_raw"]
-    check_error = ""
-    checked_at = time.time()
-
-    try:
-        latest = fetch_latest_ffmpeg_release_info()
-        latest_version = latest["version_label"]
-        latest_build_id = latest["build_id"]
-    except Exception as exc:
-        check_error = str(exc)
-
-    save_ffmpeg_update_state(latest_version, latest_build_id, checked_at, check_error)
-    return get_ffmpeg_update_state_snapshot()
+    return FFMPEG_SERVICE.refresh_update_state(force=force)
 
 
 def ffmpeg_check_scheduler():
@@ -2228,177 +2165,19 @@ def ffmpeg_check_scheduler():
 
 
 def start_ffmpeg_scheduler_once():
-    global FFMPEG_SCHEDULER_STARTED
-
-    with FFMPEG_SCHEDULER_LOCK:
-        if FFMPEG_SCHEDULER_STARTED:
-            return
-
-        thread = threading.Thread(target=ffmpeg_check_scheduler, name="ffmpeg-check-scheduler", daemon=True)
-        thread.start()
-        FFMPEG_SCHEDULER_STARTED = True
+    return FFMPEG_SERVICE.start_scheduler_once()
 
 
 def install_or_update_ffmpeg(progress_callback=None):
-    with FFMPEG_INSTALL_LOCK:
-        release_info = None
-        temp_root = ""
-
-        try:
-            if progress_callback:
-                progress_callback(
-                    status="running",
-                    status_label="Sprawdzanie buildu",
-                    progress_percent=6.0,
-                    detail="Sprawdzam najnowszy build ffmpeg dla tej platformy.",
-                )
-
-            release_info = fetch_latest_ffmpeg_release_info()
-            os.makedirs(FFMPEG_TOOLS_ROOT, exist_ok=True)
-            temp_root = tempfile.mkdtemp(prefix="ffmpeg-install-", dir=FFMPEG_TOOLS_ROOT)
-
-            if progress_callback:
-                progress_callback(
-                    status="running",
-                    status_label="Pobieranie paczki",
-                    progress_percent=14.0,
-                    detail="Przygotowuję pobranie %s (%s)." % (
-                        release_info["asset_name"],
-                        format_bytes_text(release_info.get("asset_size") or 0),
-                    ),
-                )
-
-            def report_download_progress(downloaded_bytes=None, total_bytes=None, **event):
-                if not progress_callback:
-                    return
-
-                # build_ffmpeg_candidate_dir używa tego samego callbacka zarówno
-                # do progresu pobierania, jak i do etapów typu "Rozpakowywanie".
-                # Dlatego akceptujemy oba style wywołania.
-                if event:
-                    progress_callback(**event)
-                    return
-
-                stage_start = 14.0
-                stage_end = 76.0
-                if total_bytes and total_bytes > 0:
-                    ratio = max(0.0, min(1.0, float(downloaded_bytes) / float(total_bytes)))
-                    progress_percent = stage_start + ((stage_end - stage_start) * ratio)
-                    detail = "Pobieranie %s / %s." % (
-                        format_bytes_text(downloaded_bytes),
-                        format_bytes_text(total_bytes),
-                    )
-                else:
-                    progress_percent = 45.0
-                    detail = "Pobieranie %s." % format_bytes_text(downloaded_bytes)
-
-                progress_callback(
-                    status="running",
-                    status_label="Pobieranie paczki",
-                    progress_percent=progress_percent,
-                    detail=detail,
-                )
-
-            candidate_dir, detected_version = build_ffmpeg_candidate_dir(
-                temp_root,
-                release_info,
-                progress_callback=report_download_progress,
-            )
-
-            if progress_callback:
-                progress_callback(
-                    status="running",
-                    status_label="Aktywowanie",
-                    progress_percent=96.0,
-                    detail="Podmieniam aktywny katalog z ffmpeg używany przez aplikację.",
-                )
-
-            activate_ffmpeg_candidate_dir(candidate_dir)
-            save_ffmpeg_update_state(release_info["version_label"], release_info["build_id"], time.time(), "")
-        except Exception as exc:
-            if release_info:
-                save_ffmpeg_update_state(
-                    release_info["version_label"],
-                    release_info["build_id"],
-                    time.time(),
-                    str(exc),
-                )
-            detail = str(exc).strip() or "Nieznany błąd instalacji."
-            return False, "Instalacja lub aktualizacja ffmpeg nie powiodła się: %s" % detail[-1200:]
-        finally:
-            if temp_root and os.path.isdir(temp_root):
-                shutil.rmtree(temp_root, ignore_errors=True)
-
-    state = get_ffmpeg_update_state_snapshot()
-    if state["managed"]:
-        message = "ffmpeg jest gotowy (%s, %s)." % (
-            state["current_version"],
-            state["current_build_label"],
-        )
-    else:
-        message = "ffmpeg zainstalowano, ale aplikacja nie widzi jeszcze nowej binarki."
-
-    message += " Nowe pobrania będą mogły łączyć osobne audio i wideo bez restartu usługi."
-    if progress_callback:
-        progress_callback(
-            status="running",
-            status_label="Gotowe",
-            progress_percent=100.0,
-            detail=message,
-        )
-    return True, message
+    return FFMPEG_SERVICE.install_or_update(progress_callback=progress_callback)
 
 
 def get_installed_yt_dlp_version():
-    try:
-        return importlib_metadata.version("yt-dlp")
-    except Exception:
-        try:
-            return yt_dlp.version.__version__
-        except Exception:
-            return "nieznana"
+    return YTDLP_SERVICE.get_installed_version()
 
 
 def fetch_latest_yt_dlp_version():
-    response = requests.get(
-        "https://pypi.org/pypi/yt-dlp/json",
-        headers={
-            "Accept": "application/json",
-            "User-Agent": USER_AGENT,
-        },
-        timeout=(5, 20),
-    )
-    response.raise_for_status()
-    payload = response.json() or {}
-    releases = payload.get("releases") or {}
-    candidates = []
-
-    for raw_version, files in releases.items():
-        version_text = str(raw_version or "").strip()
-        if not version_text:
-            continue
-
-        file_entries = files or []
-        if file_entries and all(bool(entry.get("yanked")) for entry in file_entries):
-            continue
-
-        if Version is not None:
-            try:
-                parsed_version = Version(version_text)
-            except (InvalidVersion, TypeError, ValueError):
-                continue
-            candidates.append((parsed_version, version_text))
-        else:
-            candidates.append((version_text, version_text))
-
-    if candidates:
-        candidates.sort(key=lambda item: item[0])
-        return candidates[-1][1]
-
-    latest_version = str(((payload.get("info") or {}).get("version")) or "").strip()
-    if not latest_version:
-        raise RuntimeError("Nie udało się ustalić najnowszej wersji yt-dlp.")
-    return latest_version
+    return YTDLP_SERVICE.fetch_latest_version()
 
 
 def is_version_newer(candidate_version, installed_version):
@@ -2454,143 +2233,34 @@ def save_yt_dlp_update_state(latest_version, checked_at, check_error):
         write_app_config_locked()
 
 
+def read_yt_dlp_update_state():
+    with APP_CONFIG_LOCK:
+        return normalize_yt_dlp_update_state(APP_CONFIG.get("yt_dlp_update_state"))
+
+
+def is_yt_dlp_scheduler_started():
+    return bool(YTDLP_SCHEDULER_STARTED)
+
+
+def set_yt_dlp_scheduler_started(value):
+    global YTDLP_SCHEDULER_STARTED
+    YTDLP_SCHEDULER_STARTED = bool(value)
+
+
 def fetch_yt_dlp_supported_services():
-    script = (
-        "import json\n"
-        "from yt_dlp.extractor import gen_extractors\n"
-        "services = sorted({\n"
-        "    str(getattr(ie, 'IE_NAME', '') or '').strip()\n"
-        "    for ie in gen_extractors()\n"
-        "    if str(getattr(ie, 'IE_NAME', '') or '').strip() and str(getattr(ie, 'IE_NAME', '') or '').strip().lower() != 'generic'\n"
-        "})\n"
-        "print(json.dumps(services, ensure_ascii=False))\n"
-    )
-
-    result = subprocess.run(
-        [sys.executable, "-c", script],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "Nieznany błąd pobierania listy serwisów.").strip()
-        raise RuntimeError(detail[-1200:])
-
-    import json
-
-    try:
-        services = json.loads(result.stdout or "[]")
-    except Exception as exc:
-        raise RuntimeError("Nie udało się odczytać listy serwisów z yt-dlp.") from exc
-
-    return [str(item).strip() for item in services if str(item).strip()]
+    return YTDLP_SERVICE.fetch_supported_services()
 
 
 def get_yt_dlp_services_state(force=False):
-    current_version = get_installed_yt_dlp_version()
-
-    with YTDLP_SERVICES_LOCK:
-        cached = dict(YTDLP_SERVICES_CACHE)
-        if (
-            not force
-            and cached.get("version") == current_version
-            and (cached.get("services") or cached.get("error"))
-        ):
-            generated_at = float(cached.get("generated_at") or 0.0)
-            return {
-                "version": current_version,
-                "services": list(cached.get("services") or []),
-                "count": len(cached.get("services") or []),
-                "generated_at": generated_at,
-                "generated_at_text": format_ts(generated_at) if generated_at else "jeszcze nie wygenerowano",
-                "error": str(cached.get("error") or ""),
-            }
-
-    generated_at = time.time()
-    services = []
-    error = ""
-
-    try:
-        services = fetch_yt_dlp_supported_services()
-    except Exception as exc:
-        error = str(exc)
-
-    state = {
-        "version": current_version,
-        "services": services,
-        "generated_at": generated_at,
-        "error": error,
-    }
-
-    with YTDLP_SERVICES_LOCK:
-        YTDLP_SERVICES_CACHE.update(state)
-
-    return {
-        "version": current_version,
-        "services": services,
-        "count": len(services),
-        "generated_at": generated_at,
-        "generated_at_text": format_ts(generated_at) if generated_at else "jeszcze nie wygenerowano",
-        "error": error,
-    }
+    return YTDLP_SERVICE.get_services_state(force=force)
 
 
 def get_yt_dlp_update_state_snapshot():
-    current_version = get_installed_yt_dlp_version()
-
-    with APP_CONFIG_LOCK:
-        raw_state = normalize_yt_dlp_update_state(APP_CONFIG.get("yt_dlp_update_state"))
-
-    latest_version = raw_state["latest_version"]
-    checked_at = raw_state["checked_at"]
-    check_error = raw_state["check_error"]
-    update_available = bool(latest_version) and is_version_newer(latest_version, current_version)
-    if check_error:
-        status_pill_kind = "error"
-        status_pill_label = "Błąd sprawdzania wersji"
-    elif update_available:
-        status_pill_kind = "queued"
-        status_pill_label = "Dostępna jest aktualizacja"
-    else:
-        status_pill_kind = "success"
-        status_pill_label = "Wersja jest aktualna"
-
-    return {
-        "current_version": current_version,
-        "latest_version": latest_version or "jeszcze nie sprawdzono",
-        "latest_version_raw": latest_version,
-        "checked_at": checked_at,
-        "checked_at_text": format_ts(checked_at) if checked_at else "jeszcze nie sprawdzono",
-        "check_error": check_error,
-        "update_available": update_available,
-        "action_needed": update_available,
-        "action_button_label": "Zaktualizuj yt-dlp",
-        "status_pill_kind": status_pill_kind,
-        "status_pill_label": status_pill_label,
-    }
+    return YTDLP_SERVICE.get_update_state_snapshot()
 
 
 def refresh_yt_dlp_update_state(force=False):
-    snapshot = get_yt_dlp_update_state_snapshot()
-    should_check = force or not snapshot["latest_version_raw"] or needs_scheduled_yt_dlp_check(snapshot["checked_at"])
-
-    if not should_check:
-        return snapshot
-
-    latest_version = snapshot["latest_version_raw"]
-    check_error = ""
-    checked_at = time.time()
-
-    try:
-        latest_version = fetch_latest_yt_dlp_version()
-    except Exception as exc:
-        check_error = str(exc)
-
-    save_yt_dlp_update_state(latest_version, checked_at, check_error)
-    return get_yt_dlp_update_state_snapshot()
+    return YTDLP_SERVICE.refresh_update_state(force=force)
 
 
 def yt_dlp_check_scheduler():
@@ -2606,137 +2276,15 @@ def yt_dlp_check_scheduler():
 
 
 def start_yt_dlp_scheduler_once():
-    global YTDLP_SCHEDULER_STARTED
-
-    with YTDLP_SCHEDULER_LOCK:
-        if YTDLP_SCHEDULER_STARTED:
-            return
-
-        thread = threading.Thread(target=yt_dlp_check_scheduler, name="yt-dlp-check-scheduler", daemon=True)
-        thread.start()
-        YTDLP_SCHEDULER_STARTED = True
+    return YTDLP_SERVICE.start_scheduler_once()
 
 
 def classify_yt_dlp_pip_progress(output_line):
-    line = str(output_line or "").strip().lower()
-    if not line:
-        return 18.0, "Uruchamianie pip"
-    if "collecting" in line:
-        return 30.0, "Pobieranie metadanych"
-    if "downloading" in line:
-        return 50.0, "Pobieranie pakietu"
-    if "installing collected packages" in line:
-        return 76.0, "Instalowanie pakietu"
-    if "successfully installed" in line:
-        return 92.0, "Finalizacja instalacji"
-    if "requirement already satisfied" in line:
-        return 90.0, "Pakiet jest już obecny"
-    if "uninstalling" in line:
-        return 72.0, "Zastępowanie poprzedniej wersji"
-    return 18.0, "Przetwarzanie przez pip"
+    return YTDLP_SERVICE.classify_pip_progress(output_line)
 
 
 def update_yt_dlp_package(progress_callback=None):
-    if progress_callback:
-        progress_callback(
-            status="running",
-            status_label="Przygotowanie",
-            progress_percent=6.0,
-            detail="Sprawdzam obecną wersję yt-dlp i uruchamiam pip.",
-        )
-
-    before_version = get_installed_yt_dlp_version()
-    env = dict(os.environ)
-    env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
-    env["PIP_PROGRESS_BAR"] = "off"
-    env["PYTHONUNBUFFERED"] = "1"
-
-    process = subprocess.Popen(
-        [sys.executable, "-m", "pip", "install", "-U", "--pre", YTDLP_PIP_PACKAGE_SPEC],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        env=env,
-    )
-    output_lines = []
-    output_lock = threading.Lock()
-
-    def consume_output():
-        if not process.stdout:
-            return
-
-        for raw_line in process.stdout:
-            line = str(raw_line or "").strip()
-            if not line:
-                continue
-
-            with output_lock:
-                output_lines.append(line)
-                if len(output_lines) > 12:
-                    del output_lines[:-12]
-
-            if progress_callback:
-                progress_percent, status_label = classify_yt_dlp_pip_progress(line)
-                progress_callback(
-                    status="running",
-                    status_label=status_label,
-                    progress_percent=progress_percent,
-                    detail=line,
-                )
-
-    output_thread = threading.Thread(target=consume_output, name="yt-dlp-pip-output", daemon=True)
-    output_thread.start()
-
-    try:
-        return_code = process.wait(timeout=600)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        try:
-            process.wait(timeout=10)
-        except Exception:
-            pass
-        return False, "Aktualizacja yt-dlp została przerwana po przekroczeniu limitu czasu."
-    finally:
-        if process.stdout:
-            try:
-                process.stdout.close()
-            except Exception:
-                pass
-        output_thread.join(timeout=2)
-
-    after_version = get_installed_yt_dlp_version()
-    with output_lock:
-        output = "\n".join(output_lines).strip()
-
-    if return_code != 0:
-        detail = output or "Nieznany błąd aktualizacji."
-        return False, "Aktualizacja yt-dlp nie powiodła się: %s" % detail[-1200:]
-
-    if progress_callback:
-        progress_callback(
-            status="running",
-            status_label="Weryfikacja",
-            progress_percent=97.0,
-            detail="Sprawdzam wersję po zakończeniu instalacji.",
-        )
-
-    try:
-        latest_version = fetch_latest_yt_dlp_version()
-        save_yt_dlp_update_state(latest_version, time.time(), "")
-    except Exception:
-        save_yt_dlp_update_state(after_version, time.time(), "")
-
-    message = "yt-dlp zaktualizowano z %s do %s." % (before_version, after_version)
-    message += " Jeśli aplikacja nadal używa starej wersji, uruchom ponownie usługę Flask."
-    if progress_callback:
-        progress_callback(
-            status="running",
-            status_label="Gotowe",
-            progress_percent=100.0,
-            detail=message,
-        )
-    return True, message
+    return YTDLP_SERVICE.update_package(progress_callback=progress_callback)
 
 
 def get_current_session_username():
@@ -3563,6 +3111,48 @@ def format_duration(seconds):
         parts.append("%ss" % secs)
 
     return " ".join(parts[:3])
+
+
+FFMPEG_SERVICE = FfmpegMaintenanceService(
+    resolve_ffmpeg_binary=resolve_ffmpeg_binary,
+    get_ffmpeg_install_source_label=get_ffmpeg_install_source_label,
+    get_installed_ffmpeg_version=get_installed_ffmpeg_version,
+    load_ffmpeg_manifest=load_ffmpeg_manifest,
+    read_update_state=read_ffmpeg_update_state,
+    save_update_state=save_ffmpeg_update_state,
+    needs_scheduled_check=needs_scheduled_ffmpeg_check,
+    get_next_check_dt=get_next_ffmpeg_check_dt,
+    fetch_latest_release_info=fetch_latest_ffmpeg_release_info,
+    ffmpeg_tools_root=FFMPEG_TOOLS_ROOT,
+    build_ffmpeg_candidate_dir=build_ffmpeg_candidate_dir,
+    activate_ffmpeg_candidate_dir=activate_ffmpeg_candidate_dir,
+    format_bytes_text=format_bytes_text,
+    format_ts=format_ts,
+    install_lock=FFMPEG_INSTALL_LOCK,
+    scheduler_lock=FFMPEG_SCHEDULER_LOCK,
+    is_scheduler_started=is_ffmpeg_scheduler_started,
+    set_scheduler_started=set_ffmpeg_scheduler_started,
+)
+
+YTDLP_SERVICE = YtDlpMaintenanceService(
+    importlib_metadata_module=importlib_metadata,
+    ytdlp_module=yt_dlp,
+    version_class=Version,
+    invalid_version_exceptions=(InvalidVersion, TypeError, ValueError),
+    user_agent=USER_AGENT,
+    pip_package_spec=YTDLP_PIP_PACKAGE_SPEC,
+    read_update_state=read_yt_dlp_update_state,
+    save_update_state=save_yt_dlp_update_state,
+    is_version_newer=is_version_newer,
+    needs_scheduled_check=needs_scheduled_yt_dlp_check,
+    get_next_check_dt=get_next_yt_dlp_check_dt,
+    format_ts=format_ts,
+    services_cache=YTDLP_SERVICES_CACHE,
+    services_lock=YTDLP_SERVICES_LOCK,
+    scheduler_lock=YTDLP_SCHEDULER_LOCK,
+    is_scheduler_started=is_yt_dlp_scheduler_started,
+    set_scheduler_started=set_yt_dlp_scheduler_started,
+)
 
 
 SYSTEM_SERVICE = SystemServiceHelper(

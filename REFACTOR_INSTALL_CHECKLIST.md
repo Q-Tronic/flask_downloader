@@ -180,8 +180,8 @@
 ## Etap 6: Settings i maintenance
 - [x] Wydzielić trasy ustawień do `flask_downloader/routes/settings.py`.
 - [x] Wydzielić logikę konfiguracji do `flask_downloader/stores/config_store.py`.
-- [ ] Wydzielić ffmpeg do `flask_downloader/services/ffmpeg_service.py`.
-- [ ] Wydzielić yt-dlp do `flask_downloader/services/ytdlp_service.py`.
+- [x] Wydzielić ffmpeg do `flask_downloader/services/ffmpeg_service.py`.
+- [x] Wydzielić yt-dlp do `flask_downloader/services/ytdlp_service.py`.
 - [x] Wydzielić maintenance taski i progres do `flask_downloader/services/maintenance_service.py`.
 - [x] Wydzielić restart usługi Flask do osobnego helpera/system service.
 - [ ] Utrzymać polling stanu kart ustawień.
