@@ -182,7 +182,7 @@
 - [ ] Wydzielić ffmpeg do `flask_downloader/services/ffmpeg_service.py`.
 - [ ] Wydzielić yt-dlp do `flask_downloader/services/ytdlp_service.py`.
 - [x] Wydzielić maintenance taski i progres do `flask_downloader/services/maintenance_service.py`.
-- [ ] Wydzielić restart usługi Flask do osobnego helpera/system service.
+- [x] Wydzielić restart usługi Flask do osobnego helpera/system service.
 - [ ] Utrzymać polling stanu kart ustawień.
 - [ ] Zachować AJAX:
   - zapis konfiguracji
@@ -231,7 +231,7 @@
 - [ ] Wydzielić helpery ścieżek do `flask_downloader/utils/paths.py` albo zostawić obecne i ujednolicić.
 - [ ] Wydzielić helpery formatowania do `flask_downloader/utils/formatting.py`.
 - [ ] Wydzielić helpery odpowiedzi/JSON do `flask_downloader/utils/responses.py`.
-- [ ] Wydzielić helpery sieciowe/systemowe do `flask_downloader/utils/network.py` lub `services/system_service.py`.
+- [x] Wydzielić helpery sieciowe/systemowe do `flask_downloader/utils/network.py` lub `services/system_service.py`.
 - [ ] Posprzątać importy po wydzieleniach.
 - [ ] Ograniczyć zmienne globalne w `legacy_app.py`.
 - [ ] Przenieść rejestrację tras do jednego miejsca bootstrapu.
