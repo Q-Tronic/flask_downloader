@@ -73,6 +73,7 @@ from flask_downloader.paths import (
     CONFIG_FILE,
     DATA_DIR,
     JOBS_FILE,
+    LEGACY_CONFIG_FILE,
     PROJECT_ROOT,
     USERS_FILE,
     ensure_data_layout,
@@ -1094,7 +1095,34 @@ def load_app_config():
     )
 
 
-APP_CONFIG = load_app_config()
+def recover_legacy_dlna_config_if_needed(config_data):
+    current_data = copy.deepcopy(config_data or {})
+    current_dlna = normalize_dlna_config(current_data.get("dlna"))
+    current_data["dlna"] = current_dlna
+
+    if current_dlna.get("collections") or current_dlna.get("clients") or current_dlna.get("media_rules"):
+        return current_data, False
+
+    if not os.path.isfile(LEGACY_CONFIG_FILE):
+        return current_data, False
+
+    try:
+        with open(LEGACY_CONFIG_FILE, "r", encoding="utf-8") as fh:
+            legacy_raw = json.load(fh) or {}
+    except Exception:
+        return current_data, False
+
+    legacy_dlna = normalize_dlna_config((legacy_raw or {}).get("dlna"))
+    if not (legacy_dlna.get("collections") or legacy_dlna.get("clients") or legacy_dlna.get("media_rules")):
+        return current_data, False
+
+    current_data["dlna"] = legacy_dlna
+    return current_data, True
+
+
+APP_CONFIG, LEGACY_DLNA_CONFIG_RECOVERED = recover_legacy_dlna_config_if_needed(load_app_config())
+if LEGACY_DLNA_CONFIG_RECOVERED:
+    config_store_write_app_config(CONFIG_FILE, APP_CONFIG)
 
 
 def write_app_config_locked():
@@ -1243,7 +1271,7 @@ def parse_managed_relative_path(value):
         return None
 
     parts = relative_path.split("/")
-    if len(parts) < 2:
+    if len(parts) < 3:
         return None
 
     try:
@@ -1251,8 +1279,13 @@ def parse_managed_relative_path(value):
     except Exception:
         return None
 
-    storage_kind = normalize_storage_kind(parts[1])
+    raw_storage_kind = str(parts[1] or "").strip().lower()
+    if raw_storage_kind not in ("video", "audio"):
+        return None
+    storage_kind = raw_storage_kind
     user_relative_path = "/".join(parts[2:]).strip("/")
+    if not user_relative_path:
+        return None
     return {
         "owner_username": owner_username,
         "storage_kind": storage_kind,
@@ -6472,18 +6505,28 @@ def parse_gerbera_config_xml(xml_text, source_label="stdout"):
 
 
 def try_generate_gerbera_config_via_flag(binary_path, *flag_args):
-    result = subprocess.run(
-        [binary_path, *flag_args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=30,
-        check=False,
-    )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "Gerbera nie wygenerowała config.xml.").strip()
-        raise RuntimeError(detail[-1200:])
-    return parse_gerbera_config_xml(result.stdout, source_label=" ".join(flag_args))
+    ensure_dlna_runtime_dirs()
+    temp_home_root = tempfile.mkdtemp(prefix="gerbera-create-config-", dir=DLNA_RUNTIME_ROOT)
+    try:
+        env = dict(os.environ)
+        env["HOME"] = temp_home_root
+        env.pop("GERBERA_HOME", None)
+
+        result = subprocess.run(
+            [binary_path, *flag_args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+            check=False,
+            env=env,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "Gerbera nie wygenerowała config.xml.").strip()
+            raise RuntimeError(detail[-1200:])
+        return parse_gerbera_config_xml(result.stdout, source_label=" ".join(flag_args))
+    finally:
+        shutil.rmtree(temp_home_root, ignore_errors=True)
 
 
 def try_generate_gerbera_config_via_runtime(binary_path):

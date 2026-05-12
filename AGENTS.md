@@ -14,6 +14,7 @@
   - `data/users.json`
 - Repo ma zawierać tylko pliki przykładowe dla środowiska i danych, np. `.env.example`, `data/config.example.json`, `data/jobs.example.json`, `data/users.example.json`; prawdziwe dane i sekrety nie mogą trafiać do GitHub.
 - Przy migracji ze starego układu nie wolno zgubić istniejącej konfiguracji, użytkowników ani zadań; trzeba zachować zgodność wsteczną i bezpieczne przeniesienie danych.
+- Jeśli stary rootowy `flask_downloader_config.json` nadal zawiera pełną konfigurację DLNA, a nowe `data/config.json` ma pustą sekcję `dlna`, aplikacja ma odzyskać tę sekcję z legacy configu zamiast zostawiać pustą bibliotekę.
 - HTML i CSS nie powinny wracać do wielkich stringów osadzonych w Pythonie; wspólny layout ma iść przez `templates/base.html`, a style przez pliki w `static/css/`.
 - Rozbijanie backendu robimy modułami: autoryzacja i użytkownicy mają trafiać do `flask_downloader/routes/` oraz `flask_downloader/stores/`, zamiast dokładania kolejnych tras CRUD z powrotem do monolitu.
 - Wspólny shell layoutu ma być cięty na partiale w `templates/partials/`, zamiast dalszego rozpychania `base.html`.

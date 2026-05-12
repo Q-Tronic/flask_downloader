@@ -35,6 +35,9 @@ def ensure_data_layout():
 __all__ = [
     "PROJECT_ROOT",
     "DATA_DIR",
+    "LEGACY_CONFIG_FILE",
+    "LEGACY_JOBS_FILE",
+    "LEGACY_USERS_FILE",
     "CONFIG_FILE",
     "JOBS_FILE",
     "USERS_FILE",
