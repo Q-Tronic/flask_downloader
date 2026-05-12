@@ -93,6 +93,7 @@ from flask_downloader.services.source_service import SourceMediaService
 from flask_downloader.services.ffmpeg_service import FfmpegMaintenanceService
 from flask_downloader.services.ytdlp_service import YtDlpMaintenanceService
 from flask_downloader.services.dlna_service import DlnaLibraryService
+from flask_downloader.services.dlna_runtime_service import DlnaRuntimeService
 from flask_downloader.stores.config_store import (
     load_app_config as config_store_load_app_config,
     write_app_config as config_store_write_app_config,
@@ -5080,109 +5081,58 @@ def ensure_dlna_service_stopped(timeout=90, reset_failed_after_stop=True):
     return service_state
 
 
+DLNA_RUNTIME_SERVICE = DlnaRuntimeService(
+    sync_lock=DLNA_SYNC_LOCK,
+    ensure_dlna_runtime_dirs=ensure_dlna_runtime_dirs,
+    ensure_share_ready=ensure_share_ready,
+    get_server_files=get_server_files,
+    prune_missing_dlna_media_rules=prune_missing_dlna_media_rules,
+    get_dlna_config_snapshot=get_dlna_config_snapshot,
+    normalize_dlna_config=normalize_dlna_config,
+    set_dlna_config=set_dlna_config,
+    get_dlna_package_state_snapshot=get_dlna_package_state_snapshot,
+    get_generic_service_state=get_generic_service_state,
+    ensure_dlna_service_started_impl=ensure_dlna_service_started,
+    ensure_dlna_service_stopped_impl=ensure_dlna_service_stopped,
+    clear_dlna_database_files=clear_dlna_database_files,
+    write_dlna_gerbera_config=write_dlna_gerbera_config,
+    validate_dlna_gerbera_config=validate_dlna_gerbera_config,
+    write_dlna_service_unit=write_dlna_service_unit,
+    run_systemctl_command=run_systemctl_command,
+    save_dlna_runtime_status=save_dlna_runtime_status,
+    get_dlna_feature_support=get_dlna_feature_support,
+    format_dlna_service_error=format_dlna_service_error,
+    run_systemctl_command_result=run_systemctl_command_result,
+    ensure_no_conflicting_dlna_listener=ensure_no_conflicting_dlna_listener,
+    wait_for_dlna_service_stable=wait_for_dlna_service_stable,
+    wait_for_dlna_service_stopped=wait_for_dlna_service_stopped,
+    dlna_virtual_layout_version=DLNA_VIRTUAL_LAYOUT_VERSION,
+    dlna_service_name=DLNA_SERVICE_NAME,
+    dlna_system_service_name=DLNA_SYSTEM_SERVICE_NAME,
+    dlna_config_xml_file=DLNA_CONFIG_XML_FILE,
+    dlna_export_root=DLNA_EXPORT_ROOT,
+    dlna_service_unit_file=DLNA_SERVICE_UNIT_FILE,
+)
+
+
 def sync_dlna_runtime(restart_service_if_active=False):
-    with DLNA_SYNC_LOCK:
-        ensure_dlna_runtime_dirs()
-        ok, _ = ensure_share_ready(auto_remount=True)
-        files = get_server_files() if ok else []
-        prune_result = prune_missing_dlna_media_rules(
-            files=files,
-            sync_runtime=False,
-            restart_service_if_active=restart_service_if_active,
-        ) if ok else {
-            "changed": False,
-            "config": get_dlna_config_snapshot(),
-        }
-        dlna_config = normalize_dlna_config(prune_result.get("config"))
-        layout_upgraded = int(dlna_config.get("layout_version") or 0) < DLNA_VIRTUAL_LAYOUT_VERSION
-        if layout_upgraded:
-            dlna_config["layout_version"] = DLNA_VIRTUAL_LAYOUT_VERSION
-            set_dlna_config(dlna_config)
-        package_state = get_dlna_package_state_snapshot()
-        current_service_state = get_generic_service_state(DLNA_SERVICE_NAME) if package_state["installed"] else {}
-        service_was_active = current_service_state.get("active_state") == "active"
-        should_restart_after_sync = bool(restart_service_if_active) and service_was_active
-
-        if layout_upgraded and service_was_active:
-            ensure_dlna_service_stopped(timeout=90)
-            should_restart_after_sync = True
-
-        if layout_upgraded:
-            clear_dlna_database_files()
-
-        export_state = write_dlna_gerbera_config(dlna_config)
-
-        if package_state["installed"]:
-            allow_runtime_probe = not should_restart_after_sync
-            validate_dlna_gerbera_config(allow_runtime_probe=allow_runtime_probe)
-            write_dlna_service_unit()
-            run_systemctl_command("daemon-reload")
-            if should_restart_after_sync:
-                ensure_dlna_service_started(enable_unit=False, timeout=90, failure_label="restartu")
-
-        save_dlna_runtime_status(last_sync_at=time.time(), last_sync_error="")
-        return export_state
+    return DLNA_RUNTIME_SERVICE.sync_runtime(restart_service_if_active=restart_service_if_active)
 
 
 def sync_dlna_runtime_safe(restart_service_if_active=False):
-    try:
-        sync_dlna_runtime(restart_service_if_active=restart_service_if_active)
-    except Exception as exc:
-        save_dlna_runtime_status(last_sync_error=str(exc))
+    return DLNA_RUNTIME_SERVICE.sync_runtime_safe(restart_service_if_active=restart_service_if_active)
 
 
 def get_dlna_service_state():
-    dlna_config = get_dlna_config_snapshot()
-    package_state = get_dlna_package_state_snapshot()
-    feature_support = get_dlna_feature_support(package_state.get("current_version_raw"))
-    state = get_generic_service_state(DLNA_SERVICE_NAME)
-    state["desired_enabled"] = bool(dlna_config.get("enabled"))
-    state["package_installed"] = bool(package_state["installed"])
-    state["package_version"] = package_state["current_version"]
-    state["toggle_button_label"] = "Wyłącz serwer DLNA" if dlna_config.get("enabled") else "Włącz serwer DLNA"
-    state["restart_button_label"] = "Uruchom ponownie serwer DLNA"
-    state["config_file"] = DLNA_CONFIG_XML_FILE
-    state["export_root"] = DLNA_EXPORT_ROOT
-    state["service_unit_file"] = DLNA_SERVICE_UNIT_FILE
-    state["feature_support"] = feature_support
-    return state
+    return DLNA_RUNTIME_SERVICE.get_service_state()
 
 
 def set_dlna_service_enabled(enabled):
-    enabled = bool(enabled)
-    if enabled:
-        package_state = get_dlna_package_state_snapshot()
-        if not package_state["installed"]:
-            raise RuntimeError("Najpierw zainstaluj pakiet Gerbera z poziomu konfiguracji.")
-        dlna_config = get_dlna_config_snapshot()
-        dlna_config["enabled"] = True
-        set_dlna_config(dlna_config)
-        sync_dlna_runtime(restart_service_if_active=False)
-        ensure_dlna_service_started(enable_unit=True, timeout=90, failure_label="startu")
-    else:
-        dlna_config = get_dlna_config_snapshot()
-        dlna_config["enabled"] = False
-        set_dlna_config(dlna_config)
-        try:
-            run_systemctl_command_result("disable", DLNA_SERVICE_NAME, timeout=90)
-            ensure_dlna_service_stopped(timeout=90)
-        except Exception:
-            # Jeżeli jednostka jeszcze nie istnieje albo nie działa, i tak zapisujemy intencję wyłączenia.
-            pass
-
-    return get_dlna_service_state()
+    return DLNA_RUNTIME_SERVICE.set_service_enabled(enabled)
 
 
 def restart_dlna_service_now():
-    package_state = get_dlna_package_state_snapshot()
-    if not package_state["installed"]:
-        raise RuntimeError("Serwer DLNA nie jest jeszcze zainstalowany.")
-    sync_dlna_runtime(restart_service_if_active=False)
-    service_state = get_dlna_service_state()
-    if service_state.get("active_state") == "active" or str(service_state.get("main_pid") or "").strip() not in ("", "0"):
-        ensure_dlna_service_stopped(timeout=90)
-    ensure_dlna_service_started(enable_unit=False, timeout=90, failure_label="restartu")
-    return get_dlna_service_state()
+    return DLNA_RUNTIME_SERVICE.restart_service_now()
 
 
 def classify_dlna_apt_progress(output_line, stage):

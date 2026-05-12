@@ -202,7 +202,7 @@
 - [x] Wydzielić trasy DLNA do `flask_downloader/routes/dlna.py`.
 - [x] Wydzielić logikę kolekcji, klientów i biblioteki do `flask_downloader/services/dlna_service.py`.
 - [ ] Wydzielić konfigurację Gerbery do osobnego modułu/serwisu.
-- [ ] Wydzielić sync eksportu DLNA do osobnego serwisu.
+- [x] Wydzielić sync eksportu DLNA do osobnego serwisu.
 - [ ] Wydzielić logikę whitelist i dostępu klientów.
 - [ ] Wydzielić logikę restartu/startu/stopu usługi DLNA.
 - [ ] Wydzielić logikę walidacji `config.xml`.
