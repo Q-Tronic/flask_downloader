@@ -155,10 +155,11 @@
 - [x] Wydzielić trasy pobierania do `flask_downloader/routes/downloads.py`.
 - [x] Wydzielić trasy zadań do `flask_downloader/routes/jobs.py`.
 - [ ] Wydzielić logikę pobrań do `flask_downloader/services/download_service.py`.
-- [ ] Wydzielić logikę źródeł do `flask_downloader/services/source_service.py`.
+- [x] Wydzielić logikę źródeł do `flask_downloader/services/source_service.py`.
 - [x] Wydzielić logikę kolejki i jobów do `flask_downloader/services/jobs_service.py`.
 - [x] Wydzielić zapis jobów do `flask_downloader/stores/jobs_store.py`.
 - [x] Wynieść helpery statusów, filtrów i ownerów.
+- [x] Wydzielić helpery katalogów, alokacji ścieżek i cleanup artefaktów do `flask_downloader/services/download_service.py`.
 - [ ] Zachować:
   - owner_username
   - filtrowanie po userze

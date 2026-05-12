@@ -88,6 +88,8 @@ from flask_downloader.services.jobs_service import DownloadJobsService, JobViewS
 from flask_downloader.services.maintenance_service import MaintenanceTaskService
 from flask_downloader.services.storage_service import ManagedStorageService
 from flask_downloader.services.system_service import SystemServiceHelper
+from flask_downloader.services.download_service import DownloadPathService
+from flask_downloader.services.source_service import SourceMediaService
 from flask_downloader.stores.config_store import (
     load_app_config as config_store_load_app_config,
     write_app_config as config_store_write_app_config,
@@ -1348,77 +1350,11 @@ def is_temporary_download_artifact_name(name):
 
 
 def get_download_artifact_roots(path):
-    roots = set()
-    current = os.path.abspath(str(path or ""))
-
-    if not current or current == os.path.abspath("."):
-        return roots
-
-    roots.add(current)
-
-    while current:
-        next_path = current
-        lowered = next_path.lower()
-
-        if lowered.endswith(".ytdl"):
-            next_path = next_path[:-5]
-
-        stripped = re.sub(r"(?i)\.part(?:-[^\\/]+)?(?:\.part)?$", "", next_path)
-        if stripped != next_path:
-            next_path = stripped
-
-        if next_path == current:
-            break
-
-        current = os.path.abspath(next_path)
-        roots.add(current)
-
-    return {root for root in roots if root and root != os.path.abspath(".")}
+    return DOWNLOAD_PATH_SERVICE.get_download_artifact_roots(path)
 
 
 def cleanup_download_artifacts(paths):
-    seen = set()
-    for raw_path in paths:
-        if not raw_path or raw_path == "-":
-            continue
-
-        for base_path in get_download_artifact_roots(raw_path):
-            candidates = {
-                base_path,
-                base_path + ".part",
-                base_path + ".ytdl",
-            }
-
-            parent_dir = os.path.dirname(base_path)
-            base_name = os.path.basename(base_path)
-            if os.path.isdir(parent_dir):
-                try:
-                    for entry in os.listdir(parent_dir):
-                        entry_path = os.path.join(parent_dir, entry)
-                        entry_roots = get_download_artifact_roots(entry_path)
-
-                        if entry == base_name:
-                            candidates.add(entry_path)
-                            continue
-
-                        if base_path in entry_roots and is_temporary_download_artifact_name(entry):
-                            candidates.add(entry_path)
-                except Exception:
-                    pass
-
-            for candidate in candidates:
-                if candidate in seen:
-                    continue
-                seen.add(candidate)
-
-                if not os.path.exists(candidate):
-                    continue
-
-                try:
-                    os.remove(candidate)
-                    cleanup_empty_download_dirs(candidate)
-                except Exception:
-                    pass
+    return DOWNLOAD_PATH_SERVICE.cleanup_download_artifacts(paths)
 
 
 def normalize_saved_job_record(raw):
@@ -3039,11 +2975,7 @@ def ydl_opts():
 
 
 def is_valid_http_url(url):
-    try:
-        parsed = urlparse(url)
-        return parsed.scheme in ("http", "https") and bool(parsed.netloc)
-    except Exception:
-        return False
+    return SOURCE_MEDIA_SERVICE.is_valid_http_url(url)
 
 
 def safe_filename(value, default="file"):
@@ -3074,458 +3006,104 @@ def guess_content_type(ext):
 
 
 def get_download_output_ext(item):
-    media_kind = normalize_storage_kind((item or {}).get("media_kind") or "video")
-    source_ext = (str((item or {}).get("ext") or "").strip().lower() or "bin")
-    if media_kind == "audio":
-        return AUDIO_DOWNLOAD_TARGET_CODEC
-    return source_ext
+    return SOURCE_MEDIA_SERVICE.get_download_output_ext(item)
 
 
 def get_download_intermediate_ext(item):
-    source_ext = (str((item or {}).get("ext") or "").strip().lower() or "bin")
-    return source_ext
+    return SOURCE_MEDIA_SERVICE.get_download_intermediate_ext(item)
 
 
 def replace_filename_extension(filename, ext):
-    base = os.path.splitext(str(filename or ""))[0]
-    normalized_ext = str(ext or "").strip().lstrip(".") or "bin"
-    return "%s.%s" % (base, normalized_ext)
+    return SOURCE_MEDIA_SERVICE.replace_filename_extension(filename, ext)
 
 
 def build_download_basename(title, item):
-    label = item.get("label") or item.get("format_id") or "source"
-    return safe_filename("%s_%s" % (title, label), default="video")
+    return SOURCE_MEDIA_SERVICE.build_download_basename(title, item)
 
 
 def build_download_filename(title, item):
-    ext = get_download_output_ext(item)
-    base = build_download_basename(title, item)
-    return "%s.%s" % (base, ext)
+    return SOURCE_MEDIA_SERVICE.build_download_filename(title, item)
 
 
 def build_intermediate_download_filename(title, item):
-    final_filename = build_download_filename(title, item)
-    return replace_filename_extension(final_filename, get_download_intermediate_ext(item))
+    return SOURCE_MEDIA_SERVICE.build_intermediate_download_filename(title, item)
 
 
 def make_label(fmt):
-    parts = []
-
-    vcodec = fmt.get("vcodec")
-    acodec = fmt.get("acodec")
-    height = fmt.get("height")
-    width = fmt.get("width")
-    ext = fmt.get("ext")
-    note = fmt.get("format_note") or fmt.get("resolution")
-    tbr = fmt.get("tbr")
-    abr = fmt.get("abr")
-
-    if vcodec == "none" and acodec != "none":
-        parts.append("Audio")
-
-        if abr:
-            try:
-                parts.append("%dk" % int(float(abr)))
-            except Exception:
-                pass
-        elif tbr:
-            try:
-                parts.append("%dk" % int(float(tbr)))
-            except Exception:
-                pass
-
-        if ext:
-            parts.append(str(ext))
-
-        return " | ".join(parts)
-
-    if height:
-        parts.append("%sp" % height)
-    elif note:
-        parts.append(str(note))
-
-    if width and height:
-        parts.append("%sx%s" % (width, height))
-
-    if tbr:
-        try:
-            parts.append("%dk" % int(float(tbr)))
-        except Exception:
-            pass
-
-    if not parts and ext:
-        parts.append(str(ext))
-
-    if not parts:
-        parts.append(str(fmt.get("format_id", "unknown")))
-
-    return " | ".join(parts)
+    return SOURCE_MEDIA_SERVICE.make_label(fmt)
 
 
 def normalize_info(info):
-    if info.get("_type") == "playlist" and info.get("entries"):
-        for entry in info["entries"]:
-            if entry:
-                return entry
-    return info
+    return SOURCE_MEDIA_SERVICE.normalize_info(info)
 
 
 def filter_formats(info):
-    extractor_name = str(info.get("extractor_key") or info.get("extractor") or "").strip().lower()
-    allow_audio_only = extractor_name.startswith("youtube")
-    grouped_video = {}
-    audio_results = []
-    seen_audio_keys = set()
-
-    formats = info.get("formats") or []
-    if not formats and info.get("url"):
-        formats = [info]
-
-    for fmt in formats:
-        url = fmt.get("url")
-        if not url:
-            continue
-
-        vcodec = fmt.get("vcodec")
-        acodec = fmt.get("acodec")
-        ext = (fmt.get("ext") or "").lower()
-        protocol = str(fmt.get("protocol") or "").lower()
-        format_id = str(fmt.get("format_id") or "")
-        media_kind = "audio" if vcodec == "none" and acodec != "none" else "video"
-
-        if media_kind == "video" and vcodec == "none":
-            continue
-
-        if media_kind == "video":
-            if ext not in ("mp4", "m3u8", "webm", "mkv") and "m3u8" not in protocol and "http" not in protocol:
-                continue
-
-            label = make_label(fmt)
-            item = {
-                "format_id": format_id or "default",
-                "label": label,
-                "height": fmt.get("height") or 0,
-                "width": fmt.get("width") or 0,
-                "ext": fmt.get("ext") or "",
-                "protocol": fmt.get("protocol") or "",
-                "url": url,
-                "http_headers": fmt.get("http_headers") or info.get("http_headers") or {},
-                "media_kind": "video",
-                "has_audio": acodec not in (None, "", "none"),
-                "download_format": format_id or "best",
-                "merge_ext": (fmt.get("ext") or "mp4").lower(),
-            }
-
-            if not item["has_audio"]:
-                item["download_format"] = "%s+bestaudio/best" % (format_id or "bestvideo")
-
-            group_key = (
-                item["media_kind"],
-                label,
-                item["ext"],
-                item["height"],
-                item["width"],
-            )
-            existing = grouped_video.get(group_key)
-            if existing is None:
-                grouped_video[group_key] = item
-                continue
-
-            existing_score = (
-                1 if existing.get("has_audio") else 0,
-                1 if "m3u8" in str(existing.get("protocol") or "").lower() else 0,
-                1 if str(existing.get("protocol") or "").lower().startswith("http") else 0,
-                len(str(existing.get("format_id") or "")),
-            )
-            item_score = (
-                1 if item.get("has_audio") else 0,
-                1 if "m3u8" in protocol else 0,
-                1 if protocol.startswith("http") else 0,
-                len(str(item.get("format_id") or "")),
-            )
-            if item_score > existing_score:
-                grouped_video[group_key] = item
-            continue
-
-        if not allow_audio_only:
-            continue
-
-        if ext not in ("m4a", "mp3", "opus", "webm", "aac", "mp4", "ogg") and "http" not in protocol:
-            continue
-
-        audio_key = (format_id, ext, protocol)
-        if audio_key in seen_audio_keys:
-            continue
-        seen_audio_keys.add(audio_key)
-
-        audio_results.append({
-            "format_id": format_id or "bestaudio",
-            "label": make_label(fmt),
-            "height": 0,
-            "width": 0,
-            "ext": fmt.get("ext") or "",
-            "protocol": fmt.get("protocol") or "",
-            "url": url,
-            "http_headers": fmt.get("http_headers") or info.get("http_headers") or {},
-            "media_kind": "audio",
-            "has_audio": True,
-            "download_format": format_id or "bestaudio",
-            "merge_ext": (fmt.get("ext") or "m4a").lower(),
-        })
-
-    def sort_key(item):
-        media_rank = 0 if item.get("media_kind") == "video" else 1
-        height = item.get("height") or 0
-        width = item.get("width") or 0
-        return (media_rank, height, width, str(item.get("label", "")), str(item.get("format_id", "")))
-
-    results = list(grouped_video.values()) + audio_results
-    results.sort(key=sort_key)
-    return results
+    return SOURCE_MEDIA_SERVICE.filter_formats(info)
 
 
 def extract_video_data(page_url, force_refresh=False):
-    now = time.time()
-
-    if not force_refresh and page_url in CACHE:
-        cached = CACHE[page_url]
-        if now - cached["ts"] < CACHE_TTL:
-            return cached["data"]
-
-    with yt_dlp.YoutubeDL(ydl_opts()) as ydl:
-        info = ydl.extract_info(page_url, download=False)
-
-    info = normalize_info(info)
-
-    data = {
-        "title": info.get("title") or "Nieznany tytuł",
-        "page_url": info.get("webpage_url") or page_url,
-        "extractor": info.get("extractor_key") or info.get("extractor") or "unknown",
-        "sources": filter_formats(info),
-    }
-
-    CACHE[page_url] = {
-        "ts": now,
-        "data": data,
-    }
-    return data
+    return SOURCE_MEDIA_SERVICE.extract_video_data(page_url, force_refresh=force_refresh)
 
 
 def build_proxy_url(page_url, format_id):
-    return "/proxy?page_url=%s&format_id=%s" % (
-        quote(page_url, safe=""),
-        quote(format_id, safe=""),
-    )
+    return SOURCE_MEDIA_SERVICE.build_proxy_url(page_url, format_id)
 
 
 def build_download_url(page_url, format_id):
-    return "/download?page_url=%s&format_id=%s" % (
-        quote(page_url, safe=""),
-        quote(format_id, safe=""),
-    )
+    return SOURCE_MEDIA_SERVICE.build_download_url(page_url, format_id)
 
 
 def build_result_with_proxy_urls(result, request_root):
-    output = {
-        "title": result["title"],
-        "page_url": result["page_url"],
-        "extractor": result["extractor"],
-        "sources": [],
-    }
-
-    base_url = request_root.rstrip("/")
-
-    for item in result["sources"]:
-        proxy_path = build_proxy_url(result["page_url"], item["format_id"])
-        proxy_url = "%s%s" % (base_url, proxy_path)
-
-        download_path = build_download_url(result["page_url"], item["format_id"])
-        download_url = "%s%s" % (base_url, download_path)
-
-        output["sources"].append({
-            **item,
-            "proxy_url": proxy_url,
-            "download_url": download_url,
-            "download_filename": build_intermediate_download_filename(result["title"], item),
-            "vlc_command": 'vlc "%s"' % proxy_url,
-        })
-
-    return output
+    return SOURCE_MEDIA_SERVICE.build_result_with_proxy_urls(result, request_root)
 
 
 def find_format(result, format_id):
-    for item in result["sources"]:
-        if str(item["format_id"]) == str(format_id):
-            return item
-    return None
+    return SOURCE_MEDIA_SERVICE.find_format(result, format_id)
 
 
 def format_bytes_text(num_bytes):
-    try:
-        value = float(num_bytes or 0)
-    except Exception:
-        return "nieznany"
-
-    if value <= 0:
-        return "0 B"
-
-    units = ["B", "KB", "MB", "GB", "TB"]
-    unit_index = 0
-    while value >= 1024.0 and unit_index < len(units) - 1:
-        value /= 1024.0
-        unit_index += 1
-
-    precision = 0 if unit_index == 0 else 2
-    return ("%0.*f %s" % (precision, value, units[unit_index])).replace(".00 ", " ")
+    return SOURCE_MEDIA_SERVICE.format_bytes_text(num_bytes)
 
 
 def get_source_download_match_state(result, format_id, owner_username=None):
-    target_item = find_format(result, format_id)
-    target_filename = build_download_filename(result["title"], target_item) if target_item else ""
-    media_kind = normalize_storage_kind((target_item or {}).get("media_kind") or "video")
-    owner = normalize_username(owner_username or get_current_username() or DEFAULT_ADMIN_USERNAME)
-
-    filename_map = {}
-    for item in result.get("sources") or []:
-        if normalize_storage_kind(item.get("media_kind") or "video") != media_kind:
-            continue
-        filename = build_download_filename(result["title"], item)
-        descriptor = {
-            "format_id": str(item.get("format_id") or ""),
-            "label": str(item.get("label") or item.get("format_id") or filename),
-            "filename": filename,
-        }
-        filename_map.setdefault(filename, []).append(descriptor)
-
-    state = {
-        "target_filename": target_filename,
-        "same_quality": [],
-        "other_qualities": [],
-        "same_quality_count": 0,
-        "other_qualities_count": 0,
-    }
-
-    if not filename_map:
-        return state
-
-    root = get_user_storage_root(owner, media_kind)
-    if not os.path.isdir(root):
-        return state
-
-    for current_root, _, filenames in os.walk(root):
-        for name in filenames:
-            if is_temporary_download_artifact_name(name) or name not in filename_map:
-                continue
-
-            path = os.path.join(current_root, name)
-
-            try:
-                st = os.stat(path)
-            except Exception:
-                continue
-
-            related_descriptors = filename_map.get(name) or []
-            related_labels = sorted({entry["label"] for entry in related_descriptors if entry.get("label")})
-            relative_path = get_relative_download_path(path, media_kind, owner)
-            entry = {
-                "path": os.path.abspath(path),
-                "filename": name,
-                "owner_username": owner,
-                "relative_path": relative_path,
-                "size": int(st.st_size),
-                "size_text": format_bytes_text(st.st_size),
-                "mtime": float(st.st_mtime),
-                "mtime_text": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime)),
-                "matched_label": ", ".join(related_labels),
-            }
-
-            if name == target_filename:
-                state["same_quality"].append(entry)
-            else:
-                state["other_qualities"].append(entry)
-
-    state["same_quality"].sort(key=lambda item: item.get("mtime") or 0, reverse=True)
-    state["other_qualities"].sort(key=lambda item: item.get("mtime") or 0, reverse=True)
-    state["same_quality_count"] = len(state["same_quality"])
-    state["other_qualities_count"] = len(state["other_qualities"])
-    return state
+    return SOURCE_MEDIA_SERVICE.get_source_download_match_state(result, format_id, owner_username=owner_username)
 
 
 def public_source_download_match_state(state):
-    def sanitize(items):
-        output = []
-        for item in items:
-            relative_path = item.get("relative_path") or ""
-            output.append({
-                "filename": item.get("filename") or "",
-                "relative_path": relative_path,
-                "display_path": format_relative_path_for_user(relative_path, viewer_username=get_current_username(), is_admin=is_admin_authenticated()),
-                "size": item.get("size") or 0,
-                "size_text": item.get("size_text") or "0 B",
-                "mtime_text": item.get("mtime_text") or "",
-                "matched_label": item.get("matched_label") or "",
-            })
-        return output
-
-    return {
-        "target_filename": state.get("target_filename") or "",
-        "same_quality": sanitize(state.get("same_quality") or []),
-        "other_qualities": sanitize(state.get("other_qualities") or []),
-        "same_quality_count": int(state.get("same_quality_count") or 0),
-        "other_qualities_count": int(state.get("other_qualities_count") or 0),
-    }
+    return SOURCE_MEDIA_SERVICE.public_source_download_match_state(state)
 
 
 def finalize_overwritten_download(target_path, final_filename, replace_paths, owner_username=None, storage_kind="video"):
-    target_path = os.path.abspath(str(target_path or ""))
-    if not target_path:
-        return target_path
-
-    owner = normalize_username(owner_username or get_current_username() or DEFAULT_ADMIN_USERNAME)
-    preferred_final_path = os.path.abspath(
-        os.path.join(
-            get_daily_download_dir(media_kind=storage_kind, owner_username=owner),
-            safe_filename(final_filename, default="video.bin"),
-        )
+    return DOWNLOAD_PATH_SERVICE.finalize_overwritten_download(
+        target_path,
+        final_filename,
+        replace_paths,
+        owner_username=owner_username,
+        storage_kind=storage_kind,
     )
-    cleanup_targets = {
-        os.path.abspath(path)
-        for path in (replace_paths or [])
-        if path and os.path.abspath(path) != target_path
-    }
-
-    if cleanup_targets:
-        cleanup_download_artifacts(cleanup_targets)
-
-    if preferred_final_path != target_path:
-        if os.path.exists(preferred_final_path):
-            cleanup_download_artifacts({preferred_final_path})
-        os.makedirs(os.path.dirname(preferred_final_path), exist_ok=True)
-        os.replace(target_path, preferred_final_path)
-        cleanup_empty_download_dirs(target_path)
-        target_path = preferred_final_path
-
-    return target_path
 
 
 def build_m3u(title, page_url, base_url, sources, only_format_id=None):
-    lines = ["#EXTM3U"]
+    return SOURCE_MEDIA_SERVICE.build_m3u(title, page_url, base_url, sources, only_format_id=only_format_id)
 
-    for item in sources:
-        if only_format_id is not None and str(item["format_id"]) != str(only_format_id):
-            continue
 
-        proxy_url = "%s/proxy?page_url=%s&format_id=%s" % (
-            base_url.rstrip("/"),
-            quote(page_url, safe=""),
-            quote(str(item["format_id"]), safe=""),
-        )
-
-        display_name = "%s [%s]" % (title, item.get("label", item.get("format_id", "source")))
-        lines.append("#EXTINF:-1,%s" % display_name)
-        lines.append(proxy_url)
-
-    return "\\n".join(lines) + "\\n"
+SOURCE_MEDIA_SERVICE = SourceMediaService(
+    cache=CACHE,
+    cache_ttl=CACHE_TTL,
+    ytdlp_module=yt_dlp,
+    ydl_opts_factory=ydl_opts,
+    normalize_storage_kind=normalize_storage_kind,
+    audio_download_target_codec=AUDIO_DOWNLOAD_TARGET_CODEC,
+    safe_filename=safe_filename,
+    get_current_username=get_current_username,
+    is_admin_authenticated=is_admin_authenticated,
+    default_admin_username=DEFAULT_ADMIN_USERNAME,
+    normalize_username=normalize_username,
+    get_user_storage_root=get_user_storage_root,
+    is_temporary_download_artifact_name=is_temporary_download_artifact_name,
+    get_relative_download_path=get_relative_download_path,
+    format_relative_path_for_user=format_relative_path_for_user,
+)
 
 
 def set_mount_status(online, message):
@@ -3598,31 +3176,7 @@ def mount_share_direct():
 
 
 def check_download_dir_ready(storage_kind="video", owner_username=None):
-    download_root = get_user_storage_base_root() if owner_username is None else get_user_storage_root(owner_username, storage_kind)
-
-    if not os.path.ismount(MOUNT_POINT):
-        return False, "Punkt montowania nie jest aktywny: %s" % MOUNT_POINT
-
-    if not os.path.isdir(download_root):
-        try:
-            os.makedirs(download_root, exist_ok=True)
-        except Exception as exc:
-            return False, "Nie udało się utworzyć katalogu %s: %s" % (download_root, exc)
-
-    if not os.path.isdir(download_root):
-        return False, "Katalog docelowy nie istnieje: %s" % download_root
-
-    if not os.access(download_root, os.R_OK | os.W_OK | os.X_OK):
-        return False, "Brak dostępu do katalogu docelowego: %s" % download_root
-
-    try:
-        os.listdir(download_root)
-    except Exception as exc:
-        return False, "Katalog docelowy jest niedostępny: %s" % exc
-
-    if owner_username is None:
-        return True, "Katalog bazowy użytkowników gotowy: %s" % download_root
-    return True, "Katalog docelowy gotowy: %s" % download_root
+    return DOWNLOAD_PATH_SERVICE.check_download_dir_ready(storage_kind=storage_kind, owner_username=owner_username)
 
 
 def ensure_share_ready(auto_remount=True):
@@ -3683,32 +3237,27 @@ def get_mount_info(auto_remount=True, viewer_username=None, is_admin=None):
 
 
 def ensure_download_dir_ready(storage_kind="video", owner_username=None):
-    ok, message = ensure_share_ready(auto_remount=True)
-    if not ok:
-        raise RuntimeError(message)
-
-    owner = normalize_username(owner_username or get_current_username() or DEFAULT_ADMIN_USERNAME)
-    root_ok, root_message = check_download_dir_ready(storage_kind, owner)
-    if not root_ok:
-        raise RuntimeError(root_message)
+    return DOWNLOAD_PATH_SERVICE.ensure_download_dir_ready(storage_kind=storage_kind, owner_username=owner_username)
 
 
 def allocate_target_path(filename, media_kind="video", owner_username=None):
-    owner = normalize_username(owner_username or get_current_username() or DEFAULT_ADMIN_USERNAME)
-    ensure_download_dir_ready(media_kind, owner)
+    return DOWNLOAD_PATH_SERVICE.allocate_target_path(filename, media_kind=media_kind, owner_username=owner_username)
 
-    filename = safe_filename(filename, default="video.bin")
-    name, ext = os.path.splitext(filename)
-    day_dir = get_daily_download_dir(media_kind=media_kind, owner_username=owner)
-    os.makedirs(day_dir, exist_ok=True)
-    candidate = os.path.join(day_dir, filename)
-    counter = 1
 
-    while os.path.exists(candidate) or os.path.exists(candidate + ".part"):
-        candidate = os.path.join(day_dir, "%s_%d%s" % (name, counter, ext))
-        counter += 1
-
-    return candidate
+DOWNLOAD_PATH_SERVICE = DownloadPathService(
+    mount_point=MOUNT_POINT,
+    get_user_storage_base_root=get_user_storage_base_root,
+    get_user_storage_root=get_user_storage_root,
+    normalize_username=normalize_username,
+    normalize_storage_kind=normalize_storage_kind,
+    get_current_username=get_current_username,
+    default_admin_username=DEFAULT_ADMIN_USERNAME,
+    ensure_share_ready=ensure_share_ready,
+    safe_filename=safe_filename,
+    get_daily_download_dir=get_daily_download_dir,
+    is_temporary_download_artifact_name=is_temporary_download_artifact_name,
+    cleanup_empty_download_dirs=cleanup_empty_download_dirs,
+)
 
 
 def update_job(job_id, **kwargs):
