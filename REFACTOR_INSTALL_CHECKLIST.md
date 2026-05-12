@@ -359,7 +359,7 @@
 - [x] Ustawić lokalne repo do finalnego commitu.
 - [x] Zweryfikować jeszcze raz `.gitignore`.
 - [x] Sprawdzić `git status`, czy nie łapiemy danych i sekretów.
-- [ ] Przygotować pierwszy czysty commit po refaktoryzacji.
+- [x] Przygotować pierwszy czysty commit po refaktoryzacji.
 - [x] Przygotować branch `main`.
 - [ ] Przygotować remote do GitHub.
 - [ ] Wypchnąć projekt na GitHub, jeśli autoryzacja będzie działać.
