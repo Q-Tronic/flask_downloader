@@ -5056,6 +5056,9 @@ Environment=GERBERA_HOME=%s
 ExecStart=%s %s -c %s -m %s
 Restart=on-failure
 RestartSec=5
+TimeoutStartSec=120
+TimeoutStopSec=120
+KillMode=control-group
 
 [Install]
 WantedBy=multi-user.target
@@ -5084,23 +5087,42 @@ def run_systemctl_command_result(*args, timeout=60):
     if not is_linux_runtime():
         raise RuntimeError("Obsługa systemd dla DLNA wymaga Linuxa.")
 
-    completed_process = subprocess.run(
-        ["systemctl", *args],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
-    detail = (completed_process.stderr or completed_process.stdout or "").strip()
-    if not detail:
-        detail = "Polecenie systemctl zakończyło się błędem." if completed_process.returncode != 0 else ""
+    try:
+        completed_process = subprocess.run(
+            ["systemctl", *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        timed_out = False
+        detail = (completed_process.stderr or completed_process.stdout or "").strip()
+        if not detail:
+            detail = "Polecenie systemctl zakończyło się błędem." if completed_process.returncode != 0 else ""
+    except subprocess.TimeoutExpired as exc:
+        completed_process = None
+        timed_out = True
+        stdout_text = str(exc.stdout or "")
+        stderr_text = str(exc.stderr or "")
+        detail = (stderr_text or stdout_text or "").strip()
+        if not detail:
+            detail = "Polecenie systemctl przekroczyło limit czasu."
+        return {
+            "completed_process": completed_process,
+            "returncode": 124,
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "detail": detail[-1200:] if detail else "",
+            "timed_out": timed_out,
+        }
     return {
         "completed_process": completed_process,
         "returncode": completed_process.returncode,
         "stdout": completed_process.stdout or "",
         "stderr": completed_process.stderr or "",
         "detail": detail[-1200:] if detail else "",
+        "timed_out": timed_out,
     }
 
 
@@ -5292,7 +5314,8 @@ def ensure_dlna_service_started(enable_unit=False, timeout=90, failure_label="st
 
 def ensure_dlna_service_stopped(timeout=90, reset_failed_after_stop=True):
     stop_result = run_systemctl_command_result("stop", DLNA_SERVICE_NAME, timeout=timeout)
-    service_state = wait_for_dlna_service_stopped(timeout=12.0)
+    wait_timeout = 25.0 if stop_result.get("timed_out") else 12.0
+    service_state = wait_for_dlna_service_stopped(timeout=wait_timeout)
     main_pid = str(service_state.get("main_pid") or "").strip()
     active_state = str(service_state.get("active_state") or "")
 
@@ -5300,8 +5323,9 @@ def ensure_dlna_service_stopped(timeout=90, reset_failed_after_stop=True):
         detail = build_dlna_service_failure_detail(service_state, stop_result.get("detail"))
         raise RuntimeError("Nie udało się zatrzymać poprzedniej instancji DLNA. %s" % (detail or "Sprawdź log usługi DLNA."))
 
-    if reset_failed_after_stop:
+    if reset_failed_after_stop or active_state == "failed":
         run_systemctl_command_result("reset-failed", DLNA_SERVICE_NAME, timeout=30)
+        service_state = get_dlna_service_state()
     return service_state
 
 

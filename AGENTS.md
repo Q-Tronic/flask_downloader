@@ -150,6 +150,7 @@
 - Usługa DLNA nie może wpadać w nieskończoną pętlę restartów przy złym configu; jeśli start się nie utrzymuje, panel ma pokazać diagnostykę i ostatni log zamiast udawać, że wszystko jest OK.
 - Diagnostyka DLNA ma preferować realny log procesu `Gerbera`, a nie tylko ogólne komunikaty `systemd`, żeby było od razu widać błąd składni configu albo runtime.
 - Restart i ponowny start DLNA muszą być odporne na stary błąd `Gerbera 1.1.x`, w którym zatrzymanie procesu kończy się `exit 1`; panel ma oceniać końcowy stan usługi po sekwencji `stop/reset-failed/start`, a nie traktować samego błędu zamykania jako automatyczną porażkę całej operacji.
+- Sekwencja `stop/reset-failed/start` dla DLNA ma też być odporna na wolne zamykanie Gerbery pod `systemd`: timeout zatrzymania nie może zostawiać panelu w trwałym stanie `failed`, jeśli proces został już domknięty albo dobity przez `systemd`.
 - Dla starych wersji `Gerbera`, które nie obsługują `--check-config`, backend nie może blokować zapisu/synchronizacji przez testowy runtime-probe; wystarczy lokalna walidacja poprawności XML, a faktyczny stan należy oceniać na prawdziwym starcie usługi.
 - Serwer DLNA ma logować do pliku `gerbera.log` w runtime projektu, a administrator musi mieć prosty podgląd tego logu w przeglądarce pod adresem `/logs-dlna`; normalny start/restart usługi nie powinien czyścić tego logu.
 - Log `gerbera.log` nie może rozrastać się bez końca: ma być ograniczony do około `5 MB`, a dla nowszej Gerbery trzeba preferować rotowanie logu zamiast pełnego debug streamu.
