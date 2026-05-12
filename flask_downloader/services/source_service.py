@@ -65,6 +65,50 @@ class SourceMediaService:
         normalized_ext = str(ext or "").strip().lstrip(".") or "bin"
         return "%s.%s" % (base, normalized_ext)
 
+    @staticmethod
+    def _normalize_title_text(value):
+        return " ".join(str(value or "").strip().split())
+
+    @classmethod
+    def _title_compare_key(cls, value):
+        text = cls._normalize_title_text(value).casefold()
+        for source, target in (
+            ("–", "-"),
+            ("—", "-"),
+            ("−", "-"),
+            (":", "-"),
+            ("_", "-"),
+        ):
+            text = text.replace(source, target)
+        return " ".join(text.split())
+
+    @classmethod
+    def build_download_title(cls, info):
+        base_title = cls._normalize_title_text((info or {}).get("title") or "Nieznany tytuł")
+        if not base_title:
+            return "Nieznany tytuł"
+
+        prefix = ""
+        for candidate in (
+            (info or {}).get("series"),
+            (info or {}).get("playlist_title"),
+            (info or {}).get("album"),
+        ):
+            candidate_text = cls._normalize_title_text(candidate)
+            if candidate_text:
+                prefix = candidate_text
+                break
+
+        if not prefix:
+            return base_title
+
+        base_key = cls._title_compare_key(base_title)
+        prefix_key = cls._title_compare_key(prefix)
+        if not prefix_key or base_key.startswith(prefix_key):
+            return base_title
+
+        return "%s - %s" % (prefix, base_title)
+
     def build_download_basename(self, title, item):
         label = item.get("label") or item.get("format_id") or "source"
         return self._safe_filename("%s_%s" % (title, label), default="video")
@@ -268,6 +312,7 @@ class SourceMediaService:
 
         data = {
             "title": info.get("title") or "Nieznany tytuł",
+            "download_title": self.build_download_title(info),
             "page_url": info.get("webpage_url") or page_url,
             "extractor": info.get("extractor_key") or info.get("extractor") or "unknown",
             "sources": self.filter_formats(info),
@@ -296,6 +341,7 @@ class SourceMediaService:
     def build_result_with_proxy_urls(self, result, request_root):
         output = {
             "title": result["title"],
+            "download_title": result.get("download_title") or result["title"],
             "page_url": result["page_url"],
             "extractor": result["extractor"],
             "sources": [],
@@ -314,7 +360,10 @@ class SourceMediaService:
                 **item,
                 "proxy_url": proxy_url,
                 "download_url": download_url,
-                "download_filename": self.build_intermediate_download_filename(result["title"], item),
+                "download_filename": self.build_intermediate_download_filename(
+                    result.get("download_title") or result["title"],
+                    item,
+                ),
                 "vlc_command": 'vlc "%s"' % proxy_url,
             })
 
@@ -348,7 +397,8 @@ class SourceMediaService:
 
     def get_source_download_match_state(self, result, format_id, owner_username=None):
         target_item = self.find_format(result, format_id)
-        target_filename = self.build_download_filename(result["title"], target_item) if target_item else ""
+        download_title = result.get("download_title") or result["title"]
+        target_filename = self.build_download_filename(download_title, target_item) if target_item else ""
         media_kind = self._normalize_storage_kind((target_item or {}).get("media_kind") or "video")
         owner = self._normalize_username(
             owner_username or self._get_current_username() or self._default_admin_username
@@ -358,7 +408,7 @@ class SourceMediaService:
         for item in result.get("sources") or []:
             if self._normalize_storage_kind(item.get("media_kind") or "video") != media_kind:
                 continue
-            filename = self.build_download_filename(result["title"], item)
+            filename = self.build_download_filename(download_title, item)
             descriptor = {
                 "format_id": str(item.get("format_id") or ""),
                 "label": str(item.get("label") or item.get("format_id") or filename),

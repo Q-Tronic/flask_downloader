@@ -57,7 +57,7 @@
   - `data/`
 - [x] Dodać `flask_downloader/paths.py`.
 - [x] Ustawić podstawowy `create_app()` w pakiecie.
-- [ ] Docelowo przenieść bootstrap aplikacji z `legacy_app.py` do `__init__.py`.
+- [x] Docelowo przenieść bootstrap aplikacji z `legacy_app.py` do `__init__.py`.
 - [ ] Ograniczyć `legacy_app.py` do roli przejściowej albo całkiem go usunąć.
 
 ### Bramka jakości
@@ -154,7 +154,7 @@
 ## Etap 5: Downloads i jobs
 - [x] Wydzielić trasy pobierania do `flask_downloader/routes/downloads.py`.
 - [x] Wydzielić trasy zadań do `flask_downloader/routes/jobs.py`.
-- [ ] Wydzielić logikę pobrań do `flask_downloader/services/download_service.py`.
+- [x] Wydzielić logikę pobrań do `flask_downloader/services/download_service.py`.
 - [x] Wydzielić logikę źródeł do `flask_downloader/services/source_service.py`.
 - [x] Wydzielić logikę kolejki i jobów do `flask_downloader/services/jobs_service.py`.
 - [x] Wydzielić zapis jobów do `flask_downloader/stores/jobs_store.py`.
@@ -242,13 +242,13 @@
 - [x] Log DLNA i diagnostyka nadal działają.
 
 ## Etap 8: Wspólne helpery i sprzątanie monolitu
-- [ ] Wydzielić helpery ścieżek do `flask_downloader/utils/paths.py` albo zostawić obecne i ujednolicić.
-- [ ] Wydzielić helpery formatowania do `flask_downloader/utils/formatting.py`.
-- [ ] Wydzielić helpery odpowiedzi/JSON do `flask_downloader/utils/responses.py`.
+- [x] Wydzielić helpery ścieżek do `flask_downloader/utils/paths.py` albo zostawić obecne i ujednolicić.
+- [x] Wydzielić helpery formatowania do `flask_downloader/utils/formatting.py`.
+- [x] Wydzielić helpery odpowiedzi/JSON do `flask_downloader/utils/responses.py`.
 - [x] Wydzielić helpery sieciowe/systemowe do `flask_downloader/utils/network.py` lub `services/system_service.py`.
-- [ ] Posprzątać importy po wydzieleniach.
+- [x] Posprzątać importy po wydzieleniach.
 - [ ] Ograniczyć zmienne globalne w `legacy_app.py`.
-- [ ] Przenieść rejestrację tras do jednego miejsca bootstrapu.
+- [x] Przenieść rejestrację tras do jednego miejsca bootstrapu.
 - [ ] Zmniejszyć `legacy_app.py` do przejściowego minimum.
 - [ ] Docelowo:
   - albo usunąć `legacy_app.py`,

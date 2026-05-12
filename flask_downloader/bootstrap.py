@@ -1,0 +1,164 @@
+from flask_downloader.routes.auth import register_auth_routes
+from flask_downloader.routes.dlna import register_dlna_routes
+from flask_downloader.routes.downloads import register_download_routes
+from flask_downloader.routes.main import register_main_routes
+from flask_downloader.routes.settings import register_settings_routes
+from flask_downloader.routes.users import register_user_management_routes
+
+
+def register_application_routes(app, context):
+    register_auth_routes(app, {
+        "verify_user_credentials": context["verify_user_credentials"],
+        "set_session_user": context["set_session_user"],
+        "clear_session_user": context["clear_session_user"],
+        "set_ui_flash": context["set_ui_flash"],
+        "safe_next_url": context["safe_next_url"],
+        "is_authenticated": context["is_authenticated"],
+        "get_current_username": context["get_current_username"],
+        "update_user_password": context["update_user_password"],
+        "get_user_by_username": context["get_user_by_username"],
+    })
+
+    register_main_routes(app, {
+        "quote": context["quote"],
+        "FAVICON_SVG": context["FAVICON_SVG"],
+        "render_page": context["render_page"],
+        "get_mount_info": context["get_mount_info"],
+        "require_authenticated_page": context["require_authenticated_page"],
+        "is_valid_http_url": context["is_valid_http_url"],
+        "extract_video_data": context["extract_video_data"],
+        "build_result_with_proxy_urls": context["build_result_with_proxy_urls"],
+        "get_daily_download_dir": context["get_daily_download_dir"],
+        "get_yt_dlp_services_state": context["get_yt_dlp_services_state"],
+        "INDEX_CONTENT_TEMPLATE": context["INDEX_CONTENT_TEMPLATE"],
+        "DOWNLOADS_CONTENT_TEMPLATE": context["DOWNLOADS_CONTENT_TEMPLATE"],
+        "JOBS_CONTENT_TEMPLATE": context["JOBS_CONTENT_TEMPLATE"],
+        "SERVICES_CONTENT_TEMPLATE": context["SERVICES_CONTENT_TEMPLATE"],
+    })
+
+    register_download_routes(app, {
+        "require_authenticated_json": context["require_authenticated_json"],
+        "resolve_view_scope_username": context["resolve_view_scope_username"],
+        "get_users_snapshot": context["get_users_snapshot"],
+        "is_admin_authenticated": context["is_admin_authenticated"],
+        "get_current_username": context["get_current_username"],
+        "get_mount_info": context["get_mount_info"],
+        "get_server_files": context["get_server_files"],
+        "filter_jobs_for_viewer": context["filter_jobs_for_viewer"],
+        "get_jobs_snapshot": context["get_jobs_snapshot"],
+        "is_valid_http_url": context["is_valid_http_url"],
+        "extract_video_data": context["extract_video_data"],
+        "build_result_with_proxy_urls": context["build_result_with_proxy_urls"],
+        "find_format": context["find_format"],
+        "public_source_download_match_state": context["public_source_download_match_state"],
+        "get_source_download_match_state": context["get_source_download_match_state"],
+        "ensure_share_ready": context["ensure_share_ready"],
+        "normalize_storage_kind": context["normalize_storage_kind"],
+        "create_job": context["create_job"],
+        "build_download_filename": context["build_download_filename"],
+        "mark_job_cancel_requested": context["mark_job_cancel_requested"],
+        "delete_job": context["delete_job_record"],
+        "delete_managed_file": context["delete_managed_download_file"],
+        "build_m3u": context["build_m3u"],
+        "stream_upstream_response": context["stream_upstream_response"],
+        "build_intermediate_download_filename": context["build_intermediate_download_filename"],
+        "is_authenticated": context["is_authenticated"],
+        "build_managed_relative_path": context["build_managed_relative_path"],
+        "parse_managed_relative_path": context["parse_managed_relative_path"],
+        "safe_relative_download_path": context["safe_relative_download_path"],
+        "resolve_download_path": context["resolve_download_path"],
+        "normalize_username": context["normalize_username"],
+        "DEFAULT_ADMIN_USERNAME": context["DEFAULT_ADMIN_USERNAME"],
+        "can_access_owner": context["can_access_owner"],
+        "get_user_storage_root": context["get_user_storage_root"],
+    })
+
+    register_user_management_routes(app, {
+        "is_admin_authenticated": context["is_admin_authenticated"],
+        "wants_json_response": context["wants_json_response"],
+        "require_admin_json": context["require_admin_json"],
+        "set_ui_flash": context["set_ui_flash"],
+        "create_user_account": context["create_user_account"],
+        "update_user_password": context["update_user_password"],
+        "update_user_account": context["update_user_account"],
+        "delete_user_account": context["delete_user_account"],
+        "get_settings_page_state": context["get_settings_page_state"],
+        "ensure_directory": context["ensure_directory"],
+        "get_user_storage_root": context["get_user_storage_root"],
+        "normalize_username": context["normalize_username"],
+        "get_current_username": context["get_current_username"],
+    })
+
+    register_settings_routes(app, {
+        "is_admin_authenticated": context["is_admin_authenticated"],
+        "wants_json_response": context["wants_json_response"],
+        "require_admin_json": context["require_admin_json"],
+        "set_ui_flash": context["set_ui_flash"],
+        "render_page": context["render_page"],
+        "SETTINGS_CONTENT_TEMPLATE": context["SETTINGS_CONTENT_TEMPLATE"],
+        "get_settings_page_state": context["get_settings_page_state"],
+        "save_app_config": context["save_app_config"],
+        "ensure_share_ready": context["ensure_share_ready"],
+        "sync_dlna_runtime_safe": context["sync_dlna_runtime_safe"],
+        "refresh_ffmpeg_update_state": context["refresh_ffmpeg_update_state"],
+        "start_maintenance_task": context["start_maintenance_task"],
+        "install_or_update_ffmpeg": context["install_or_update_ffmpeg"],
+        "refresh_yt_dlp_update_state": context["refresh_yt_dlp_update_state"],
+        "update_yt_dlp_package": context["update_yt_dlp_package"],
+        "refresh_dlna_package_state": context["refresh_dlna_package_state"],
+        "build_dlna_json_response": context["build_dlna_json_response"],
+        "install_or_update_dlna_server": context["install_or_update_dlna_server"],
+        "parse_boolean_flag": context["parse_boolean_flag"],
+        "set_dlna_service_enabled": context["set_dlna_service_enabled"],
+        "restart_dlna_service_now": context["restart_dlna_service_now"],
+        "schedule_flask_service_restart": context["schedule_flask_service_restart"],
+        "SYSTEMD_SERVICE_NAME": context["SYSTEMD_SERVICE_NAME"],
+    })
+
+    register_dlna_routes(app, {
+        "is_admin_authenticated": context["is_admin_authenticated"],
+        "wants_json_response": context["wants_json_response"],
+        "require_admin_json": context["require_admin_json"],
+        "set_ui_flash": context["set_ui_flash"],
+        "render_page": context["render_page"],
+        "DLNA_CONTENT_TEMPLATE": context["DLNA_CONTENT_TEMPLATE"],
+        "get_dlna_page_state": context["get_dlna_page_state"],
+        "DLNA_SERVICE_NAME": context["DLNA_SERVICE_NAME"],
+        "DLNA_ALL_COLLECTION_NAME": context["DLNA_ALL_COLLECTION_NAME"],
+        "read_text_log_file_for_browser": context["read_text_log_file_for_browser"],
+        "DLNA_LOG_FILE": context["DLNA_LOG_FILE"],
+        "DLNA_LOG_BROWSER_MAX_BYTES": context["DLNA_LOG_BROWSER_MAX_BYTES"],
+        "build_dlna_collection_library_results": context["build_dlna_collection_library_results"],
+        "update_dlna_general_settings": context["update_dlna_general_settings"],
+        "build_dlna_json_response": context["build_dlna_json_response"],
+        "refresh_dlna_package_state": context["refresh_dlna_package_state"],
+        "sync_dlna_runtime_safe": context["sync_dlna_runtime_safe"],
+        "start_maintenance_task": context["start_maintenance_task"],
+        "install_or_update_dlna_server": context["install_or_update_dlna_server"],
+        "parse_boolean_flag": context["parse_boolean_flag"],
+        "set_dlna_service_enabled": context["set_dlna_service_enabled"],
+        "restart_dlna_service_now": context["restart_dlna_service_now"],
+        "sync_dlna_runtime": context["sync_dlna_runtime"],
+        "create_dlna_collection": context["create_dlna_collection"],
+        "update_dlna_collection": context["update_dlna_collection"],
+        "delete_dlna_collection": context["delete_dlna_collection"],
+        "create_dlna_client": context["create_dlna_client"],
+        "update_dlna_client": context["update_dlna_client"],
+        "delete_dlna_client": context["delete_dlna_client"],
+        "create_dlna_media_rule": context["create_dlna_media_rule"],
+        "update_dlna_media_rule": context["update_dlna_media_rule"],
+        "bulk_assign_dlna_collection_items": context["bulk_assign_dlna_collection_items"],
+        "delete_dlna_media_rule": context["delete_dlna_media_rule"],
+    })
+
+
+def start_background_schedulers(context):
+    context["start_ffmpeg_scheduler_once"]()
+    context["start_yt_dlp_scheduler_once"]()
+    context["start_dlna_scheduler_once"]()
+
+
+__all__ = [
+    "register_application_routes",
+    "start_background_schedulers",
+]

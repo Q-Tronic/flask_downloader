@@ -32,6 +32,12 @@ def register_download_routes(app, deps):
     build_intermediate_download_filename = deps["build_intermediate_download_filename"]
     is_authenticated = deps["is_authenticated"]
     build_managed_relative_path = deps["build_managed_relative_path"]
+    parse_managed_relative_path = deps["parse_managed_relative_path"]
+    safe_relative_download_path = deps["safe_relative_download_path"]
+    resolve_download_path = deps["resolve_download_path"]
+    normalize_username = deps["normalize_username"]
+    DEFAULT_ADMIN_USERNAME = deps["DEFAULT_ADMIN_USERNAME"]
+    can_access_owner = deps["can_access_owner"]
     get_user_storage_root = deps["get_user_storage_root"]
 
     @app.route("/api/files", methods=["GET"])
@@ -177,8 +183,8 @@ def register_download_routes(app, deps):
                 storage_kind=storage_kind,
                 title=result["title"],
                 label=fmt.get("label") or fmt.get("format_id") or "",
-                filename=build_download_filename(result["title"], fmt),
-                planned_filename=build_download_filename(result["title"], fmt),
+                filename=build_download_filename(result.get("download_title") or result["title"], fmt),
+                planned_filename=build_download_filename(result.get("download_title") or result["title"], fmt),
                 overwrite_existing=overwrite_existing,
                 replace_paths=[entry["path"] for entry in duplicate_state["same_quality"]],
             )
@@ -367,7 +373,7 @@ def register_download_routes(app, deps):
             if not fmt:
                 return Response("Nie znaleziono wskazanego formatu.\\n", status=404, mimetype="text/plain; charset=utf-8")
 
-            filename = build_intermediate_download_filename(result["title"], fmt)
+            filename = build_intermediate_download_filename(result.get("download_title") or result["title"], fmt)
 
             return stream_upstream_response(
                 stream_url=fmt["url"],

@@ -19,6 +19,7 @@ import copy
 import ipaddress
 import socket
 import hashlib
+from functools import partial
 from datetime import datetime, timedelta
 from importlib import metadata as importlib_metadata
 from urllib.parse import quote, urlparse
@@ -43,7 +44,6 @@ except Exception:  # pragma: no cover - fallback if packaging is unavailable
 import requests
 import yt_dlp
 from flask import (
-    Flask,
     Response,
     has_request_context,
     jsonify,
@@ -78,12 +78,7 @@ from flask_downloader.paths import (
     USERS_FILE,
     ensure_data_layout,
 )
-from flask_downloader.routes.auth import register_auth_routes
-from flask_downloader.routes.dlna import register_dlna_routes
-from flask_downloader.routes.downloads import register_download_routes
-from flask_downloader.routes.main import register_main_routes
-from flask_downloader.routes.settings import register_settings_routes
-from flask_downloader.routes.users import register_user_management_routes
+from flask_downloader.bootstrap import register_application_routes, start_background_schedulers
 from flask_downloader.services.jobs_service import DownloadJobsService, JobViewService
 from flask_downloader.services.maintenance_service import MaintenanceTaskService
 from flask_downloader.services.storage_service import ManagedStorageService
@@ -94,6 +89,8 @@ from flask_downloader.services.ffmpeg_service import FfmpegMaintenanceService
 from flask_downloader.services.ytdlp_service import YtDlpMaintenanceService
 from flask_downloader.services.dlna_service import DlnaLibraryService
 from flask_downloader.services.dlna_runtime_service import DlnaRuntimeService
+from flask_downloader.services.dlna_update_service import DlnaUpdateService
+from flask_downloader.services.page_state_service import PageStateService
 from flask_downloader.stores.config_store import (
     load_app_config as config_store_load_app_config,
     write_app_config as config_store_write_app_config,
@@ -118,13 +115,9 @@ from flask_downloader.stores.users_store import (
     write_user_store as users_store_write_user_store,
 )
 from flask_downloader.utils import auth as auth_utils
+from flask_downloader.utils.formatting import format_duration, format_ts
+from flask_downloader.utils.responses import build_stateful_json_response
 
-app = Flask(
-    __name__,
-    template_folder=os.path.join(PROJECT_ROOT, "templates"),
-    static_folder=os.path.join(PROJECT_ROOT, "static"),
-)
-app.secret_key = CONFIG_APP_SECRET_KEY
 APP_STARTED_AT_TS = time.time()
 
 USER_AGENT = (
@@ -245,7 +238,7 @@ MAINTENANCE_SERVICE = MaintenanceTaskService(
     MAINTENANCE_TASKS,
     MAINTENANCE_TASKS_LOCK,
     create_maintenance_task_state,
-    lambda ts: format_ts(ts),
+    format_ts,
 )
 YTDLP_SCHEDULER_LOCK = threading.Lock()
 YTDLP_SCHEDULER_STARTED = False
@@ -755,6 +748,36 @@ def default_app_config():
     }
 
 
+DLNA_UPDATE_SERVICE = DlnaUpdateService(
+    default_update_state_factory=default_dlna_update_state,
+    default_config_factory=default_dlna_config,
+    normalize_username=normalize_username,
+    get_users_snapshot=get_users_snapshot,
+    allowed_network=DLNA_ALLOWED_NETWORK,
+    all_collection_id=DLNA_ALL_COLLECTION_ID,
+    preferred_repo_channel=DLNA_PREFERRED_REPO_CHANNEL,
+    official_repo_channels=DLNA_OFFICIAL_REPO_CHANNELS,
+    repo_key_url=DLNA_OFFICIAL_REPO_KEY_URL,
+    repo_keyring_file=DLNA_OFFICIAL_REPO_KEYRING_FILE,
+    repo_list_file=DLNA_OFFICIAL_REPO_LIST_FILE,
+    user_agent=USER_AGENT,
+    requests_module=requests,
+    package_name=DLNA_PACKAGE_NAME,
+    check_hour=DLNA_CHECK_HOUR,
+    is_linux_runtime=lambda: is_linux_runtime(),
+    format_ts=format_ts,
+    read_config_values=lambda: (
+        copy.deepcopy((APP_CONFIG or {}).get("dlna_update_state")),
+        copy.deepcopy((APP_CONFIG or {}).get("dlna")),
+    ),
+    save_update_state=lambda latest_version, checked_at, check_error: save_dlna_update_state(
+        latest_version,
+        checked_at,
+        check_error,
+    ),
+)
+
+
 def normalize_storage_root(value):
     path = os.path.abspath(str(value or "").strip())
     mount_root = os.path.abspath(MOUNT_POINT)
@@ -843,288 +866,59 @@ def normalize_ffmpeg_update_state(value):
 
 
 def normalize_dlna_update_state(value):
-    state = default_dlna_update_state()
-
-    if not isinstance(value, dict):
-        return state
-
-    latest_version = str(value.get("latest_version") or "").strip()
-    check_error = str(value.get("check_error") or "").strip()
-
-    try:
-        checked_at = float(value.get("checked_at") or 0.0)
-    except Exception:
-        checked_at = 0.0
-
-    state.update({
-        "latest_version": latest_version,
-        "checked_at": checked_at,
-        "check_error": check_error,
-    })
-    return state
+    return DLNA_UPDATE_SERVICE.normalize_update_state(value)
 
 
 def normalize_dlna_server_name(value):
-    text = re.sub(r"\s+", " ", str(value or "").strip())
-    if not text:
-        raise ValueError("Nazwa serwera DLNA nie może być pusta.")
-    return text[:120]
+    return DLNA_UPDATE_SERVICE.normalize_server_name(value)
 
 
 def normalize_dlna_bind_ip(value):
-    text = str(value or "").strip()
-    if not text:
-        return ""
-
-    try:
-        address = ipaddress.ip_address(text)
-    except Exception as exc:
-        raise ValueError("Adres IP serwera DLNA jest nieprawidłowy.") from exc
-
-    if address.version != 4 or address not in DLNA_ALLOWED_NETWORK:
-        raise ValueError("Adres IP serwera DLNA musi należeć do sieci %s." % DLNA_ALLOWED_NETWORK)
-
-    return str(address)
+    return DLNA_UPDATE_SERVICE.normalize_bind_ip(value)
 
 
 def normalize_dlna_port(value):
-    try:
-        port = int(str(value or "").strip())
-    except Exception as exc:
-        raise ValueError("Port DLNA musi być liczbą całkowitą.") from exc
-
-    if port < 49152 or port > 65535:
-        raise ValueError("Port DLNA musi mieścić się w zakresie 49152-65535.")
-
-    return port
+    return DLNA_UPDATE_SERVICE.normalize_port(value)
 
 
 def normalize_dlna_collection_name(value):
-    text = re.sub(r"\s+", " ", str(value or "").strip())
-    if not text:
-        raise ValueError("Nazwa kolekcji nie może być pusta.")
-    return text[:80]
+    return DLNA_UPDATE_SERVICE.normalize_collection_name(value)
 
 
 def normalize_dlna_description(value, max_len=240):
-    return re.sub(r"\s+", " ", str(value or "").strip())[:max_len]
+    return DLNA_UPDATE_SERVICE.normalize_description(value, max_len=max_len)
 
 
 def normalize_dlna_collection_id(value, fallback=None):
-    text = re.sub(r"[^a-zA-Z0-9_-]+", "", str(value or "").strip())
-    if text:
-        return text[:48]
-    if fallback:
-        return fallback[:48]
-    return uuid.uuid4().hex
+    return DLNA_UPDATE_SERVICE.normalize_collection_id(value, fallback=fallback)
 
 
 def normalize_dlna_collection_entry(raw, existing_ids=None):
-    if not isinstance(raw, dict):
-        return None
-
-    try:
-        name = normalize_dlna_collection_name(raw.get("name"))
-    except Exception:
-        return None
-
-    collection_id = normalize_dlna_collection_id(raw.get("id"))
-    if existing_ids is not None:
-        while collection_id in existing_ids or collection_id == DLNA_ALL_COLLECTION_ID:
-            collection_id = uuid.uuid4().hex
-        existing_ids.add(collection_id)
-
-    return {
-        "id": collection_id,
-        "name": name,
-        "description": normalize_dlna_description(raw.get("description"), max_len=320),
-    }
+    return DLNA_UPDATE_SERVICE.normalize_collection_entry(raw, existing_ids=existing_ids)
 
 
 def normalize_dlna_client_ip(value):
-    text = str(value or "").strip()
-    if not text:
-        raise ValueError("Adres IP klienta nie może być pusty.")
-
-    try:
-        address = ipaddress.ip_address(text)
-    except Exception as exc:
-        raise ValueError("Adres IP klienta jest nieprawidłowy.") from exc
-
-    if address.version != 4 or address not in DLNA_ALLOWED_NETWORK:
-        raise ValueError("Adres IP klienta musi należeć do sieci %s." % DLNA_ALLOWED_NETWORK)
-
-    return str(address)
+    return DLNA_UPDATE_SERVICE.normalize_client_ip(value)
 
 
 def normalize_dlna_client_entry(raw, valid_collection_ids, valid_usernames):
-    if not isinstance(raw, dict):
-        return None
-
-    try:
-        ip = normalize_dlna_client_ip(raw.get("ip"))
-    except Exception:
-        return None
-
-    collection_ids = []
-    seen = set()
-    for item in raw.get("collection_ids") or []:
-        value = str(item or "").strip()
-        if not value or value in seen:
-            continue
-        if value != DLNA_ALL_COLLECTION_ID and value not in valid_collection_ids:
-            continue
-        seen.add(value)
-        collection_ids.append(value)
-
-    usernames = []
-    seen_usernames = set()
-    for item in raw.get("usernames") or []:
-        try:
-            value = normalize_username(item)
-        except Exception:
-            continue
-        if not value or value in seen_usernames or value not in valid_usernames:
-            continue
-        seen_usernames.add(value)
-        usernames.append(value)
-
-    return {
-        "id": normalize_dlna_collection_id(raw.get("id")),
-        "ip": ip,
-        "description": normalize_dlna_description(raw.get("description"), max_len=200),
-        "enabled": bool(raw.get("enabled", True)),
-        "collection_ids": collection_ids,
-        "usernames": usernames,
-    }
+    return DLNA_UPDATE_SERVICE.normalize_client_entry(raw, valid_collection_ids, valid_usernames)
 
 
 def normalize_dlna_config_storage_kind(value):
-    return "audio" if str(value or "").strip().lower() == "audio" else "video"
+    return DLNA_UPDATE_SERVICE.normalize_config_storage_kind(value)
 
 
 def normalize_dlna_config_relative_path(value):
-    path = str(value or "").strip().replace("\\", "/")
-    if not path:
-        return ""
-
-    normalized = os.path.normpath(path).replace("\\", "/").lstrip("/")
-    if normalized in ("", ".", "..") or normalized.startswith("../"):
-        return ""
-
-    return normalized
+    return DLNA_UPDATE_SERVICE.normalize_config_relative_path(value)
 
 
 def normalize_dlna_media_rule_entry(raw, valid_collection_ids):
-    if not isinstance(raw, dict):
-        return None
-
-    kind = str(raw.get("kind") or "").strip().lower()
-    if kind not in ("file", "folder"):
-        return None
-
-    relative_path = normalize_dlna_config_relative_path(raw.get("relative_path") or raw.get("path") or "")
-    if not relative_path:
-        return None
-
-    collection_ids = []
-    seen = set()
-    for item in raw.get("collection_ids") or []:
-        value = str(item or "").strip()
-        if not value or value in seen or value == DLNA_ALL_COLLECTION_ID:
-            continue
-        if value not in valid_collection_ids:
-            continue
-        seen.add(value)
-        collection_ids.append(value)
-
-    return {
-        "id": normalize_dlna_collection_id(raw.get("id")),
-        "kind": kind,
-        "storage_kind": normalize_dlna_config_storage_kind(raw.get("storage_kind") or "video"),
-        "relative_path": relative_path,
-        "enabled": bool(raw.get("enabled", True)),
-        "collection_ids": collection_ids,
-    }
+    return DLNA_UPDATE_SERVICE.normalize_media_rule_entry(raw, valid_collection_ids)
 
 
 def normalize_dlna_config(value):
-    state = default_dlna_config()
-
-    if not isinstance(value, dict):
-        return state
-
-    try:
-        server_name = normalize_dlna_server_name(value.get("server_name", state["server_name"]))
-    except Exception:
-        server_name = state["server_name"]
-
-    try:
-        bind_ip = normalize_dlna_bind_ip(value.get("bind_ip", state["bind_ip"]))
-    except Exception:
-        bind_ip = state["bind_ip"]
-
-    try:
-        port = normalize_dlna_port(value.get("port", state["port"]))
-    except Exception:
-        port = state["port"]
-
-    collection_items = []
-    collection_ids = set()
-    for raw in value.get("collections") or []:
-        item = normalize_dlna_collection_entry(raw, existing_ids=collection_ids)
-        if item:
-            collection_items.append(item)
-
-    valid_collection_ids = {item["id"] for item in collection_items}
-    valid_usernames = {
-        str(item.get("username") or "").strip()
-        for item in (get_users_snapshot() or [])
-        if str(item.get("username") or "").strip()
-    }
-    client_items = []
-    seen_ips = set()
-    for raw in value.get("clients") or []:
-        item = normalize_dlna_client_entry(raw, valid_collection_ids, valid_usernames)
-        if not item or item["ip"] in seen_ips:
-            continue
-        seen_ips.add(item["ip"])
-        client_items.append(item)
-
-    rule_items = []
-    seen_rules = set()
-    for raw in value.get("media_rules") or []:
-        item = normalize_dlna_media_rule_entry(raw, valid_collection_ids)
-        if not item:
-            continue
-        key = (item["kind"], item["storage_kind"], item["relative_path"])
-        if key in seen_rules:
-            continue
-        seen_rules.add(key)
-        rule_items.append(item)
-
-    try:
-        last_sync_at = float(value.get("last_sync_at") or 0.0)
-    except Exception:
-        last_sync_at = 0.0
-    try:
-        layout_version = max(0, int(value.get("layout_version") or 0))
-    except Exception:
-        layout_version = 0
-
-    state.update({
-        "enabled": bool(value.get("enabled")),
-        "server_name": server_name,
-        "bind_ip": bind_ip,
-        "port": port,
-        "collections": collection_items,
-        "clients": client_items,
-        "media_rules": rule_items,
-        "layout_version": layout_version,
-        "last_sync_at": last_sync_at,
-        "last_sync_error": str(value.get("last_sync_error") or "").strip(),
-    })
-    return state
+    return DLNA_UPDATE_SERVICE.normalize_config(value)
 
 
 def load_app_config():
@@ -1300,7 +1094,7 @@ STORAGE_SERVICE = ManagedStorageService(
     has_request_context=has_request_context,
     is_admin_authenticated=lambda: is_admin_authenticated(),
     ensure_share_ready=lambda auto_remount=True: ensure_share_ready(auto_remount=auto_remount),
-    format_ts=lambda ts: format_ts(ts),
+    format_ts=format_ts,
 )
 
 
@@ -2351,16 +2145,10 @@ def get_current_user_role():
     return str((user or {}).get("role") or "").strip().lower()
 
 
-def safe_next_url(value):
-    return auth_utils.safe_next_url(value)
-
-
-def set_ui_flash(message, kind="success"):
-    auth_utils.set_ui_flash(message, kind)
-
-
-def pop_ui_flash():
-    return auth_utils.pop_ui_flash()
+safe_next_url = auth_utils.safe_next_url
+set_ui_flash = auth_utils.set_ui_flash
+pop_ui_flash = auth_utils.pop_ui_flash
+wants_json_response = auth_utils.wants_json_response
 
 
 def require_admin_json():
@@ -2379,10 +2167,6 @@ def require_authenticated_page(message="Zaloguj się, aby korzystać z aplikacji
         set_ui_flash,
         message=message,
     )
-
-
-def wants_json_response():
-    return auth_utils.wants_json_response()
 
 
 def can_access_owner(owner_username):
@@ -2419,21 +2203,6 @@ def resolve_view_scope_username(raw_value, session_key):
 
     session[session_key] = selected_username
     return selected_username
-
-
-def build_dlna_json_response(ok=True, message="", kind="success", status_code=200, **extra):
-    payload = {
-        "ok": bool(ok),
-        "message": str(message or ""),
-        "kind": str(kind or ("success" if ok else "error")),
-        "dlna_state": get_dlna_page_state(),
-        "settings_state": get_settings_page_state(),
-    }
-    payload.update(extra)
-    response = jsonify(payload)
-    if status_code and status_code != 200:
-        return response, status_code
-    return response
 
 
 def clamp_progress_percent(value):
@@ -2479,45 +2248,15 @@ def get_settings_maintenance_state():
 
 
 def get_settings_page_state(include_user_rows=False):
-    state = {
-        "mount": get_mount_info(auto_remount=True),
-        "config": get_config_snapshot(),
-        "today_download_dir": get_daily_download_dir(),
-        "today_audio_download_dir": get_daily_download_dir(media_kind="audio"),
-        "maintenance_tasks": get_all_maintenance_task_snapshots(),
-        "ffmpeg_state": refresh_ffmpeg_update_state(force=False),
-        "yt_dlp_state": refresh_yt_dlp_update_state(force=False),
-        "dlna_package_state": refresh_dlna_package_state(force=False),
-        "dlna_service_state": get_dlna_service_state(),
-        "service_state": get_flask_service_state(),
-    }
-    if include_user_rows:
-        state["user_rows"] = build_user_management_rows()
-    return state
+    return PAGE_STATE_SERVICE.get_settings_page_state(include_user_rows=include_user_rows)
 
 
 def get_dlna_page_state():
-    return DLNA_LIBRARY_SERVICE.get_page_state()
+    return PAGE_STATE_SERVICE.get_dlna_page_state()
 
 
 def render_page(page_title, active_page, content_template, **context):
-    auth_user = get_authenticated_user()
-    admin_logged_in = is_admin_authenticated()
-    current_user = auth_user or {}
-    template_context = dict(context)
-    return render_template(
-        BASE_PAGE_TEMPLATE,
-        page_template=content_template,
-        page_title=page_title,
-        active_page=active_page,
-        current_path=request.path,
-        admin_logged_in=admin_logged_in,
-        logged_in=bool(auth_user),
-        current_user=current_user,
-        current_role=str(current_user.get("role") or ""),
-        flash=pop_ui_flash(),
-        **template_context,
-    )
+    return PAGE_STATE_SERVICE.render_page(page_title, active_page, content_template, **context)
 
 
 class DownloadCancelledError(Exception):
@@ -2899,7 +2638,7 @@ def download_worker(job_id):
             raise RuntimeError("Nie znaleziono wskazanego formatu.")
 
         if not filename:
-            filename = build_download_filename(result["title"], fmt)
+            filename = build_download_filename(result.get("download_title") or result["title"], fmt)
 
         temp_filename = replace_filename_extension(filename, get_download_intermediate_ext(fmt))
         if storage_kind == "audio":
@@ -3096,35 +2835,6 @@ def download_worker(job_id):
 
 def get_jobs_snapshot():
     return DOWNLOAD_JOBS_SERVICE.get_jobs_snapshot()
-
-
-def format_ts(ts):
-    if not ts:
-        return ""
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
-
-
-def format_duration(seconds):
-    try:
-        total = int(max(0, float(seconds or 0)))
-    except Exception:
-        return "nieznany"
-
-    days, rem = divmod(total, 24 * 60 * 60)
-    hours, rem = divmod(rem, 60 * 60)
-    minutes, secs = divmod(rem, 60)
-    parts = []
-
-    if days:
-        parts.append("%sd" % days)
-    if hours:
-        parts.append("%sg" % hours)
-    if minutes:
-        parts.append("%smin" % minutes)
-    if secs or not parts:
-        parts.append("%ss" % secs)
-
-    return " ".join(parts[:3])
 
 
 FFMPEG_SERVICE = FfmpegMaintenanceService(
@@ -3999,310 +3709,51 @@ def get_linux_distribution_codename():
 
 
 def get_dlna_official_repo_channel(channel_key=""):
-    key = str(channel_key or DLNA_PREFERRED_REPO_CHANNEL).strip().lower()
-    if key not in DLNA_OFFICIAL_REPO_CHANNELS:
-        key = DLNA_PREFERRED_REPO_CHANNEL
-    data = dict(DLNA_OFFICIAL_REPO_CHANNELS.get(key) or {})
-    data["key"] = key
-    return data
+    return DLNA_UPDATE_SERVICE.get_official_repo_channel(channel_key)
 
 
 def read_dlna_official_repo_line():
-    try:
-        with open(DLNA_OFFICIAL_REPO_LIST_FILE, "r", encoding="utf-8") as fh:
-            for raw_line in fh:
-                line = str(raw_line or "").strip()
-                if line and not line.startswith("#"):
-                    return line
-    except Exception:
-        return ""
-    return ""
+    return DLNA_UPDATE_SERVICE.read_official_repo_line()
 
 
 def get_dlna_repo_source_snapshot(policy=None):
-    raw_policy = str((policy or {}).get("raw_output") or "")
-    repo_line = read_dlna_official_repo_line()
-    source = {
-        "channel_key": "system",
-        "label": "Pakiet Debian / apt",
-        "repo_line": repo_line,
-    }
-
-    if "pkg.gerbera.io/debian-git" in repo_line or "pkg.gerbera.io/debian-git" in raw_policy:
-        channel = get_dlna_official_repo_channel("latest")
-        source["channel_key"] = channel["key"]
-        source["label"] = channel["label"]
-        return source
-
-    if "pkg.gerbera.io/debian/" in repo_line or "pkg.gerbera.io/debian/" in raw_policy:
-        channel = get_dlna_official_repo_channel("stable")
-        source["channel_key"] = channel["key"]
-        source["label"] = channel["label"]
-        return source
-
-    return source
+    return DLNA_UPDATE_SERVICE.get_repo_source_snapshot(policy=policy)
 
 
 def download_dlna_official_repo_key_bytes():
-    wget_path = shutil.which("wget")
-    if wget_path:
-        result = subprocess.run(
-            [wget_path, "-qO-", DLNA_OFFICIAL_REPO_KEY_URL],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-            check=False,
-            env=build_apt_query_env(),
-        )
-        if result.returncode == 0 and result.stdout:
-            return result.stdout
-
-    response = requests.get(DLNA_OFFICIAL_REPO_KEY_URL, headers={"User-Agent": USER_AGENT}, timeout=45)
-    response.raise_for_status()
-    return response.content
+    return DLNA_UPDATE_SERVICE.download_official_repo_key_bytes()
 
 
 def ensure_dlna_official_repo(channel_key="", progress_callback=None):
-    if not is_linux_runtime():
-        raise RuntimeError("Oficjalne repo Gerbera można skonfigurować tylko na serwerze Linux z apt.")
-
-    channel = get_dlna_official_repo_channel(channel_key)
-    codename = get_linux_distribution_codename()
-    repo_line = "deb [signed-by=%s] https://pkg.gerbera.io/%s/ %s main" % (
-        DLNA_OFFICIAL_REPO_KEYRING_FILE,
-        channel["apt_path"],
-        codename,
-    )
-
-    if progress_callback:
-        progress_callback(
-            status="running",
-            status_label="Repozytorium",
-            progress_percent=14.0,
-            detail="Konfiguruję %s dla systemu %s." % (channel["label"], codename),
-        )
-
-    key_bytes = download_dlna_official_repo_key_bytes()
-    if not key_bytes:
-        raise RuntimeError("Nie udało się pobrać klucza GPG oficjalnego repo Gerbera.")
-
-    gpg_binary = shutil.which("gpg")
-    if not gpg_binary:
-        raise RuntimeError("Brakuje binarki gpg potrzebnej do instalacji oficjalnego repo Gerbera.")
-
-    ensure_directory(os.path.dirname(DLNA_OFFICIAL_REPO_KEYRING_FILE))
-    ensure_directory(os.path.dirname(DLNA_OFFICIAL_REPO_LIST_FILE))
-
-    ascii_tmp = ""
-    gpg_tmp = ""
-    try:
-        with tempfile.NamedTemporaryFile(delete=False) as ascii_fh:
-            ascii_fh.write(key_bytes)
-            ascii_tmp = ascii_fh.name
-        with tempfile.NamedTemporaryFile(delete=False) as gpg_fh:
-            gpg_tmp = gpg_fh.name
-
-        result = subprocess.run(
-            [gpg_binary, "--dearmor", "--yes", "--output", gpg_tmp, ascii_tmp],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-            check=False,
-            env=build_apt_query_env(),
-        )
-        if result.returncode != 0 or not os.path.isfile(gpg_tmp) or os.path.getsize(gpg_tmp) <= 0:
-            detail = (result.stderr or result.stdout or "gpg --dearmor zakończył się błędem.").strip()
-            raise RuntimeError(detail[-1200:])
-
-        os.replace(gpg_tmp, DLNA_OFFICIAL_REPO_KEYRING_FILE)
-        try:
-            os.chmod(DLNA_OFFICIAL_REPO_KEYRING_FILE, 0o644)
-        except Exception:
-            pass
-
-        with open(DLNA_OFFICIAL_REPO_LIST_FILE, "w", encoding="utf-8") as fh:
-            fh.write(repo_line + "\n")
-    finally:
-        for path in (ascii_tmp, gpg_tmp):
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
-
-    return {
-        "channel_key": channel["key"],
-        "channel_label": channel["label"],
-        "codename": codename,
-        "repo_line": repo_line,
-    }
+    return DLNA_UPDATE_SERVICE.ensure_official_repo(channel_key=channel_key, progress_callback=progress_callback)
 
 
 def read_dpkg_installed_version(package_name):
-    result = subprocess.run(
-        ["dpkg-query", "-W", "-f=${Status}|${Version}", package_name],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=20,
-        check=False,
-        env=build_apt_query_env(),
-    )
-    if result.returncode != 0:
-        return ""
-
-    output = str(result.stdout or "").strip()
-    if not output:
-        return ""
-
-    parts = output.split("|", 1)
-    if len(parts) != 2:
-        return ""
-
-    status_text = parts[0].strip().lower()
-    version_text = parts[1].strip()
-    if "install ok installed" not in status_text or not version_text:
-        return ""
-    return version_text
+    return DLNA_UPDATE_SERVICE.read_dpkg_installed_version(package_name)
 
 
 def get_apt_package_policy(package_name):
-    if not is_linux_runtime():
-        raise RuntimeError("Automatyczna obsługa pakietów DLNA wymaga Linuxa z apt.")
-
-    result = subprocess.run(
-        ["apt-cache", "policy", package_name],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        timeout=30,
-        check=False,
-        env=build_apt_query_env(),
-    )
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "Nie udało się odczytać stanu pakietu.").strip()
-        raise RuntimeError(detail[-1200:])
-
-    installed = read_dpkg_installed_version(package_name)
-    candidate = ""
-    for raw_line in (result.stdout or "").splitlines():
-        line = raw_line.strip()
-        if line.lower().startswith("installed:"):
-            installed = line.split(":", 1)[1].strip()
-        elif line.lower().startswith("candidate:"):
-            candidate = line.split(":", 1)[1].strip()
-
-    if installed == "(none)":
-        installed = ""
-    if candidate == "(none)":
-        candidate = ""
-
-    return {
-        "installed": installed,
-        "candidate": candidate,
-        "raw_output": result.stdout or "",
-    }
+    return DLNA_UPDATE_SERVICE.get_apt_package_policy(package_name)
 
 
 def get_last_due_dlna_check_dt(now=None):
-    now = now or datetime.now()
-    due = now.replace(hour=DLNA_CHECK_HOUR, minute=0, second=0, microsecond=0)
-    if now < due:
-        due -= timedelta(days=1)
-    return due
+    return DLNA_UPDATE_SERVICE.get_last_due_check_dt(now=now)
 
 
 def get_next_dlna_check_dt(now=None):
-    return get_last_due_dlna_check_dt(now=now) + timedelta(days=1)
+    return DLNA_UPDATE_SERVICE.get_next_check_dt(now=now)
 
 
 def needs_scheduled_dlna_check(last_checked_at, now=None):
-    due_dt = get_last_due_dlna_check_dt(now=now)
-    return not last_checked_at or float(last_checked_at or 0.0) < due_dt.timestamp()
+    return DLNA_UPDATE_SERVICE.needs_scheduled_check(last_checked_at, now=now)
 
 
 def get_dlna_package_state_snapshot():
-    with APP_CONFIG_LOCK:
-        raw_state = normalize_dlna_update_state(APP_CONFIG.get("dlna_update_state"))
-        dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
-
-    current_version = ""
-    latest_version = raw_state["latest_version"]
-    check_error = raw_state["check_error"]
-    policy = None
-
-    try:
-        policy = get_apt_package_policy(DLNA_PACKAGE_NAME)
-        current_version = policy["installed"]
-        if policy["candidate"]:
-            latest_version = policy["candidate"]
-    except Exception as exc:
-        if not check_error:
-            check_error = str(exc)
-
-    repo_source = get_dlna_repo_source_snapshot(policy=policy)
-    preferred_channel = get_dlna_official_repo_channel()
-    installed = bool(current_version)
-    update_available = bool(installed and latest_version and latest_version != current_version)
-    needs_repo_switch = repo_source["channel_key"] != preferred_channel["key"]
-    action_needed = (not installed) or update_available or needs_repo_switch
-
-    if installed and needs_repo_switch:
-        status_pill_label = "Dostępna migracja do nowszego repo Gerbera"
-        status_pill_kind = "queued"
-    elif update_available:
-        status_pill_label = "Dostępna aktualizacja serwera DLNA"
-        status_pill_kind = "queued"
-    elif installed:
-        status_pill_label = "Serwer DLNA jest aktualny"
-        status_pill_kind = "success"
-    else:
-        status_pill_label = "Serwer DLNA nie jest zainstalowany"
-        status_pill_kind = "error"
-
-    return {
-        "package_name": DLNA_PACKAGE_NAME,
-        "current_version": current_version or "brak",
-        "latest_version": latest_version or "brak danych",
-        "current_version_raw": current_version,
-        "latest_version_raw": latest_version,
-        "checked_at": raw_state["checked_at"],
-        "checked_at_text": format_ts(raw_state["checked_at"]) if raw_state["checked_at"] else "jeszcze nie sprawdzano",
-        "check_error": check_error,
-        "installed": installed,
-        "update_available": update_available,
-        "needs_repo_switch": needs_repo_switch,
-        "action_needed": action_needed,
-        "status_pill_label": status_pill_label,
-        "status_pill_kind": status_pill_kind,
-        "action_button_label": (
-            "Przełącz na oficjalne repo i zaktualizuj DLNA"
-            if installed and needs_repo_switch
-            else ("Zaktualizuj serwer DLNA" if update_available else "Zainstaluj serwer DLNA")
-        ),
-        "source_label": repo_source["label"],
-        "source_channel_key": repo_source["channel_key"],
-        "enabled_in_app": bool(dlna_config.get("enabled")),
-    }
+    return DLNA_UPDATE_SERVICE.get_package_state_snapshot()
 
 
 def refresh_dlna_package_state(force=False):
-    snapshot = get_dlna_package_state_snapshot()
-    should_check = force or not snapshot["latest_version_raw"] or needs_scheduled_dlna_check(snapshot["checked_at"])
-
-    if not should_check:
-        return snapshot
-
-    latest_version = snapshot["latest_version_raw"]
-    check_error = ""
-    try:
-        policy = get_apt_package_policy(DLNA_PACKAGE_NAME)
-        latest_version = policy["candidate"] or policy["installed"] or latest_version
-    except Exception as exc:
-        check_error = str(exc)
-
-    save_dlna_update_state(latest_version, time.time(), check_error)
-    return get_dlna_package_state_snapshot()
+    return DLNA_UPDATE_SERVICE.refresh_package_state(force=force)
 
 
 def dlna_check_scheduler():
@@ -5679,6 +5130,26 @@ DLNA_LIBRARY_SERVICE = DlnaLibraryService(
     dlna_service_unit_file=DLNA_SERVICE_UNIT_FILE,
 )
 
+PAGE_STATE_SERVICE = PageStateService(
+    get_mount_info=get_mount_info,
+    get_config_snapshot=get_config_snapshot,
+    get_daily_download_dir=get_daily_download_dir,
+    get_all_maintenance_task_snapshots=get_all_maintenance_task_snapshots,
+    refresh_ffmpeg_update_state=refresh_ffmpeg_update_state,
+    refresh_yt_dlp_update_state=refresh_yt_dlp_update_state,
+    refresh_dlna_package_state=refresh_dlna_package_state,
+    get_dlna_service_state=get_dlna_service_state,
+    get_flask_service_state=get_flask_service_state,
+    build_user_management_rows=build_user_management_rows,
+    get_dlna_page_state=DLNA_LIBRARY_SERVICE.get_page_state,
+    get_authenticated_user=get_authenticated_user,
+    is_admin_authenticated=is_admin_authenticated,
+    pop_ui_flash=pop_ui_flash,
+    render_template=render_template,
+    base_page_template=BASE_PAGE_TEMPLATE,
+    request_path_getter=lambda: request.path,
+)
+
 
 def stream_upstream_response(stream_url, page_url, fmt, download=False, download_filename=None):
     upstream_headers = build_upstream_headers(page_url, fmt)
@@ -5734,154 +5205,18 @@ def stream_upstream_response(stream_url, page_url, fmt, download=False, download
         direct_passthrough=True,
     )
 
-register_auth_routes(app, {
-    "verify_user_credentials": verify_user_credentials,
-    "set_session_user": set_session_user,
-    "clear_session_user": clear_session_user,
-    "set_ui_flash": set_ui_flash,
-    "safe_next_url": safe_next_url,
-    "is_authenticated": is_authenticated,
-    "get_current_username": get_current_username,
-    "update_user_password": update_user_password,
-    "get_user_by_username": get_user_by_username,
-})
 
+build_dlna_json_response = partial(
+    build_stateful_json_response,
+    jsonify,
+    state_builders={
+        "dlna_state": get_dlna_page_state,
+        "settings_state": get_settings_page_state,
+    },
+)
 
-register_main_routes(app, {
-    "quote": quote,
-    "FAVICON_SVG": FAVICON_SVG,
-    "render_page": render_page,
-    "get_mount_info": get_mount_info,
-    "require_authenticated_page": require_authenticated_page,
-    "is_valid_http_url": is_valid_http_url,
-    "extract_video_data": extract_video_data,
-    "build_result_with_proxy_urls": build_result_with_proxy_urls,
-    "get_daily_download_dir": get_daily_download_dir,
-    "get_yt_dlp_services_state": get_yt_dlp_services_state,
-    "INDEX_CONTENT_TEMPLATE": INDEX_CONTENT_TEMPLATE,
-    "DOWNLOADS_CONTENT_TEMPLATE": DOWNLOADS_CONTENT_TEMPLATE,
-    "JOBS_CONTENT_TEMPLATE": JOBS_CONTENT_TEMPLATE,
-    "SERVICES_CONTENT_TEMPLATE": SERVICES_CONTENT_TEMPLATE,
-})
-
-
-register_download_routes(app, {
-    "require_authenticated_json": require_authenticated_json,
-    "resolve_view_scope_username": resolve_view_scope_username,
-    "get_users_snapshot": get_users_snapshot,
-    "is_admin_authenticated": is_admin_authenticated,
-    "get_current_username": get_current_username,
-    "get_mount_info": get_mount_info,
-    "get_server_files": get_server_files,
-    "filter_jobs_for_viewer": filter_jobs_for_viewer,
-    "get_jobs_snapshot": get_jobs_snapshot,
-    "is_valid_http_url": is_valid_http_url,
-    "extract_video_data": extract_video_data,
-    "build_result_with_proxy_urls": build_result_with_proxy_urls,
-    "find_format": find_format,
-    "public_source_download_match_state": public_source_download_match_state,
-    "get_source_download_match_state": get_source_download_match_state,
-    "ensure_share_ready": ensure_share_ready,
-    "normalize_storage_kind": normalize_storage_kind,
-    "create_job": create_job,
-    "build_download_filename": build_download_filename,
-    "mark_job_cancel_requested": mark_job_cancel_requested,
-    "delete_job": delete_job_record,
-    "delete_managed_file": delete_managed_download_file,
-    "build_m3u": build_m3u,
-    "stream_upstream_response": stream_upstream_response,
-    "build_intermediate_download_filename": build_intermediate_download_filename,
-    "is_authenticated": is_authenticated,
-    "build_managed_relative_path": build_managed_relative_path,
-    "get_user_storage_root": get_user_storage_root,
-})
-
-
-register_user_management_routes(app, {
-    "is_admin_authenticated": is_admin_authenticated,
-    "wants_json_response": wants_json_response,
-    "require_admin_json": require_admin_json,
-    "set_ui_flash": set_ui_flash,
-    "create_user_account": create_user_account,
-    "update_user_password": update_user_password,
-    "update_user_account": update_user_account,
-    "delete_user_account": delete_user_account,
-    "get_settings_page_state": get_settings_page_state,
-    "ensure_directory": ensure_directory,
-    "get_user_storage_root": get_user_storage_root,
-    "normalize_username": normalize_username,
-    "get_current_username": get_current_username,
-})
-
-
-register_settings_routes(app, {
-    "is_admin_authenticated": is_admin_authenticated,
-    "wants_json_response": wants_json_response,
-    "require_admin_json": require_admin_json,
-    "set_ui_flash": set_ui_flash,
-    "render_page": render_page,
-    "SETTINGS_CONTENT_TEMPLATE": SETTINGS_CONTENT_TEMPLATE,
-    "get_settings_page_state": get_settings_page_state,
-    "save_app_config": save_app_config,
-    "ensure_share_ready": ensure_share_ready,
-    "sync_dlna_runtime_safe": sync_dlna_runtime_safe,
-    "refresh_ffmpeg_update_state": refresh_ffmpeg_update_state,
-    "start_maintenance_task": start_maintenance_task,
-    "install_or_update_ffmpeg": install_or_update_ffmpeg,
-    "refresh_yt_dlp_update_state": refresh_yt_dlp_update_state,
-    "update_yt_dlp_package": update_yt_dlp_package,
-    "refresh_dlna_package_state": refresh_dlna_package_state,
-    "build_dlna_json_response": build_dlna_json_response,
-    "install_or_update_dlna_server": install_or_update_dlna_server,
-    "parse_boolean_flag": parse_boolean_flag,
-    "set_dlna_service_enabled": set_dlna_service_enabled,
-    "restart_dlna_service_now": restart_dlna_service_now,
-    "schedule_flask_service_restart": schedule_flask_service_restart,
-    "SYSTEMD_SERVICE_NAME": SYSTEMD_SERVICE_NAME,
-})
-
-
-register_dlna_routes(app, {
-    "is_admin_authenticated": is_admin_authenticated,
-    "wants_json_response": wants_json_response,
-    "require_admin_json": require_admin_json,
-    "set_ui_flash": set_ui_flash,
-    "render_page": render_page,
-    "DLNA_CONTENT_TEMPLATE": DLNA_CONTENT_TEMPLATE,
-    "get_dlna_page_state": get_dlna_page_state,
-    "DLNA_SERVICE_NAME": DLNA_SERVICE_NAME,
-    "DLNA_ALL_COLLECTION_NAME": DLNA_ALL_COLLECTION_NAME,
-    "read_text_log_file_for_browser": read_text_log_file_for_browser,
-    "DLNA_LOG_FILE": DLNA_LOG_FILE,
-    "DLNA_LOG_BROWSER_MAX_BYTES": DLNA_LOG_BROWSER_MAX_BYTES,
-    "build_dlna_collection_library_results": build_dlna_collection_library_results,
-    "update_dlna_general_settings": update_dlna_general_settings,
-    "build_dlna_json_response": build_dlna_json_response,
-    "refresh_dlna_package_state": refresh_dlna_package_state,
-    "sync_dlna_runtime_safe": sync_dlna_runtime_safe,
-    "start_maintenance_task": start_maintenance_task,
-    "install_or_update_dlna_server": install_or_update_dlna_server,
-    "parse_boolean_flag": parse_boolean_flag,
-    "set_dlna_service_enabled": set_dlna_service_enabled,
-    "restart_dlna_service_now": restart_dlna_service_now,
-    "sync_dlna_runtime": sync_dlna_runtime,
-    "create_dlna_collection": create_dlna_collection,
-    "update_dlna_collection": update_dlna_collection,
-    "delete_dlna_collection": delete_dlna_collection,
-    "create_dlna_client": create_dlna_client,
-    "update_dlna_client": update_dlna_client,
-    "delete_dlna_client": delete_dlna_client,
-    "create_dlna_media_rule": create_dlna_media_rule,
-    "update_dlna_media_rule": update_dlna_media_rule,
-    "bulk_assign_dlna_collection_items": bulk_assign_dlna_collection_items,
-    "delete_dlna_media_rule": delete_dlna_media_rule,
-})
-
-
-start_ffmpeg_scheduler_once()
-start_yt_dlp_scheduler_once()
-start_dlna_scheduler_once()
-
-
-if __name__ == "__main__":
-    app.run(host=CONFIG_APP_HOST, port=CONFIG_APP_PORT, debug=False, threaded=True)
+def configure_app(app):
+    app.secret_key = CONFIG_APP_SECRET_KEY
+    register_application_routes(app, globals())
+    start_background_schedulers(globals())
+    return app

@@ -145,6 +145,7 @@
 - Konfiguracja `Gerbera` ma być składana zgodnie z możliwościami wersji pakietu z Debiana; nie wolno generować wpisów wymagających nowszych wersji, jeśli lokalny pakiet ich nie obsługuje.
 - Dla starej `Gerbera 1.1.x` trzeba używać zgodnego `import-script` i płaskiego eksportu, żeby nie wracać do głębokiego `PC Directory` ani pustego root przez niekompatybilne nowsze hooki skryptowe; realne minimum tej wersji po stronie klienta to `Video -> All Video -> pliki`, bo pakiet nadal narzuca własny fallback layout.
 - Dla nowszej `Gerbera 2.x/3.x` preferujemy własny JS-owy layout z rootem `bukiet -> pliki` i ukrytym `PC Directory`, a fizyczny eksport pod `/dlna` ma służyć jako backend dla skanowania i filtrów klientów, nie jako drugi widok dla użytkownika końcowego.
+- Wspólna instancja `Gerbera 3.x` nadal ma praktyczne ograniczenie: ukrywanie top-level rootów per klient przez `group/client hide location` bywa nieskuteczne zarówno dla kontenerów z JS virtual-layout, jak i dla dynamicznych kontenerów. Jeśli potrzebne jest twarde `urządzenie widzi tylko swoje rooty i nic więcej`, to trzeba planować większą zmianę architektury niż samo dalsze strojenie obecnego shared-instance Gerbera.
 - Skrócony root `/dlna` ma być prawdziwym katalogiem eksportu, a nie symlinkiem do starego runtime, bo Gerbera potrafi wtedy rozwinąć realpath i wrócić do rozwleczonego `root/flask_downloader/tools/...`.
 - Stary katalog `tools/dlna/runtime/export` nie może być utrzymywany równolegle po migracji na `/dlna`, bo tworzy boczną ścieżkę przez `PC Directory` i rozwala izolację kolekcji między klientami.
 - Usługa DLNA nie może wpadać w nieskończoną pętlę restartów przy złym configu; jeśli start się nie utrzymuje, panel ma pokazać diagnostykę i ostatni log zamiast udawać, że wszystko jest OK.
@@ -159,6 +160,7 @@
 
 ## Zachowanie pobierania i przejść
 - `Pobierz na serwer` ma tylko dodać zadanie do kolejki i pokazać status/toast bez przymusowego przechodzenia na stronę zadań.
+- Jeśli extractor zwraca nazwę serii / programu, nazwa pobieranego pliku ma ją prefiksować przed tytułem odcinka w czytelnym formacie `Seria - Tytuł`, zamiast zapisywać sam goły tytuł odcinka.
 - Linki otwierające prawdziwe pliki, playlisty lub zewnętrzne strony mogą działać normalnie albo w nowej karcie, ale linki nawigujące po samym panelu mają zostać AJAXowe.
 - Zmiana `Format` i `Rozmiar / jakość` na stronie głównej ma odświeżać szczegóły źródła bez skoku viewportu do góry; podczas ładowania nie wolno zwijać sekcji tak, żeby przeglądarka sama korygowała scroll.
 - Ostrzeżenia i podpowiedzi dotyczące wybranego źródła, takie jak duplikaty na serwerze, inne jakości albo osobne audio, mają być pokazywane jako dymek w prawym górnym rogu zamiast rozpychać środek karty.
