@@ -84,7 +84,7 @@ from flask_downloader.routes.downloads import register_download_routes
 from flask_downloader.routes.main import register_main_routes
 from flask_downloader.routes.settings import register_settings_routes
 from flask_downloader.routes.users import register_user_management_routes
-from flask_downloader.services.jobs_service import JobViewService
+from flask_downloader.services.jobs_service import DownloadJobsService, JobViewService
 from flask_downloader.services.maintenance_service import MaintenanceTaskService
 from flask_downloader.services.storage_service import ManagedStorageService
 from flask_downloader.services.system_service import SystemServiceHelper
@@ -3712,62 +3712,11 @@ def allocate_target_path(filename, media_kind="video", owner_username=None):
 
 
 def update_job(job_id, **kwargs):
-    with DOWNLOAD_LOCK:
-        job = DOWNLOAD_JOBS.get(job_id)
-        if not job:
-            return
-        persist = bool(kwargs.pop("persist", False))
-        job.update(kwargs)
-        if persist:
-            write_download_jobs_locked()
+    return DOWNLOAD_JOBS_SERVICE.update_job(job_id, **kwargs)
 
 
 def create_job(page_url, format_id, **kwargs):
-    purge_expired_jobs()
-
-    job_id = uuid.uuid4().hex
-    cancel_event = threading.Event()
-    now_ts = time.time()
-    owner_username = normalize_username(kwargs.get("owner_username") or get_current_username() or DEFAULT_ADMIN_USERNAME)
-
-    job = {
-        "job_id": job_id,
-        "owner_username": owner_username,
-        "page_url": page_url,
-        "format_id": format_id,
-        "storage_kind": normalize_storage_kind(kwargs.get("storage_kind") or "video"),
-        "status": "queued",
-        "status_label": "W kolejce",
-        "title": str(kwargs.get("title") or ""),
-        "label": str(kwargs.get("label") or ""),
-        "filename": str(kwargs.get("filename") or ""),
-        "filepath": "",
-        "relative_path": "",
-        "downloaded_bytes": 0,
-        "total_bytes": None,
-        "progress_percent": 0.0,
-        "error": "",
-        "created_at": now_ts,
-        "started_at": None,
-        "finished_at": None,
-        "planned_filename": str(kwargs.get("planned_filename") or ""),
-        "overwrite_existing": bool(kwargs.get("overwrite_existing")),
-        "replace_paths": [str(path) for path in (kwargs.get("replace_paths") or []) if path],
-    }
-
-    with DOWNLOAD_LOCK:
-        DOWNLOAD_JOBS[job_id] = job
-        JOB_CANCEL_EVENTS[job_id] = cancel_event
-        write_download_jobs_locked()
-
-    thread = threading.Thread(
-        target=download_worker,
-        args=(job_id,),
-        daemon=True,
-    )
-    thread.start()
-
-    return job
+    return DOWNLOAD_JOBS_SERVICE.create_job(page_url, format_id, **kwargs)
 
 
 def build_upstream_headers(page_url, fmt):
@@ -3793,50 +3742,15 @@ def is_job_cancelled(job_id):
 
 
 def mark_job_cancel_requested(job_id):
-    with DOWNLOAD_LOCK:
-        event = JOB_CANCEL_EVENTS.get(job_id)
-        job = DOWNLOAD_JOBS.get(job_id)
-        if not job:
-            return False, "Nie znaleziono zadania."
-
-        if job.get("status") in ("completed", "failed", "canceled"):
-            return False, "Tego zadania nie można już przerwać."
-
-        if event is None:
-            return False, "Brak uchwytu anulowania dla zadania."
-
-        event.set()
-        job["status_label"] = "Anulowanie..."
-        write_download_jobs_locked()
-        return True, "Wysłano żądanie anulowania."
+    return DOWNLOAD_JOBS_SERVICE.mark_job_cancel_requested(job_id)
 
 
 def cleanup_job_cancel_handle(job_id):
-    with DOWNLOAD_LOCK:
-        if job_id in JOB_CANCEL_EVENTS:
-            del JOB_CANCEL_EVENTS[job_id]
+    return DOWNLOAD_JOBS_SERVICE.cleanup_job_cancel_handle(job_id)
 
 
 def purge_expired_jobs(now_ts=None):
-    now_ts = now_ts or time.time()
-    cutoff_ts = now_ts - get_completed_job_retention_seconds()
-    changed = False
-
-    with DOWNLOAD_LOCK:
-        for job_id, job in list(DOWNLOAD_JOBS.items()):
-            if job.get("status") not in ("completed", "failed", "canceled"):
-                continue
-
-            finished_at = job.get("finished_at")
-            if not finished_at or finished_at > cutoff_ts:
-                continue
-
-            DOWNLOAD_JOBS.pop(job_id, None)
-            JOB_CANCEL_EVENTS.pop(job_id, None)
-            changed = True
-
-        if changed:
-            write_download_jobs_locked()
+    return DOWNLOAD_JOBS_SERVICE.purge_expired_jobs(now_ts=now_ts)
 
 
 def download_worker(job_id):
@@ -4070,57 +3984,7 @@ def download_worker(job_id):
 
 
 def get_jobs_snapshot():
-    purge_expired_jobs()
-
-    with DOWNLOAD_LOCK:
-        jobs = [dict(job) for job in DOWNLOAD_JOBS.values()]
-
-    jobs.sort(key=lambda item: item.get("created_at") or 0, reverse=True)
-
-    for job in jobs:
-        owner_username = normalize_username(job.get("owner_username") or DEFAULT_ADMIN_USERNAME)
-        job["owner_username"] = owner_username
-        storage_kind = normalize_storage_kind(job.get("storage_kind") or "video")
-        job["storage_kind"] = storage_kind
-        if job.get("status") == "completed":
-            job["progress_percent"] = 100.0
-        elif job.get("status") == "canceled":
-            if job.get("total_bytes") and job.get("downloaded_bytes") is not None:
-                try:
-                    job["progress_percent"] = round(
-                        (float(job["downloaded_bytes"]) * 100.0) / float(job["total_bytes"]),
-                        1
-                    )
-                except Exception:
-                    job["progress_percent"] = 0.0
-            else:
-                job["progress_percent"] = 0.0
-        elif job.get("total_bytes") and job.get("downloaded_bytes") is not None:
-            try:
-                job["progress_percent"] = round(
-                    (float(job["downloaded_bytes"]) * 100.0) / float(job["total_bytes"]),
-                    1
-                )
-            except Exception:
-                job["progress_percent"] = None
-        else:
-            if job.get("status") == "downloading":
-                job["progress_percent"] = None
-
-        resolved_path = job.get("filepath") or resolve_download_path(job.get("relative_path"), storage_kind, owner_username=owner_username)
-        relative_path = safe_relative_download_path(job.get("relative_path") or get_relative_download_path(resolved_path, storage_kind, owner_username))
-        if relative_path and resolved_path and os.path.exists(resolved_path):
-            job["relative_path"] = relative_path
-            job["file_url"] = build_managed_file_url(owner_username, storage_kind, relative_path)
-            job["file_display_name"] = format_relative_path_for_user(relative_path, viewer_username=get_current_username(), is_admin=is_admin_authenticated())
-        else:
-            job["file_url"] = None
-            job["file_display_name"] = job.get("filename") or ""
-
-        job["can_delete_from_list"] = job.get("status") in ("completed", "failed", "canceled")
-        job["can_cancel"] = job.get("status") in ("queued", "downloading")
-
-    return jobs
+    return DOWNLOAD_JOBS_SERVICE.get_jobs_snapshot()
 
 
 def format_ts(ts):
@@ -4160,6 +4024,32 @@ SYSTEM_SERVICE = SystemServiceHelper(
     dlna_service_name=DLNA_SERVICE_NAME,
     format_ts=format_ts,
     format_duration=format_duration,
+)
+
+DOWNLOAD_JOBS_SERVICE = DownloadJobsService(
+    jobs_store=DOWNLOAD_JOBS,
+    cancel_events_store=JOB_CANCEL_EVENTS,
+    jobs_lock=DOWNLOAD_LOCK,
+    default_admin_username=DEFAULT_ADMIN_USERNAME,
+    normalize_username=normalize_username,
+    normalize_storage_kind=normalize_storage_kind,
+    get_current_username=get_current_username,
+    is_admin_authenticated=is_admin_authenticated,
+    get_completed_job_retention_seconds=get_completed_job_retention_seconds,
+    write_download_jobs_locked=write_download_jobs_locked,
+    download_worker=download_worker,
+    can_access_owner=can_access_owner,
+    safe_relative_download_path=safe_relative_download_path,
+    parse_managed_relative_path=parse_managed_relative_path,
+    resolve_download_path=resolve_download_path,
+    cleanup_empty_download_dirs=cleanup_empty_download_dirs,
+    ensure_share_ready=ensure_share_ready,
+    sync_dlna_runtime_safe=lambda restart_service_if_active=True: sync_dlna_runtime_safe(
+        restart_service_if_active=restart_service_if_active
+    ),
+    get_relative_download_path=get_relative_download_path,
+    build_managed_file_url=build_managed_file_url,
+    format_relative_path_for_user=format_relative_path_for_user,
 )
 
 
@@ -4225,6 +4115,18 @@ JOB_VIEW_SERVICE = JobViewService(
 
 def filter_jobs_for_viewer(jobs, scope_username=""):
     return JOB_VIEW_SERVICE.filter_jobs_for_viewer(jobs, scope_username=scope_username)
+
+
+def delete_job_record(job_id):
+    return DOWNLOAD_JOBS_SERVICE.delete_job(job_id)
+
+
+def delete_managed_download_file(relative_path, storage_kind="video", owner_username=None):
+    return DOWNLOAD_JOBS_SERVICE.delete_managed_file(
+        relative_path,
+        storage_kind=storage_kind,
+        owner_username=owner_username,
+    )
 
 
 def get_server_files(scope_username=""):
@@ -7183,19 +7085,9 @@ register_download_routes(app, {
     "normalize_storage_kind": normalize_storage_kind,
     "create_job": create_job,
     "build_download_filename": build_download_filename,
-    "DOWNLOAD_LOCK": DOWNLOAD_LOCK,
-    "DOWNLOAD_JOBS": DOWNLOAD_JOBS,
-    "JOB_CANCEL_EVENTS": JOB_CANCEL_EVENTS,
-    "can_access_owner": can_access_owner,
-    "DEFAULT_ADMIN_USERNAME": DEFAULT_ADMIN_USERNAME,
     "mark_job_cancel_requested": mark_job_cancel_requested,
-    "write_download_jobs_locked": write_download_jobs_locked,
-    "safe_relative_download_path": safe_relative_download_path,
-    "parse_managed_relative_path": parse_managed_relative_path,
-    "normalize_username": normalize_username,
-    "resolve_download_path": resolve_download_path,
-    "cleanup_empty_download_dirs": cleanup_empty_download_dirs,
-    "sync_dlna_runtime_safe": sync_dlna_runtime_safe,
+    "delete_job": delete_job_record,
+    "delete_managed_file": delete_managed_download_file,
     "build_m3u": build_m3u,
     "stream_upstream_response": stream_upstream_response,
     "build_intermediate_download_filename": build_intermediate_download_filename,

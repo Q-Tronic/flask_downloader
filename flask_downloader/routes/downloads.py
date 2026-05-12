@@ -24,19 +24,9 @@ def register_download_routes(app, deps):
     normalize_storage_kind = deps["normalize_storage_kind"]
     create_job = deps["create_job"]
     build_download_filename = deps["build_download_filename"]
-    DOWNLOAD_LOCK = deps["DOWNLOAD_LOCK"]
-    DOWNLOAD_JOBS = deps["DOWNLOAD_JOBS"]
-    JOB_CANCEL_EVENTS = deps["JOB_CANCEL_EVENTS"]
-    can_access_owner = deps["can_access_owner"]
-    DEFAULT_ADMIN_USERNAME = deps["DEFAULT_ADMIN_USERNAME"]
     mark_job_cancel_requested = deps["mark_job_cancel_requested"]
-    write_download_jobs_locked = deps["write_download_jobs_locked"]
-    safe_relative_download_path = deps["safe_relative_download_path"]
-    parse_managed_relative_path = deps["parse_managed_relative_path"]
-    normalize_username = deps["normalize_username"]
-    resolve_download_path = deps["resolve_download_path"]
-    cleanup_empty_download_dirs = deps["cleanup_empty_download_dirs"]
-    sync_dlna_runtime_safe = deps["sync_dlna_runtime_safe"]
+    delete_job = deps["delete_job"]
+    delete_managed_file = deps["delete_managed_file"]
     build_m3u = deps["build_m3u"]
     stream_upstream_response = deps["stream_upstream_response"]
     build_intermediate_download_filename = deps["build_intermediate_download_filename"]
@@ -207,16 +197,10 @@ def register_download_routes(app, deps):
         if auth_error:
             return auth_error
 
-        with DOWNLOAD_LOCK:
-            job = DOWNLOAD_JOBS.get(job_id)
-            if not job:
-                return jsonify({"ok": False, "error": "Nie znaleziono zadania."}), 404
-            if not can_access_owner(job.get("owner_username") or DEFAULT_ADMIN_USERNAME):
-                return jsonify({"ok": False, "error": "Nie masz dostępu do tego zadania."}), 403
-
         ok, message = mark_job_cancel_requested(job_id)
         if not ok:
-            return jsonify({"ok": False, "error": message}), 409
+            status_code = 404 if "Nie znaleziono zadania" in message else 403 if "Nie masz dostępu" in message else 409
+            return jsonify({"ok": False, "error": message}), status_code
 
         return jsonify({"ok": True, "message": message})
 
@@ -226,20 +210,9 @@ def register_download_routes(app, deps):
         if auth_error:
             return auth_error
 
-        with DOWNLOAD_LOCK:
-            job = DOWNLOAD_JOBS.get(job_id)
-            if not job:
-                return jsonify({"ok": False, "error": "Nie znaleziono zadania."}), 404
-
-            if not can_access_owner(job.get("owner_username") or DEFAULT_ADMIN_USERNAME):
-                return jsonify({"ok": False, "error": "Nie masz dostępu do tego zadania."}), 403
-
-            if job.get("status") in ("queued", "downloading"):
-                return jsonify({"ok": False, "error": "Najpierw przerwij aktywne pobieranie."}), 409
-
-            del DOWNLOAD_JOBS[job_id]
-            JOB_CANCEL_EVENTS.pop(job_id, None)
-            write_download_jobs_locked()
+        ok, message, status_code = delete_job(job_id)
+        if not ok:
+            return jsonify({"ok": False, "error": message}), status_code
 
         return jsonify({"ok": True})
 
@@ -253,52 +226,14 @@ def register_download_routes(app, deps):
             return jsonify({"ok": False, "error": "Wymagany JSON."}), 400
 
         payload = request.get_json(silent=True) or {}
-        relative_path = safe_relative_download_path(payload.get("relative_path") or payload.get("filename") or "")
-        parsed_relative = parse_managed_relative_path(relative_path)
-        owner_username = normalize_username(
-            (parsed_relative or {}).get("owner_username")
-            or payload.get("owner_username")
-            or get_current_username()
-            or DEFAULT_ADMIN_USERNAME
+        ok, message, status_code = delete_managed_file(
+            payload.get("relative_path") or payload.get("filename") or "",
+            storage_kind=payload.get("storage_kind") or "video",
+            owner_username=payload.get("owner_username") or get_current_username(),
         )
-        storage_kind = normalize_storage_kind((parsed_relative or {}).get("storage_kind") or payload.get("storage_kind") or "video")
-
-        ok, message = ensure_share_ready(auto_remount=True)
         if not ok:
-            return jsonify({"ok": False, "error": "Udział sieciowy offline. %s" % message}), 503
-
-        if not relative_path:
-            return jsonify({"ok": False, "error": "Brak ścieżki pliku."}), 400
-
-        if not can_access_owner(owner_username):
-            return jsonify({"ok": False, "error": "Nie masz dostępu do tego pliku."}), 403
-
-        path = resolve_download_path(relative_path, storage_kind, owner_username=owner_username)
-        if not path:
-            return jsonify({"ok": False, "error": "Nieprawidłowa ścieżka pliku."}), 400
-
-        if not os.path.isfile(path):
-            return jsonify({"ok": False, "error": "Plik nie istnieje."}), 404
-
-        try:
-            os.remove(path)
-            cleanup_empty_download_dirs(path)
-
-            with DOWNLOAD_LOCK:
-                for job in DOWNLOAD_JOBS.values():
-                    if normalize_storage_kind(job.get("storage_kind") or "video") != storage_kind:
-                        continue
-                    if normalize_username(job.get("owner_username") or DEFAULT_ADMIN_USERNAME) != owner_username:
-                        continue
-                    if job.get("filepath") == path or safe_relative_download_path(job.get("relative_path")) == relative_path:
-                        job["filepath"] = ""
-                        job["relative_path"] = ""
-                write_download_jobs_locked()
-
-            sync_dlna_runtime_safe(restart_service_if_active=False)
-            return jsonify({"ok": True})
-        except Exception as exc:
-            return jsonify({"ok": False, "error": str(exc)}), 500
+            return jsonify({"ok": False, "error": message}), status_code
+        return jsonify({"ok": True})
 
     @app.route("/playlist", methods=["GET"])
     def playlist():
