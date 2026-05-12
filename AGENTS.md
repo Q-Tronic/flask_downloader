@@ -123,6 +123,8 @@
   - `<username>/Audio/Wszystkie Pliki`
   - `<username>/Audio/YYYY-MM-DD`
 - Root użytkownika w DLNA ma pokazywać tylko pliki należące do tego użytkownika, pogrupowane na `Video` i `Audio`, a potem na `Wszystkie Pliki` i foldery dat.
+- W rootach użytkownika DLNA nie wracamy do pomocniczego folderu `Pozostałe`; pliki bez segmentu daty mają trafiać tylko do `Wszystkie Pliki`.
+- `Wszystkie Pliki` w rootach użytkownika powinno być prezentowane przed folderami dat.
 - Kolekcje DLNA są globalne i współdzielone między klientami.
 - Jedno medium może należeć do wielu kolekcji.
 - Musi istnieć wbudowana kolekcja `Wszystkie aktywne media`, która daje klientowi dostęp do całej aktywnej biblioteki DLNA.

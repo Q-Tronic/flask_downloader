@@ -3519,13 +3519,31 @@ function dlnaGetRootMeta(parts) {
   return { title: rootKey || 'Pozostałe', kind: 'collection' };
 }
 
-function dlnaCreateNamedContainer(title) {
+function dlnaBuildContainerSortKey(title, depth) {
+  var normalizedTitle = String(title || '');
+  if (depth >= 2 && normalizedTitle === 'Wszystkie Pliki') {
+    return '0000_Wszystkie Pliki';
+  }
+  if (depth >= 2 && /^\\d{4}-\\d{2}-\\d{2}$/.test(normalizedTitle)) {
+    return '1000_' + normalizedTitle;
+  }
+  if (depth === 0) {
+    return '2000_' + normalizedTitle.toLowerCase();
+  }
+  if (depth === 1) {
+    return '3000_' + normalizedTitle.toLowerCase();
+  }
+  return '4000_' + normalizedTitle.toLowerCase();
+}
+
+function dlnaCreateNamedContainer(title, depth) {
   return {
     title: title,
     objectType: OBJECT_TYPE_CONTAINER,
     searchable: true,
     upnpclass: UPNP_CLASS_CONTAINER,
-    metaData: {}
+    metaData: {},
+    sortKey: dlnaBuildContainerSortKey(title, depth || 0)
   };
 }
 
@@ -3548,7 +3566,7 @@ function dlnaBuildContainerDefs(parts) {
   }
   var defs = [];
   for (var idx = 0; idx < titles.length; idx++) {
-    defs.push(dlnaCreateNamedContainer(titles[idx]));
+    defs.push(dlnaCreateNamedContainer(titles[idx], idx));
   }
   return defs;
 }
@@ -3636,7 +3654,12 @@ function dlnaLegacyBuildChain(obj) {
 }
 
 function dlnaLegacyAddByCollection(obj) {
-  obj.sortKey = '';
+  var parts = dlnaGetRelativeParts(obj.location);
+  if (parts.length > 2 && parts[2] === 'Wszystkie Pliki') {
+    obj.sortKey = '0000_' + (obj.title || dlnaBasename(obj.location));
+  } else {
+    obj.sortKey = '';
+  }
   obj.title = obj.title || dlnaBasename(obj.location);
   addCdsObject(obj, createContainerChain(dlnaLegacyBuildChain(obj)), UPNP_CLASS_CONTAINER);
 }
@@ -4596,12 +4619,12 @@ def rebuild_dlna_export_tree(dlna_config=None, files=None):
             storage_kind = normalize_storage_kind(item.get("storage_kind") or "video")
             storage_dir_name = "Audio" if storage_kind == "audio" else "Video"
             user_relative_path = safe_relative_download_path(item.get("user_relative_path") or "")
-            date_bucket = "Pozostałe"
+            bucket_names = ["Wszystkie Pliki"]
             if user_relative_path:
                 first_segment = user_relative_path.split("/", 1)[0]
                 if re.match(r"^\d{4}-\d{2}-\d{2}$", first_segment):
-                    date_bucket = first_segment
-            for bucket_name in ("Wszystkie Pliki", date_bucket):
+                    bucket_names.append(first_segment)
+            for bucket_name in bucket_names:
                 export_dir_key = "%s/%s/%s" % (root_dir_name, storage_dir_name, bucket_name)
                 used_names = used_names_by_export_dir.setdefault(export_dir_key.lower(), set())
                 export_file_name = build_dlna_export_link_name(item, used_names)
