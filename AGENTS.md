@@ -85,12 +85,15 @@
 - Projekt ma zawierać skrypt instalacyjny dla Debiana 10+ w `scripts/install.sh`.
 - Instalator ma:
   - pytać o port aplikacji z timeoutem `30s` i domyślnym `9999`,
+  - walidować zakres portu i wykrywać konflikt zajętego portu, ale pozwalać na ponowne uruchomienie instalatora dla tej samej istniejącej instancji na tym samym porcie,
   - tworzyć użytkownika Linux dla usługi,
   - tworzyć `.env`,
   - pytać o hasło pierwszego użytkownika `admin`,
   - hashować to hasło przed zapisaniem do `data/users.json`,
+  - honorować wartości podane przez argumenty CLI albo zmienne środowiskowe bez ponownego dopytywania o te same pola,
   - nie nadpisywać istniejących danych aplikacji przy ponownym uruchomieniu,
-  - pokazywać czytelny, kolorowy postęp i końcowe podsumowanie.
+  - pokazywać czytelny, kolorowy postęp i końcowe podsumowanie,
+  - trzymać szczegółowe logi instalacji w osobnym pliku zamiast zalewać terminal pełnym outputem `apt` i `pip`.
 - Projekt ma zawierać skrypt deploy przez SSH, który robi backup kodu, nie narusza `data/` ani `.env` i restartuje usługę po wdrożeniu.
 
 ## DLNA

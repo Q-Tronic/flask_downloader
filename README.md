@@ -70,13 +70,30 @@ Przykład:
 sudo bash scripts/install.sh
 ```
 
+Przykład nieinteraktywny:
+```bash
+export FLASK_DOWNLOADER_ADMIN_PASSWORD='TwojeHasloAdmina'
+sudo bash scripts/install.sh \
+  --non-interactive \
+  --repo-url https://github.com/Q-Tronic/flask_downloader.git \
+  --branch main \
+  --app-dir /opt/flask_downloader \
+  --storage-root /srv/flask_downloader/share \
+  --user flaskdl \
+  --group flaskdl \
+  --port 9999
+```
+
 Instalator:
 - wykrywa Debiana 10+
 - pyta o port aplikacji z timeoutem 30 sekund i domyślnym `9999`
+- waliduje zakres portu i pilnuje konfliktów
 - tworzy użytkownika Linux dla usługi
 - tworzy `.env`
 - tworzy pierwszego administratora aplikacji
 - nie nadpisuje istniejących danych w `data/`
+- przy reinstalacji zostawia istniejące `.env` i `data/*.json`
+- zapisuje szczegółowy log instalacji domyślnie do `/tmp/flask_downloader_install.log`
 
 ## Aktualizacja / deploy
 Skrypty pomocnicze:

@@ -84,6 +84,7 @@ from flask_downloader.routes.downloads import register_download_routes
 from flask_downloader.routes.main import register_main_routes
 from flask_downloader.routes.settings import register_settings_routes
 from flask_downloader.routes.users import register_user_management_routes
+from flask_downloader.services.maintenance_service import MaintenanceTaskService
 from flask_downloader.stores.config_store import (
     load_app_config as config_store_load_app_config,
     write_app_config as config_store_write_app_config,
@@ -231,6 +232,12 @@ MAINTENANCE_TASKS = {
     "ffmpeg_install": create_maintenance_task_state("Instalacja ffmpeg"),
     "dlna_install": create_maintenance_task_state("Instalacja serwera DLNA"),
 }
+MAINTENANCE_SERVICE = MaintenanceTaskService(
+    MAINTENANCE_TASKS,
+    MAINTENANCE_TASKS_LOCK,
+    create_maintenance_task_state,
+    lambda ts: format_ts(ts),
+)
 YTDLP_SCHEDULER_LOCK = threading.Lock()
 YTDLP_SCHEDULER_STARTED = False
 YTDLP_SERVICES_LOCK = threading.Lock()
@@ -3050,141 +3057,35 @@ def build_dlna_json_response(ok=True, message="", kind="success", status_code=20
 
 
 def clamp_progress_percent(value):
-    try:
-        return max(0.0, min(100.0, float(value)))
-    except Exception:
-        return None
+    return MAINTENANCE_SERVICE.clamp_progress_percent(value)
 
 
 def get_maintenance_task_status_kind(status):
-    if status == "running":
-        return "queued"
-    if status == "success":
-        return "success"
-    if status == "error":
-        return "error"
-    return "muted"
+    return MAINTENANCE_SERVICE.get_status_kind(status)
 
 
 def serialize_maintenance_task_state(task_key, task):
-    snapshot = dict(task or {})
-    progress_percent = clamp_progress_percent(snapshot.get("progress_percent"))
-    started_at = float(snapshot.get("started_at") or 0.0)
-    finished_at = float(snapshot.get("finished_at") or 0.0)
-    status = str(snapshot.get("status") or "idle").strip() or "idle"
-    visible = bool(snapshot.get("visible")) or status in ("running", "success", "error")
-
-    return {
-        "task_key": task_key,
-        "title": str(snapshot.get("title") or "").strip(),
-        "status": status,
-        "status_kind": get_maintenance_task_status_kind(status),
-        "status_label": str(snapshot.get("status_label") or "").strip() or "Brak aktywnego zadania",
-        "progress_percent": progress_percent,
-        "detail": str(snapshot.get("detail") or "").strip(),
-        "message": str(snapshot.get("message") or "").strip(),
-        "started_at": started_at,
-        "started_at_text": format_ts(started_at) if started_at else "",
-        "finished_at": finished_at,
-        "finished_at_text": format_ts(finished_at) if finished_at else "",
-        "visible": visible,
-        "active": status == "running",
-        "done": status in ("success", "error"),
-    }
+    return MAINTENANCE_SERVICE.serialize_task_state(task_key, task)
 
 
 def get_maintenance_task_snapshot(task_key):
-    with MAINTENANCE_TASKS_LOCK:
-        task = dict(MAINTENANCE_TASKS.get(task_key) or create_maintenance_task_state(task_key))
-    return serialize_maintenance_task_state(task_key, task)
+    return MAINTENANCE_SERVICE.get_task_snapshot(task_key)
 
 
 def get_all_maintenance_task_snapshots():
-    with MAINTENANCE_TASKS_LOCK:
-        raw_tasks = {
-            key: dict(value)
-            for key, value in MAINTENANCE_TASKS.items()
-        }
-
-    return {
-        key: serialize_maintenance_task_state(key, value)
-        for key, value in raw_tasks.items()
-    }
+    return MAINTENANCE_SERVICE.get_all_task_snapshots()
 
 
 def update_maintenance_task_state(task_key, **updates):
-    with MAINTENANCE_TASKS_LOCK:
-        task = MAINTENANCE_TASKS.setdefault(task_key, create_maintenance_task_state(task_key))
-        task.update(updates)
-
-        if "progress_percent" in updates:
-            task["progress_percent"] = clamp_progress_percent(task.get("progress_percent"))
-        if "visible" not in updates and task.get("status") in ("running", "success", "error"):
-            task["visible"] = True
-
-        snapshot = dict(task)
-
-    return serialize_maintenance_task_state(task_key, snapshot)
+    return MAINTENANCE_SERVICE.update_task_state(task_key, **updates)
 
 
 def finish_maintenance_task(task_key, ok, message):
-    previous = get_maintenance_task_snapshot(task_key)
-    progress_percent = previous["progress_percent"]
-
-    if ok:
-        progress_percent = 100.0
-    elif progress_percent is None:
-        progress_percent = 0.0
-
-    return update_maintenance_task_state(
-        task_key,
-        status="success" if ok else "error",
-        status_label="Zakończono powodzeniem" if ok else "Zakończono błędem",
-        progress_percent=progress_percent,
-        detail=str(message or "").strip(),
-        message=str(message or "").strip(),
-        finished_at=time.time(),
-        visible=True,
-    )
+    return MAINTENANCE_SERVICE.finish_task(task_key, ok, message)
 
 
 def start_maintenance_task(task_key, title, worker):
-    with MAINTENANCE_TASKS_LOCK:
-        current = dict(MAINTENANCE_TASKS.get(task_key) or create_maintenance_task_state(title))
-        if str(current.get("status") or "").strip() == "running":
-            return False, serialize_maintenance_task_state(task_key, current)
-
-        MAINTENANCE_TASKS[task_key] = {
-            "title": title,
-            "status": "running",
-            "status_label": "Przygotowanie",
-            "progress_percent": 0.0,
-            "detail": "Uruchamianie zadania...",
-            "started_at": time.time(),
-            "finished_at": 0.0,
-            "visible": True,
-            "message": "",
-        }
-
-    def runner():
-        try:
-            ok, message = worker(
-                lambda **kwargs: update_maintenance_task_state(task_key, **kwargs)
-            )
-        except Exception as exc:
-            ok = False
-            message = str(exc) or "Nieznany błąd zadania administracyjnego."
-
-        finish_maintenance_task(task_key, ok, message)
-
-    thread = threading.Thread(
-        target=runner,
-        name="maintenance-%s" % task_key,
-        daemon=True,
-    )
-    thread.start()
-
-    return True, get_maintenance_task_snapshot(task_key)
+    return MAINTENANCE_SERVICE.start_task(task_key, title, worker)
 
 
 def get_settings_maintenance_state():

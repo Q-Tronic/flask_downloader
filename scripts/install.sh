@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TOTAL_STEPS=10
+TOTAL_STEPS=11
 CURRENT_STEP=0
+INSTALL_LOG="${FLASK_DOWNLOADER_INSTALL_LOG:-/tmp/flask_downloader_install.log}"
 
 C_RESET="\033[0m"
 C_BOLD="\033[1m"
@@ -25,6 +26,13 @@ SERVICE_NAME_DEFAULT="flask-downloader"
 DLNA_SERVICE_NAME_DEFAULT="flask-downloader-dlna"
 DLNA_PORT_DEFAULT="49152"
 DLNA_CHANNEL_DEFAULT="latest"
+NON_INTERACTIVE=0
+ADMIN_PASSWORD="${FLASK_DOWNLOADER_ADMIN_PASSWORD:-}"
+APP_DIR_FROM_ARG=0
+STORAGE_ROOT_FROM_ARG=0
+APP_USER_FROM_ARG=0
+APP_GROUP_FROM_ARG=0
+APP_PORT_FROM_ARG=0
 
 REPO_URL="$REPO_URL_DEFAULT"
 BRANCH="$BRANCH_DEFAULT"
@@ -64,6 +72,20 @@ log_warn() {
 
 log_fail() {
     printf "${C_RED}ERR${C_RESET}  %s\n" "$1" >&2
+}
+
+run_logged() {
+    local description="$1"
+    shift
+
+    log_info "$description"
+    if "$@" >>"$INSTALL_LOG" 2>&1; then
+        return 0
+    fi
+
+    log_fail "${description}. Szczegóły: ${INSTALL_LOG}"
+    tail -n 40 "$INSTALL_LOG" >&2 || true
+    exit 1
 }
 
 begin_step() {
@@ -139,6 +161,76 @@ prompt_admin_password() {
     done
 }
 
+port_is_available() {
+    local port="$1"
+    if command -v ss >/dev/null 2>&1; then
+        if ss -ltnH "( sport = :${port} )" 2>/dev/null | grep -q .; then
+            return 1
+        fi
+        return 0
+    fi
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        return 0
+    fi
+
+    python3 - "$port" <<'PY'
+import socket
+import sys
+
+port = int(sys.argv[1])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.bind(("0.0.0.0", port))
+except OSError:
+    raise SystemExit(1)
+finally:
+    sock.close()
+raise SystemExit(0)
+PY
+}
+
+validate_port_value() {
+    local port="$1"
+    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    (( port >= 1 && port <= 65535 )) || return 1
+    return 0
+}
+
+resolve_install_value() {
+    local current_value="$1"
+    local was_set="$2"
+    local prompt="$3"
+    local default_value="$4"
+    local timeout_seconds="${5:-}"
+
+    if [[ "$was_set" -eq 1 || "$NON_INTERACTIVE" -eq 1 ]]; then
+        printf "%s" "$current_value"
+        return
+    fi
+
+    if [[ -n "$timeout_seconds" ]]; then
+        prompt_timeout_default "$prompt" "$default_value" "$timeout_seconds"
+        return
+    fi
+
+    prompt_default "$prompt" "$default_value"
+}
+
+current_install_uses_port() {
+    local port="$1"
+    local env_file="$APP_DIR/.env"
+    local configured_port=""
+
+    if [[ ! -f "$env_file" ]]; then
+        return 1
+    fi
+
+    configured_port="$(awk -F= '/^FLASK_DOWNLOADER_PORT=/{print $2}' "$env_file" | tail -n 1 | tr -d '\r' | xargs)"
+    [[ -n "$configured_port" && "$configured_port" == "$port" ]]
+}
+
 ensure_group_and_user() {
     if ! getent group "$APP_GROUP" >/dev/null 2>&1; then
         groupadd --system "$APP_GROUP"
@@ -146,6 +238,10 @@ ensure_group_and_user() {
     if ! id -u "$APP_USER" >/dev/null 2>&1; then
         useradd --system --create-home --home-dir "/home/$APP_USER" --gid "$APP_GROUP" --shell /usr/sbin/nologin "$APP_USER"
     fi
+}
+
+ensure_git_safe_directory() {
+    git config --global --add safe.directory "$APP_DIR" >/dev/null 2>&1 || true
 }
 
 generate_secret_key() {
@@ -285,6 +381,7 @@ show_summary() {
     printf "${C_MUTED}Plik środowiskowy:${C_RESET} %s/.env\n" "$APP_DIR"
     printf "${C_MUTED}Dane aplikacji:${C_RESET} %s/data\n" "$APP_DIR"
     printf "${C_MUTED}Storage użytkowników:${C_RESET} %s/flask_downloader_users\n" "$STORAGE_ROOT"
+    printf "${C_MUTED}Log instalacji:${C_RESET} %s\n" "$INSTALL_LOG"
     printf "${C_MUTED}Status usługi:${C_RESET} "
     systemctl is-active "${SERVICE_NAME_DEFAULT}.service" || true
 }
@@ -301,23 +398,36 @@ while [[ $# -gt 0 ]]; do
             ;;
         --app-dir)
             APP_DIR="$2"
+            APP_DIR_FROM_ARG=1
             shift 2
             ;;
         --storage-root)
             STORAGE_ROOT="$2"
+            STORAGE_ROOT_FROM_ARG=1
             shift 2
             ;;
         --user)
             APP_USER="$2"
+            APP_USER_FROM_ARG=1
             shift 2
             ;;
         --group)
             APP_GROUP="$2"
+            APP_GROUP_FROM_ARG=1
             shift 2
             ;;
         --port)
             APP_PORT="$2"
+            APP_PORT_FROM_ARG=1
             shift 2
+            ;;
+        --admin-password)
+            ADMIN_PASSWORD="$2"
+            shift 2
+            ;;
+        --non-interactive|--yes)
+            NON_INTERACTIVE=1
+            shift
             ;;
         *)
             log_fail "Nieznany parametr: $1"
@@ -327,6 +437,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 print_banner
+: > "$INSTALL_LOG"
 
 begin_step "Wykrywanie systemu"
 require_root
@@ -334,22 +445,47 @@ detect_debian
 log_ok "Wykryto Debian ${DEBIAN_MAJOR}."
 
 begin_step "Pobranie ustawień instalacji"
-APP_DIR="$(prompt_default 'Katalog aplikacji' "$APP_DIR")"
-STORAGE_ROOT="$(prompt_default 'Katalog bazowy danych użytkowników' "$STORAGE_ROOT")"
-APP_USER="$(prompt_default 'Użytkownik Linux dla usługi' "$APP_USER")"
-APP_GROUP="$(prompt_default 'Grupa Linux dla usługi' "$APP_GROUP")"
-APP_PORT="$(prompt_timeout_default 'Port aplikacji' "$APP_PORT" 30)"
-while ! [[ "$APP_PORT" =~ ^[0-9]+$ ]] || (( APP_PORT < 1 || APP_PORT > 65535 )); do
+APP_DIR="$(resolve_install_value "$APP_DIR" "$APP_DIR_FROM_ARG" 'Katalog aplikacji' "$APP_DIR_DEFAULT")"
+STORAGE_ROOT="$(resolve_install_value "$STORAGE_ROOT" "$STORAGE_ROOT_FROM_ARG" 'Katalog bazowy danych użytkowników' "$STORAGE_ROOT_DEFAULT")"
+APP_USER="$(resolve_install_value "$APP_USER" "$APP_USER_FROM_ARG" 'Użytkownik Linux dla usługi' "$APP_USER_DEFAULT")"
+APP_GROUP="$(resolve_install_value "$APP_GROUP" "$APP_GROUP_FROM_ARG" 'Grupa Linux dla usługi' "$APP_GROUP_DEFAULT")"
+APP_PORT="$(resolve_install_value "$APP_PORT" "$APP_PORT_FROM_ARG" 'Port aplikacji' "$APP_PORT_DEFAULT" 30)"
+while ! validate_port_value "$APP_PORT"; do
+    if [[ "$NON_INTERACTIVE" -eq 1 || "$APP_PORT_FROM_ARG" -eq 1 ]]; then
+        log_fail "Port musi być liczbą z zakresu 1-65535."
+        exit 1
+    fi
     log_warn "Port musi być liczbą z zakresu 1-65535."
     APP_PORT="$(prompt_default 'Port aplikacji' "$APP_PORT_DEFAULT")"
 done
-prompt_admin_password
+while ! port_is_available "$APP_PORT"; do
+    if current_install_uses_port "$APP_PORT"; then
+        break
+    fi
+    if [[ "$NON_INTERACTIVE" -eq 1 || "$APP_PORT_FROM_ARG" -eq 1 ]]; then
+        log_fail "Port ${APP_PORT} jest już zajęty."
+        exit 1
+    fi
+    log_warn "Port ${APP_PORT} jest już zajęty."
+    APP_PORT="$(prompt_default 'Port aplikacji' "$APP_PORT_DEFAULT")"
+done
+if [[ -n "$ADMIN_PASSWORD" ]]; then
+    if [[ "${#ADMIN_PASSWORD}" -lt 4 ]]; then
+        log_fail "Hasło admina musi mieć co najmniej 4 znaki."
+        exit 1
+    fi
+elif [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+    log_fail "W trybie nieinteraktywnym podaj hasło przez FLASK_DOWNLOADER_ADMIN_PASSWORD albo --admin-password."
+    exit 1
+else
+    prompt_admin_password
+fi
 log_ok "Zebrano ustawienia instalacyjne."
 
 begin_step "Instalacja pakietów systemowych"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y git ca-certificates curl python3 python3-venv python3-pip
+run_logged "Odświeżam listę pakietów apt" apt-get update -y
+run_logged "Instaluję pakiety systemowe" apt-get install -y git ca-certificates curl python3 python3-venv python3-pip
 log_ok "Pakiety systemowe są gotowe."
 
 begin_step "Tworzenie użytkownika i uprawnień"
@@ -361,24 +497,26 @@ log_ok "Użytkownik i katalogi systemowe są gotowe."
 
 begin_step "Pobranie kodu aplikacji"
 if [[ -d "$APP_DIR/.git" ]]; then
-    git -C "$APP_DIR" fetch --all --prune
-    git -C "$APP_DIR" checkout "$BRANCH"
-    git -C "$APP_DIR" pull --ff-only origin "$BRANCH"
+    ensure_git_safe_directory
+    run_logged "Odświeżam lokalne repozytorium aplikacji" git -C "$APP_DIR" fetch --all --prune
+    run_logged "Przełączam repozytorium na gałąź ${BRANCH}" git -C "$APP_DIR" checkout "$BRANCH"
+    run_logged "Pobieram najnowszy kod z origin/${BRANCH}" git -C "$APP_DIR" pull --ff-only origin "$BRANCH"
 else
     if [[ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name backups 2>/dev/null)" ]]; then
         log_fail "Katalog aplikacji nie jest pusty i nie wygląda na repo Git: $APP_DIR"
         exit 1
     fi
     rm -rf "$APP_DIR"
-    git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
+    run_logged "Klonuję kod aplikacji" git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
+    ensure_git_safe_directory
 fi
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
 log_ok "Kod aplikacji jest gotowy."
 
 begin_step "Tworzenie środowiska Python"
-python3 -m venv "$APP_DIR/.venv"
-"$APP_DIR/.venv/bin/pip" install --upgrade pip
-"$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
+run_logged "Tworzę środowisko virtualenv" python3 -m venv "$APP_DIR/.venv"
+run_logged "Aktualizuję pip" "$APP_DIR/.venv/bin/pip" install --upgrade pip
+run_logged "Instaluję zależności Pythona" "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 log_ok "Środowisko Python zostało przygotowane."
 
 begin_step "Tworzenie .env"
@@ -387,17 +525,17 @@ chown "$APP_USER:$APP_GROUP" "$APP_DIR/.env" 2>/dev/null || true
 log_ok "Plik .env jest gotowy."
 
 begin_step "Inicjalizacja danych aplikacji"
-initialize_data_files
+run_logged "Tworzę początkowe pliki danych aplikacji" initialize_data_files
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/data"
 log_ok "Pliki data/config.json, data/jobs.json i data/users.json są gotowe."
 
 begin_step "Instalacja usługi systemd"
-install_systemd_service
+run_logged "Instaluję i restartuję usługę systemd" install_systemd_service
 log_ok "Usługa systemd została zainstalowana."
 
 begin_step "Weryfikacja działania"
 sleep 2
-systemctl --no-pager --full status "${SERVICE_NAME_DEFAULT}.service" >/dev/null
+run_logged "Sprawdzam status usługi ${SERVICE_NAME_DEFAULT}.service" systemctl --no-pager --full status "${SERVICE_NAME_DEFAULT}.service"
 log_ok "Usługa Flask Downloader działa poprawnie."
 
 begin_step "Podsumowanie"

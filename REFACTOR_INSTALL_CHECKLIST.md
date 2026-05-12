@@ -181,7 +181,7 @@
 - [x] Wydzielić logikę konfiguracji do `flask_downloader/stores/config_store.py`.
 - [ ] Wydzielić ffmpeg do `flask_downloader/services/ffmpeg_service.py`.
 - [ ] Wydzielić yt-dlp do `flask_downloader/services/ytdlp_service.py`.
-- [ ] Wydzielić maintenance taski i progres do `flask_downloader/services/maintenance_service.py`.
+- [x] Wydzielić maintenance taski i progres do `flask_downloader/services/maintenance_service.py`.
 - [ ] Wydzielić restart usługi Flask do osobnego helpera/system service.
 - [ ] Utrzymać polling stanu kart ustawień.
 - [ ] Zachować AJAX:
@@ -315,7 +315,7 @@
 - [x] Pytać o port aplikacji:
   - timeout `30s`
   - domyślnie `9999`
-- [ ] walidacja zakresu i zajętości portu
+- [x] walidacja zakresu i zajętości portu
 - [x] Pytać o hasło pierwszego użytkownika `admin`.
 - [x] Wymagać powtórzenia hasła admina.
 - [x] Hashować hasło przed zapisaniem do `users.json`.
@@ -333,9 +333,9 @@
   - lokalizacja danych
 
 ### Bramka jakości
-- [ ] Instalator działa na czystym Debianie.
-- [ ] Po instalacji aplikacja wstaje.
-- [ ] Po instalacji admin może się zalogować ustawionym hasłem.
+- [x] Instalator działa na czystym Debianie.
+- [x] Po instalacji aplikacja wstaje.
+- [x] Po instalacji admin może się zalogować ustawionym hasłem.
 
 ## Etap 13: Deploy i aktualizacje przez SSH
 - [x] Przygotować `scripts/deploy.sh`.
@@ -356,11 +356,11 @@
 - [x] Dane pozostają nienaruszone.
 
 ## Etap 14: Git i GitHub
-- [ ] Ustawić lokalne repo do finalnego commitu.
-- [ ] Zweryfikować jeszcze raz `.gitignore`.
-- [ ] Sprawdzić `git status`, czy nie łapiemy danych i sekretów.
+- [x] Ustawić lokalne repo do finalnego commitu.
+- [x] Zweryfikować jeszcze raz `.gitignore`.
+- [x] Sprawdzić `git status`, czy nie łapiemy danych i sekretów.
 - [ ] Przygotować pierwszy czysty commit po refaktoryzacji.
-- [ ] Przygotować branch `main`.
+- [x] Przygotować branch `main`.
 - [ ] Przygotować remote do GitHub.
 - [ ] Wypchnąć projekt na GitHub, jeśli autoryzacja będzie działać.
 - [ ] Jeśli push nie będzie możliwy z sesji, zostawić repo gotowe do jednego `git push`.
