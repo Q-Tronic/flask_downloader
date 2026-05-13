@@ -56,6 +56,7 @@ from flask import (
 )
 from flask_downloader.config import (
     APP_HOST as CONFIG_APP_HOST,
+    MAX_PARALLEL_DOWNLOADS_PER_USER as CONFIG_MAX_PARALLEL_DOWNLOADS_PER_USER,
     APP_PORT as CONFIG_APP_PORT,
     APP_SECRET_KEY as CONFIG_APP_SECRET_KEY,
     APP_SERVICE_NAME as CONFIG_SYSTEMD_SERVICE_NAME,
@@ -142,6 +143,7 @@ USER_STORAGE_ROOT = CONFIG_USER_STORAGE_ROOT
 DEFAULT_ADMIN_VIDEO_ROOT = os.path.join(USER_STORAGE_ROOT, DEFAULT_ADMIN_USERNAME, "video")
 DEFAULT_ADMIN_AUDIO_ROOT = os.path.join(USER_STORAGE_ROOT, DEFAULT_ADMIN_USERNAME, "audio")
 USER_STORAGE_LAYOUT_VERSION = 2
+MAX_PARALLEL_DOWNLOADS_PER_USER = CONFIG_MAX_PARALLEL_DOWNLOADS_PER_USER
 
 MOUNT_RETRY_COOLDOWN = 15
 DEFAULT_COMPLETED_JOB_RETENTION_DAYS = 3
@@ -2655,6 +2657,66 @@ def is_job_cancelled(job_id):
     return bool(event and event.is_set())
 
 
+def get_user_download_slot_snapshot(owner_username, *, include_job_id=None):
+    owner = normalize_username(owner_username or DEFAULT_ADMIN_USERNAME)
+
+    with DOWNLOAD_LOCK:
+        same_owner_jobs = [
+            dict(job)
+            for job in DOWNLOAD_JOBS.values()
+            if normalize_username(job.get("owner_username") or DEFAULT_ADMIN_USERNAME) == owner
+            and job.get("status") in ("queued", "downloading")
+        ]
+
+    same_owner_jobs.sort(
+        key=lambda item: (
+            float(item.get("created_at") or 0.0),
+            str(item.get("job_id") or ""),
+        )
+    )
+
+    active_job_ids = [
+        str(job.get("job_id") or "")
+        for job in same_owner_jobs
+        if job.get("status") == "downloading"
+    ]
+    eligible_job_ids = [
+        str(job.get("job_id") or "")
+        for job in same_owner_jobs[:MAX_PARALLEL_DOWNLOADS_PER_USER]
+    ]
+
+    return {
+        "owner_username": owner,
+        "active_count": len(active_job_ids),
+        "active_job_ids": active_job_ids,
+        "eligible_job_ids": eligible_job_ids,
+        "can_start": bool(include_job_id and str(include_job_id) in eligible_job_ids),
+    }
+
+
+def wait_for_user_download_slot(job_id, owner_username, *, poll_interval=0.5):
+    owner = normalize_username(owner_username or DEFAULT_ADMIN_USERNAME)
+
+    while True:
+        if is_job_cancelled(job_id):
+            raise DownloadCancelledError("Pobieranie anulowane podczas oczekiwania w kolejce.")
+
+        with DOWNLOAD_LOCK:
+            current_job = DOWNLOAD_JOBS.get(job_id)
+            if not current_job:
+                raise DownloadCancelledError("Zadanie zniknęło z kolejki przed rozpoczęciem pobierania.")
+            current_status = str(current_job.get("status") or "")
+
+        if current_status != "queued":
+            return
+
+        slot_state = get_user_download_slot_snapshot(owner, include_job_id=job_id)
+        if slot_state["can_start"]:
+            return
+
+        time.sleep(poll_interval)
+
+
 def mark_job_cancel_requested(job_id):
     return DOWNLOAD_JOBS_SERVICE.mark_job_cancel_requested(job_id)
 
@@ -2693,6 +2755,11 @@ def download_worker(job_id):
 
         if is_job_cancelled(job_id):
             raise DownloadCancelledError("Pobieranie anulowane przed rozpoczęciem.")
+
+        wait_for_user_download_slot(job_id, owner_username)
+
+        if is_job_cancelled(job_id):
+            raise DownloadCancelledError("Pobieranie anulowane przed przydzieleniem slotu.")
 
         ensure_download_dir_ready(storage_kind, owner_username)
 

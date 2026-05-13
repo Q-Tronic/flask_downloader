@@ -83,6 +83,7 @@
   - komunikat końcowy.
 - Pasek postępu ma aktualizować się na bieżąco bez ręcznego odświeżania strony.
 - Po zakończeniu zadania karta ma sama przejść w stan końcowy.
+- Kolejka pobrań ma ograniczać równoległe pobieranie per użytkownik; domyślnie jeden użytkownik może mieć naraz maksymalnie `3` aktywne pobrania, a reszta ma czekać w kolejce.
 
 ## Instalator i deploy
 - Projekt ma zawierać skrypt instalacyjny dla Debiana 10+ w `scripts/install.sh`.
