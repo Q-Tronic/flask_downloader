@@ -4,7 +4,8 @@ param(
     [string]$User = "root",
     [string]$Password = "",
     [string]$AppDir = "/opt/flask_downloader",
-    [string]$ServiceName = "flask-downloader"
+    [string]$ServiceName = "flask-downloader",
+    [int]$BackupRetentionCount = 5
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,6 +48,9 @@ set -euo pipefail
 mkdir -p '$AppDir/backups'
 if [ -d '$AppDir' ]; then
   tar --exclude='.venv' --exclude='data' --exclude='.env' --exclude='backups' --exclude='tools/dlna/runtime' -czf '$AppDir/backups/code-$timestamp.tgz' -C '$AppDir' .
+fi
+if [ '$BackupRetentionCount' -gt 0 ] 2>/dev/null; then
+  ls -1t '$AppDir'/backups/code-*.tgz 2>/dev/null | tail -n +$(($BackupRetentionCount + 1)) | xargs -r rm -f
 fi
 tar -xzf '$remoteArchive' -C '$AppDir'
 rm -f '$remoteArchive'
