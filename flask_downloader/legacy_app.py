@@ -2717,6 +2717,24 @@ def wait_for_user_download_slot(job_id, owner_username, *, poll_interval=0.5):
         time.sleep(poll_interval)
 
 
+def resolve_progress_component(path):
+    cleaned_path = os.path.abspath(str(path or "")).strip()
+    if not cleaned_path:
+        return "__main__", True
+
+    name = os.path.basename(cleaned_path)
+    normalized_name = re.sub(r"(?i)\.part(?:-[^\\/]+)?(?:\.part)?$", "", name)
+    normalized_name = re.sub(r"(?i)\.ytdl$", "", normalized_name)
+    match = re.search(r"(?i)\.(temp|f[0-9a-z][0-9a-z-]*)\.[^.\\/]+$", normalized_name)
+    if not match:
+        return "__main__", True
+
+    tag = str(match.group(1) or "").lower()
+    if tag == "temp":
+        return "__merge__", False
+    return tag, True
+
+
 def mark_job_cancel_requested(job_id):
     return DOWNLOAD_JOBS_SERVICE.mark_job_cancel_requested(job_id)
 
@@ -2739,6 +2757,7 @@ def download_worker(job_id):
     seen_paths = set()
     replace_paths = []
     overwrite_existing = False
+    progress_components = {}
 
     try:
         with DOWNLOAD_LOCK:
@@ -2799,7 +2818,7 @@ def download_worker(job_id):
             raise DownloadCancelledError("Pobieranie anulowane przed otwarciem strumienia.")
 
         def progress_hook(status):
-            nonlocal downloaded, total_bytes, target_path, relative_path
+            nonlocal downloaded, total_bytes, target_path, relative_path, progress_components
 
             hook_filename = status.get("filename")
             hook_tmpfilename = status.get("tmpfilename")
@@ -2813,14 +2832,51 @@ def download_worker(job_id):
                 raise DownloadCancelledError("Pobieranie zostało przerwane przez użytkownika.")
 
             status_name = status.get("status") or ""
-            downloaded = int(status.get("downloaded_bytes") or downloaded or 0)
-            total_candidate = status.get("total_bytes") or status.get("total_bytes_estimate") or total_bytes
-            total_bytes = int(total_candidate) if isinstance(total_candidate, (int, float)) else total_candidate
+            current_downloaded = int(status.get("downloaded_bytes") or 0)
+            total_candidate = status.get("total_bytes") or status.get("total_bytes_estimate")
+            current_total = int(total_candidate) if isinstance(total_candidate, (int, float)) else None
 
             current_filename = hook_filename or info_dict.get("filepath") or target_path
             if current_filename and current_filename != "-":
                 target_path = os.path.abspath(current_filename)
                 relative_path = get_relative_download_path(target_path, storage_kind, owner_username)
+
+            component_key, include_in_total = resolve_progress_component(
+                hook_tmpfilename or hook_filename or info_dict.get("filepath") or target_path
+            )
+            component_state = progress_components.setdefault(component_key, {
+                "downloaded": 0,
+                "total": None,
+                "include_in_total": include_in_total,
+            })
+            component_state["include_in_total"] = include_in_total
+            component_state["downloaded"] = max(int(component_state.get("downloaded") or 0), current_downloaded)
+            if current_total and current_total > 0:
+                previous_total = component_state.get("total")
+                component_state["total"] = max(int(previous_total or 0), current_total)
+            elif status_name == "finished" and component_state.get("downloaded"):
+                component_state["total"] = max(
+                    int(component_state.get("total") or 0),
+                    int(component_state.get("downloaded") or 0),
+                )
+
+            aggregate_downloaded = 0
+            aggregate_total = 0
+            has_known_total = False
+            for component in progress_components.values():
+                if not component.get("include_in_total", True):
+                    continue
+                part_downloaded = max(0, int(component.get("downloaded") or 0))
+                part_total = component.get("total")
+                if isinstance(part_total, int) and part_total > 0:
+                    has_known_total = True
+                    aggregate_total += part_total
+                    aggregate_downloaded += min(part_downloaded, part_total)
+                else:
+                    aggregate_downloaded += part_downloaded
+
+            downloaded = aggregate_downloaded or current_downloaded or downloaded
+            total_bytes = aggregate_total if has_known_total and aggregate_total > 0 else None
 
             progress_percent = None
             if total_bytes and downloaded is not None:
@@ -2892,6 +2948,20 @@ def download_worker(job_id):
             target_path = os.path.abspath(final_path)
             seen_paths.add(target_path)
 
+        preferred_completed_path = os.path.abspath(
+            os.path.join(
+                get_daily_download_dir(media_kind=storage_kind, owner_username=owner_username),
+                safe_filename(filename, default=os.path.basename(target_path) or "video.bin"),
+            )
+        )
+        if (
+            target_path
+            and is_temporary_download_artifact_name(os.path.basename(target_path))
+            and os.path.isfile(preferred_completed_path)
+        ):
+            target_path = preferred_completed_path
+            seen_paths.add(target_path)
+
         relative_path = get_relative_download_path(target_path, storage_kind, owner_username)
 
         actual_size = 0
@@ -2899,6 +2969,12 @@ def download_worker(job_id):
             actual_size = os.path.getsize(target_path)
         except Exception:
             actual_size = downloaded
+
+        display_total_bytes = max(
+            int(actual_size or 0),
+            int(total_bytes or 0),
+            int(downloaded or 0),
+        )
 
         if actual_size < MIN_VALID_FILE_SIZE_BYTES:
             cleanup_download_artifacts(seen_paths)
@@ -2919,7 +2995,8 @@ def download_worker(job_id):
             job_id,
             status="completed",
             status_label="Ukończone",
-            downloaded_bytes=downloaded,
+            downloaded_bytes=display_total_bytes,
+            total_bytes=display_total_bytes,
             progress_percent=100.0,
             finished_at=time.time(),
             filepath=target_path,
@@ -4210,6 +4287,7 @@ def rebuild_dlna_export_tree(dlna_config=None, files=None):
         user_files = [
             item for item in files
             if normalize_username(item.get("owner_username") or DEFAULT_ADMIN_USERNAME) == username
+            and not is_temporary_download_artifact_name(item.get("name") or "")
         ]
 
         for item in user_files:
@@ -5285,6 +5363,12 @@ def get_assignable_dlna_collections_for_current_user():
 
 
 def assign_file_to_dlna_collection(storage_kind, relative_path, collection_id, sync_runtime=True):
+    parsed_relative = parse_managed_relative_path(relative_path)
+    effective_relative_path = safe_relative_download_path(
+        (parsed_relative or {}).get("user_relative_path") or relative_path
+    )
+    if is_temporary_download_artifact_name(os.path.basename(effective_relative_path or "")):
+        raise ValueError("Nie można dodać do DLNA pliku tymczasowego z trwającego pobierania.")
     return DLNA_LIBRARY_SERVICE.assign_file_to_collection(
         storage_kind,
         relative_path,

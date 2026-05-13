@@ -234,6 +234,15 @@ class DownloadJobsService:
                 job.get("relative_path") or self._get_relative_download_path(resolved_path, storage_kind, owner_username)
             )
             if relative_path and resolved_path and os.path.exists(resolved_path):
+                if job.get("status") == "completed":
+                    try:
+                        final_size = int(os.path.getsize(resolved_path))
+                    except Exception:
+                        final_size = 0
+                    if final_size > 0:
+                        job["downloaded_bytes"] = final_size
+                        job["total_bytes"] = final_size
+                        job["progress_percent"] = 100.0
                 job["relative_path"] = relative_path
                 job["file_url"] = self._build_managed_file_url(owner_username, storage_kind, relative_path)
                 job["file_display_name"] = self._format_relative_path_for_user(

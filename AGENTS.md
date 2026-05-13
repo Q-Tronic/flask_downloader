@@ -142,6 +142,7 @@
 - Zmiana kolekcji, klientów, wpisów mediów albo ustawień serwera DLNA ma zapisywać się bez reloadu i od razu synchronizować eksport DLNA.
 - Zmiana kolekcji, klientów, przypisanych użytkowników, wpisów mediów albo ustawień serwera DLNA ma kończyć się pełnym, spójnym rebuiltem eksportu i odświeżeniem bazy Gerbera, a nie tylko częściową podmianą katalogów na żywym indeksie.
 - Usunięcie pliku z panelu lub zakończenie pobierania powinno odświeżać bibliotekę DLNA tak, żeby eksport nie rozjeżdżał się z faktycznymi plikami.
+- Eksport DLNA nie może wystawiać tymczasowych artefaktów `yt-dlp` i `ffmpeg`, takich jak `.part`, `.ytdl`, `.temp.*` czy `*.f<format>.ext`; do biblioteki mają trafiać tylko stabilne, docelowe pliki po zakończeniu pobrania/scalania.
 - Martwe wpisy DLNA, wskazujące na pliki albo foldery już nieobecne na serwerze, mają być automatycznie usuwane z konfiguracji i z widoku DLNA.
 - Klient DLNA nie ma widzieć obcych bukietów ani obcych rootów użytkowników jako pustych folderów; jeśli IP nie ma dostępu do danego rootu, ten root ma być ukryty całkowicie.
 - Dla starych wersji `Gerbera` bez nowego JS-owego layoutu backend ma wybierać kompatybilny fallback, a nie wystawiać pustą bibliotekę.

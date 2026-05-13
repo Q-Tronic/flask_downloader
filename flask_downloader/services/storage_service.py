@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from urllib.parse import quote
 
@@ -231,12 +232,13 @@ class ManagedStorageService:
 
     @staticmethod
     def is_temporary_download_artifact_name(name):
-        lower = str(name or "").lower()
+        lower = str(name or "").lower().strip()
         return (
             lower.endswith(".part")
             or ".part-" in lower
             or lower.endswith(".ytdl")
             or ".ytdl" in lower
+            or bool(re.search(r"(?i)\.(?:temp|f[0-9a-z][0-9a-z-]*)\.[^.\\/]+$", lower))
         )
 
     def get_server_files(self, scope_username=""):
