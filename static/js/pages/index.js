@@ -682,6 +682,9 @@ function handleQuickDownloadClick(event) {
     runQuickDownload(quickButton.dataset.mediaKind || "video", quickButton);
 }
 
+    initializeSourcePicker();
+}
+
 document.addEventListener("click", handleSourceServerDownloadClick);
 document.addEventListener("click", handleQuickDownloadClick);
 
@@ -693,10 +696,7 @@ if (typeof window.registerPageCleanup === "function") {
     });
 }
 
-initializeSourcePicker();
-}
-
 if (!pageData.hasResult) {
-clearSourceContextToast();
+    clearSourceContextToast();
 }
 })();
