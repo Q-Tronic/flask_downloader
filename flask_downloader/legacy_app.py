@@ -186,6 +186,7 @@ DLNA_SCRIPT_DIR = os.path.join(DLNA_CONFIG_DIR, "js")
 DLNA_COMMON_SCRIPT_DIR = os.path.join(DLNA_SCRIPT_DIR, "common")
 DLNA_CUSTOM_SCRIPT_DIR = os.path.join(DLNA_SCRIPT_DIR, "custom")
 DLNA_LEGACY_SCRIPT_DIR = os.path.join(DLNA_SCRIPT_DIR, "legacy")
+DLNA_RUNTIME_BIN_DIR = os.path.join(DLNA_RUNTIME_ROOT, "bin")
 DLNA_LOG_DIR = os.path.join(DLNA_RUNTIME_ROOT, "logs")
 DLNA_LOG_FILE = os.path.join(DLNA_LOG_DIR, "gerbera.log")
 DLNA_LOG_MAX_BYTES = 5 * 1024 * 1024
@@ -194,6 +195,8 @@ DLNA_LOG_TAIL_READ_BYTES = 256 * 1024
 DLNA_CONFIG_XML_FILE = os.path.join(DLNA_CONFIG_DIR, "config.xml")
 DLNA_VIRTUAL_LAYOUT_SCRIPT_FILE = os.path.join(DLNA_CUSTOM_SCRIPT_DIR, "zz_flask_dlna_layout.js")
 DLNA_LEGACY_IMPORT_SCRIPT_FILE = os.path.join(DLNA_LEGACY_SCRIPT_DIR, "flask_dlna_import.js")
+DLNA_RESTART_GUARD_SCRIPT_FILE = os.path.join(DLNA_RUNTIME_BIN_DIR, "dlna_restart_guard.sh")
+DLNA_RESTART_STATE_FILE = os.path.join(DLNA_HOME_DIR, "restart_backoff.env")
 GERBERA_SYSTEM_SCRIPT_DIR = os.path.join("/usr", "share", "gerbera", "js")
 DLNA_SERVICE_UNIT_FILE = os.path.join("/etc", "systemd", "system", "%s.service" % DLNA_SERVICE_NAME)
 DLNA_DEFAULT_PORT = CONFIG_DLNA_DEFAULT_PORT
@@ -3715,6 +3718,147 @@ def clear_dlna_database_files():
             pass
 
 
+def write_dlna_restart_guard_script():
+    ensure_dlna_runtime_dirs()
+    script_content = """#!/bin/bash
+set -u
+
+STATE_FILE=%s
+EXPORT_ROOT=%s
+LOG_FILE=%s
+RESET_AFTER_SEC=300
+
+mkdir -p "$(dirname "$STATE_FILE")" "$(dirname "$LOG_FILE")" "$EXPORT_ROOT"
+
+load_state() {
+  RESTART_ATTEMPT=0
+  LAST_START_TS=0
+  if [ -f "$STATE_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$STATE_FILE" || true
+  fi
+  case "${RESTART_ATTEMPT:-}" in
+    ''|*[!0-9]*) RESTART_ATTEMPT=0 ;;
+  esac
+  case "${LAST_START_TS:-}" in
+    ''|*[!0-9]*) LAST_START_TS=0 ;;
+  esac
+}
+
+save_state() {
+  cat > "$STATE_FILE" <<EOF
+RESTART_ATTEMPT=${RESTART_ATTEMPT:-0}
+LAST_START_TS=${LAST_START_TS:-0}
+EOF
+}
+
+log_line() {
+  local message="$1"
+  printf '%%s info: %%s\\n' "$(date '+%%Y-%%m-%%d %%H:%%M:%%S')" "$message" >> "$LOG_FILE"
+  echo "$message"
+}
+
+prune_broken_symlinks() {
+  if [ ! -d "$EXPORT_ROOT" ]; then
+    return 0
+  fi
+  local removed_count=0
+  while IFS= read -r broken_link; do
+    [ -n "$broken_link" ] || continue
+    rm -f "$broken_link" || true
+    removed_count=$((removed_count + 1))
+  done < <(find "$EXPORT_ROOT" -xtype l -print 2>/dev/null || true)
+  find "$EXPORT_ROOT" -depth -type d -empty -delete 2>/dev/null || true
+  if [ "$removed_count" -gt 0 ]; then
+    log_line "DLNA guard usunął $removed_count połamanych linków z eksportu przed restartem Gerbery."
+  fi
+}
+
+case "${1:-}" in
+  prestart)
+    prune_broken_symlinks
+    load_state
+    delay_seconds=0
+    if [ "${RESTART_ATTEMPT:-0}" -eq 1 ]; then
+      delay_seconds=10
+    elif [ "${RESTART_ATTEMPT:-0}" -eq 2 ]; then
+      delay_seconds=60
+    elif [ "${RESTART_ATTEMPT:-0}" -ge 3 ]; then
+      delay_seconds=1800
+    fi
+    if [ "$delay_seconds" -gt 0 ]; then
+      log_line "DLNA padła wcześniej. Automatyczna próba ${RESTART_ATTEMPT} za ${delay_seconds}s."
+      sleep "$delay_seconds"
+    fi
+    ;;
+  mark-start)
+    load_state
+    LAST_START_TS=$(date +%%s)
+    save_state
+    ;;
+  stop-post)
+    load_state
+    service_result="${SERVICE_RESULT:-}"
+    exit_code="${EXIT_CODE:-}"
+    exit_status="${EXIT_STATUS:-}"
+    now_ts=$(date +%%s)
+    runtime_seconds=0
+    if [ "${LAST_START_TS:-0}" -gt 0 ]; then
+      runtime_seconds=$((now_ts - LAST_START_TS))
+    fi
+    if [ "$service_result" = "success" ]; then
+      RESTART_ATTEMPT=0
+      LAST_START_TS=0
+      save_state
+      exit 0
+    fi
+    if [ "$runtime_seconds" -ge "$RESET_AFTER_SEC" ]; then
+      RESTART_ATTEMPT=1
+    else
+      RESTART_ATTEMPT=$(( ${RESTART_ATTEMPT:-0} + 1 ))
+      if [ "$RESTART_ATTEMPT" -lt 1 ]; then
+        RESTART_ATTEMPT=1
+      fi
+    fi
+    LAST_START_TS=0
+    save_state
+    log_line "Gerbera zatrzymała się nieoczekiwanie (SERVICE_RESULT=${service_result:-unknown}, EXIT_CODE=${exit_code:-unknown}, EXIT_STATUS=${exit_status:-unknown}, runtime=${runtime_seconds}s)."
+    ;;
+  reset)
+    RESTART_ATTEMPT=0
+    LAST_START_TS=0
+    save_state
+    ;;
+esac
+""" % (
+        shlex.quote(DLNA_RESTART_STATE_FILE),
+        shlex.quote(DLNA_EXPORT_ROOT),
+        shlex.quote(DLNA_LOG_FILE),
+    )
+    with open(DLNA_RESTART_GUARD_SCRIPT_FILE, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(script_content)
+    os.chmod(DLNA_RESTART_GUARD_SCRIPT_FILE, 0o755)
+
+
+def reset_dlna_restart_backoff_state():
+    ensure_dlna_runtime_dirs()
+    try:
+        subprocess.run(
+            ["/bin/bash", DLNA_RESTART_GUARD_SCRIPT_FILE, "reset"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except Exception:
+        try:
+            with open(DLNA_RESTART_STATE_FILE, "w", encoding="utf-8") as fh:
+                fh.write("RESTART_ATTEMPT=0\nLAST_START_TS=0\n")
+        except Exception:
+            pass
+
+
 def is_linux_runtime():
     return os.name != "nt" and sys.platform.startswith("linux")
 
@@ -4248,6 +4392,7 @@ def ensure_dlna_runtime_dirs():
         DLNA_COMMON_SCRIPT_DIR,
         DLNA_CUSTOM_SCRIPT_DIR,
         DLNA_LEGACY_SCRIPT_DIR,
+        DLNA_RUNTIME_BIN_DIR,
         DLNA_LOG_DIR,
     ):
         ensure_directory(path)
@@ -4726,6 +4871,7 @@ def write_dlna_service_unit():
         raise RuntimeError("Nie znaleziono binarki gerbera. Najpierw zainstaluj serwer DLNA.")
 
     ensure_dlna_runtime_dirs()
+    write_dlna_restart_guard_script()
     package_state = get_dlna_package_state_snapshot()
     feature_support = get_dlna_feature_support(package_state.get("current_version_raw"))
     log_arg = (
@@ -4737,8 +4883,7 @@ def write_dlna_service_unit():
 Description=Flask Downloader DLNA Server
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=45
-StartLimitBurst=3
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -4746,9 +4891,12 @@ User=%s
 Group=%s
 WorkingDirectory=%s
 Environment=GERBERA_HOME=%s
+ExecStartPre=/bin/bash %s prestart
 ExecStart=%s %s -c %s -m %s
-Restart=on-failure
-RestartSec=5
+ExecStartPost=/bin/bash %s mark-start
+ExecStopPost=/bin/bash %s stop-post
+Restart=always
+RestartSec=0
 TimeoutStartSec=120
 TimeoutStopSec=120
 KillMode=control-group
@@ -4760,10 +4908,13 @@ WantedBy=multi-user.target
         get_current_runtime_group_name(),
         APP_ROOT,
         DLNA_HOME_DIR,
+        systemd_quote_arg(DLNA_RESTART_GUARD_SCRIPT_FILE),
         systemd_quote_arg(binary_path),
         log_arg,
         systemd_quote_arg(DLNA_CONFIG_XML_FILE),
         systemd_quote_arg(DLNA_HOME_DIR),
+        systemd_quote_arg(DLNA_RESTART_GUARD_SCRIPT_FILE),
+        systemd_quote_arg(DLNA_RESTART_GUARD_SCRIPT_FILE),
     )
     with open(DLNA_SERVICE_UNIT_FILE, "w", encoding="utf-8") as fh:
         fh.write(unit_content)
@@ -4995,6 +5146,7 @@ def ensure_dlna_service_started(enable_unit=False, timeout=90, failure_label="st
 
     dlna_config = get_dlna_config_snapshot()
     ensure_no_conflicting_dlna_listener(dlna_config.get("port"), dlna_config.get("bind_ip"))
+    reset_dlna_restart_backoff_state()
     run_systemctl_command_result("reset-failed", DLNA_SERVICE_NAME, timeout=30)
     start_result = run_systemctl_command_result("start", DLNA_SERVICE_NAME, timeout=timeout)
     service_state = wait_for_dlna_service_stable(timeout=8.0)
