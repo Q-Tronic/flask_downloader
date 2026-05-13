@@ -73,7 +73,7 @@
   - `flask_downloader_users.json`
 - [x] Zachować zgodność wsteczną przy pierwszym uruchomieniu.
 - [x] Nie usuwać automatycznie starych plików root na pierwszym etapie.
-- [ ] Dodać narzędzie albo etap końcowy do uporządkowania starych plików po potwierdzeniu migracji.
+- [x] Dodać narzędzie albo etap końcowy do uporządkowania starych plików po potwierdzeniu migracji.
 - [ ] Ustalić finalny sposób wersjonowania schematu danych.
 - [x] Rozdzielić wyraźnie:
   - config store
@@ -102,12 +102,12 @@
   - `_account_panel.html`
   - `_toast.html`
   - `_page_header.html`
-- [ ] Rozdzielić CSS na pliki:
+- [x] Rozdzielić CSS na pliki:
   - `base.css`
   - `layout.css`
   - `components.css`
   - opcjonalnie `pages/*.css`
-- [ ] Rozdzielić JS na:
+- [x] Rozdzielić JS na:
   - shell wspólny
   - inicjalizacja strony głównej
   - settings
@@ -293,7 +293,7 @@
 - [x] Dodać ewentualny `data/users.example.json` tylko jeśli będzie sensowny i bezpieczny.
 - [x] Dodać `README.md`.
 - [x] Opisać instalację, update i deploy.
-- [ ] Upewnić się, że do repo nie trafią:
+- [x] Upewnić się, że do repo nie trafią:
   - prawdziwe JSON-y z danymi
   - `.env`
   - logi

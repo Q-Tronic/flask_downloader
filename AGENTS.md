@@ -16,6 +16,8 @@
 - Przy migracji ze starego układu nie wolno zgubić istniejącej konfiguracji, użytkowników ani zadań; trzeba zachować zgodność wsteczną i bezpieczne przeniesienie danych.
 - Jeśli stary rootowy `flask_downloader_config.json` nadal zawiera pełną konfigurację DLNA, a nowe `data/config.json` ma pustą sekcję `dlna`, aplikacja ma odzyskać tę sekcję z legacy configu zamiast zostawiać pustą bibliotekę.
 - HTML i CSS nie powinny wracać do wielkich stringów osadzonych w Pythonie; wspólny layout ma iść przez `templates/base.html`, a style przez pliki w `static/css/`.
+- Frontendowy JS widoków nie powinien wracać do dużych inline skryptów; wspólny shell ma siedzieć w `static/js/`, a logika konkretnych stron w `static/js/pages/`.
+- Główny arkusz stylów ma być rozdzielony przynajmniej na `static/css/base.css`, `static/css/layout.css` i `static/css/components.css`, zamiast jednego wielkiego bloku utrzymywanego na stałe.
 - Rozbijanie backendu robimy modułami: autoryzacja i użytkownicy mają trafiać do `flask_downloader/routes/` oraz `flask_downloader/stores/`, zamiast dokładania kolejnych tras CRUD z powrotem do monolitu.
 - Wspólny shell layoutu ma być cięty na partiale w `templates/partials/`, zamiast dalszego rozpychania `base.html`.
 

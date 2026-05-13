@@ -106,6 +106,22 @@ Oba skrypty:
 - nie powinny nadpisywać `.env`
 - restartują usługę aplikacji po wdrożeniu
 
+## Porządkowanie legacy JSON po migracji
+Po potwierdzonej migracji na `data/` możesz zarchiwizować stare rootowe pliki:
+- `flask_downloader_config.json`
+- `flask_downloader_jobs.json`
+- `flask_downloader_users.json`
+
+Suchy podgląd:
+```bash
+python3 scripts/cleanup_legacy_data.py --project-root /opt/flask_downloader --dry-run
+```
+
+Właściwe archiwizowanie do `backups/legacy-data-YYYYmmdd-HHMMSS`:
+```bash
+python3 scripts/cleanup_legacy_data.py --project-root /opt/flask_downloader
+```
+
 ## GitHub
 Przed publikacją dopilnuj:
 - `.env` nie trafia do repo

@@ -7,3 +7,5 @@ window.registerPageCleanup = window.registerPageCleanup || function(callback) {
         window.appUi.pageCleanupFns.push(callback);
     }
 };
+
+window.pageBootstrapData = window.pageBootstrapData || {};
