@@ -660,6 +660,7 @@ function initializeSourcePicker() {
             sizeSelect.removeEventListener("change", handleSizeChange);
         });
     }
+    initializeSourcePicker();
 }
 
 function handleSourceServerDownloadClick(event) {
@@ -680,9 +681,6 @@ function handleQuickDownloadClick(event) {
 
     event.preventDefault();
     runQuickDownload(quickButton.dataset.mediaKind || "video", quickButton);
-}
-
-    initializeSourcePicker();
 }
 
 document.addEventListener("click", handleSourceServerDownloadClick);
