@@ -1,4 +1,8 @@
+import re
 import time
+
+
+_NATURAL_NUMBER_RE = re.compile(r"(\d+)")
 
 
 def format_ts(ts):
@@ -30,7 +34,27 @@ def format_duration(seconds):
     return " ".join(parts[:3])
 
 
+def build_natural_sort_key(value):
+    normalized_text = str(value or "").casefold()
+    parts = _NATURAL_NUMBER_RE.split(normalized_text)
+    key = []
+
+    for index, part in enumerate(parts):
+        if not part:
+            continue
+        if index % 2 == 1 and part.isdigit():
+            key.append((1, int(part)))
+            continue
+        key.append((0, part))
+
+    if not key:
+        key.append((0, ""))
+    key.append((2, normalized_text))
+    return tuple(key)
+
+
 __all__ = [
+    "build_natural_sort_key",
     "format_duration",
     "format_ts",
 ]

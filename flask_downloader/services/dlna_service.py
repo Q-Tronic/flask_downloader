@@ -1,6 +1,8 @@
 import os
 import uuid
 
+from flask_downloader.utils.formatting import build_natural_sort_key
+
 
 class DlnaLibraryService:
     def __init__(
@@ -200,8 +202,8 @@ class DlnaLibraryService:
             folder_item["file_count"] = folder_match_counts.get(key, 0)
             folder_items.append(folder_item)
 
-        folder_items.sort(key=lambda item: (item["display_path"].lower(), item["storage_kind"]))
-        normalized_files.sort(key=lambda item: item["display_path"].lower())
+        folder_items.sort(key=lambda item: (build_natural_sort_key(item["display_path"]), item["storage_kind"]))
+        normalized_files.sort(key=lambda item: build_natural_sort_key(item["display_path"]))
         return {
             "folders": folder_items,
             "files": normalized_files,
@@ -383,7 +385,7 @@ class DlnaLibraryService:
                 ],
             })
 
-        summaries.sort(key=lambda item: (item["display_path"].lower(), item["kind"]))
+        summaries.sort(key=lambda item: (build_natural_sort_key(item["display_path"]), item["kind"]))
         return summaries
 
     def build_client_summaries(self, dlna_config=None, files=None):
@@ -801,7 +803,13 @@ class DlnaLibraryService:
                     "active_in_dlna": bool(exact_rule and exact_rule.get("enabled", True)),
                 })
 
-        items.sort(key=lambda item: (item["display_path"].lower(), 0 if item["kind"] == "folder" else 1, item["title"].lower()))
+        items.sort(
+            key=lambda item: (
+                build_natural_sort_key(item["display_path"]),
+                0 if item["kind"] == "folder" else 1,
+                build_natural_sort_key(item["title"]),
+            )
+        )
         limited_items = items[:max(1, min(500, int(limit or 200)))]
         collection_map = self.get_named_collection_map(config)
 

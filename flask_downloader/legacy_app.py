@@ -116,7 +116,7 @@ from flask_downloader.stores.users_store import (
     write_user_store as users_store_write_user_store,
 )
 from flask_downloader.utils import auth as auth_utils
-from flask_downloader.utils.formatting import format_duration, format_ts
+from flask_downloader.utils.formatting import build_natural_sort_key, format_duration, format_ts
 from flask_downloader.utils.responses import build_stateful_json_response
 
 APP_STARTED_AT_TS = time.time()
@@ -3405,7 +3405,7 @@ def build_dlna_dynamic_container_specs(dlna_config, collection_dir_map):
             "filter": 'upnp:class derivedfrom "object.item" and location contains "%s"' % filter_path,
         })
 
-    specs.sort(key=lambda item: (item["title"].lower(), item["location"].lower()))
+    specs.sort(key=lambda item: (build_natural_sort_key(item["title"]), build_natural_sort_key(item["location"])))
     return specs
 
 
@@ -3460,13 +3460,31 @@ function dlnaBuildContainerSortKey(title, depth) {
   if (depth >= 2 && /^\\d{4}-\\d{2}-\\d{2}$/.test(normalizedTitle)) {
     return '1000_' + normalizedTitle;
   }
+  var normalizedSortTitle = dlnaNormalizeSortText(normalizedTitle);
   if (depth === 0) {
-    return '2000_' + normalizedTitle.toLowerCase();
+    return '2000_' + normalizedSortTitle;
   }
   if (depth === 1) {
-    return '3000_' + normalizedTitle.toLowerCase();
+    return '3000_' + normalizedSortTitle;
   }
-  return '4000_' + normalizedTitle.toLowerCase();
+  return '4000_' + normalizedSortTitle;
+}
+
+function dlnaNormalizeSortText(value) {
+  return String(value || '').toLowerCase().replace(/(\\d+)/g, function(match) {
+    return ('000000000000' + match).slice(-12);
+  });
+}
+
+function dlnaBuildObjectSortKey(title, parts) {
+  var normalizedTitle = dlnaNormalizeSortText(title || '');
+  if (parts.length > 2 && parts[2] === 'Wszystkie Pliki') {
+    return '0000_' + normalizedTitle;
+  }
+  if (parts.length > 2 && /^\\d{4}-\\d{2}-\\d{2}$/.test(parts[2] || '')) {
+    return '1000_' + normalizedTitle;
+  }
+  return '2000_' + normalizedTitle;
 }
 
 function dlnaCreateNamedContainer(title, depth) {
@@ -3506,8 +3524,8 @@ function dlnaBuildContainerDefs(parts) {
 
 function dlnaImportByCollection(obj, cont, rootPath, autoscanId, containerType) {
   var parts = dlnaGetRelativeParts(obj.location, rootPath);
-  obj.sortKey = '';
   obj.title = obj.title || dlnaBasename(obj.location);
+  obj.sortKey = dlnaBuildObjectSortKey(obj.title, parts);
   var container = addContainerTree(dlnaBuildContainerDefs(parts));
   var result = [];
   result.push(addCdsObject(obj, container, rootPath));
@@ -3588,12 +3606,8 @@ function dlnaLegacyBuildChain(obj) {
 
 function dlnaLegacyAddByCollection(obj) {
   var parts = dlnaGetRelativeParts(obj.location);
-  if (parts.length > 2 && parts[2] === 'Wszystkie Pliki') {
-    obj.sortKey = '0000_' + (obj.title || dlnaBasename(obj.location));
-  } else {
-    obj.sortKey = '';
-  }
   obj.title = obj.title || dlnaBasename(obj.location);
+  obj.sortKey = dlnaBuildObjectSortKey(obj.title, parts);
   addCdsObject(obj, createContainerChain(dlnaLegacyBuildChain(obj)), UPNP_CLASS_CONTAINER);
 }
 
@@ -4560,6 +4574,10 @@ def write_dlna_gerbera_config(dlna_config=None):
         logging_el.set("rotate-file-count", "1")
 
     storage_el = gerbera_ensure(server_el, "storage")
+    if dlna_version_at_least(package_version, 2, 6, 0):
+        storage_el.set("enable-sort-key", "yes")
+    else:
+        storage_el.attrib.pop("enable-sort-key", None)
     sqlite_el = gerbera_ensure(storage_el, "sqlite3")
     sqlite_el.set("enabled", "yes")
     gerbera_ensure(sqlite_el, "database-file").text = "gerbera.db"

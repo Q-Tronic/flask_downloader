@@ -3,6 +3,8 @@ import re
 import time
 from urllib.parse import quote
 
+from flask_downloader.utils.formatting import build_natural_sort_key
+
 
 class ManagedStorageService:
     def __init__(
@@ -299,5 +301,10 @@ class ManagedStorageService:
         except Exception:
             return []
 
-        files.sort(key=lambda item: item["mtime"], reverse=True)
+        files.sort(
+            key=lambda item: (
+                build_natural_sort_key(item.get("display_path") or ""),
+                build_natural_sort_key(item.get("name") or ""),
+            )
+        )
         return files

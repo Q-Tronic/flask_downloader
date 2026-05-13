@@ -139,6 +139,7 @@
 - Serwer DLNA ma wystawiać tylko media aktywne dla DLNA.
 - Aplikacja ma budować własny katalog eksportu DLNA z symlinkami tylko do aktywnych mediów, zamiast wystawiać surowo całe katalogi pobrań.
 - W katalogu eksportu DLNA pliki przypisane do bukietu mają leżeć możliwie płasko bez dodatkowych poziomów `owner/storage/data`, tak żeby klient po wejściu w bukiet widział od razu pliki.
+- Listy plików z numerowanymi odcinkami mają być sortowane naturalnie, a nie leksykograficznie, zarówno w panelu WWW, jak i w eksporcie DLNA; `Odcinek 2` ma być przed `Odcinek 11`.
 - Zmiana kolekcji, klientów, wpisów mediów albo ustawień serwera DLNA ma zapisywać się bez reloadu i od razu synchronizować eksport DLNA.
 - Zmiana kolekcji, klientów, przypisanych użytkowników, wpisów mediów albo ustawień serwera DLNA ma kończyć się pełnym, spójnym rebuiltem eksportu i odświeżeniem bazy Gerbera, a nie tylko częściową podmianą katalogów na żywym indeksie.
 - Usunięcie pliku z panelu lub zakończenie pobierania powinno odświeżać bibliotekę DLNA tak, żeby eksport nie rozjeżdżał się z faktycznymi plikami.
