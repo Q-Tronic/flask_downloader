@@ -921,6 +921,29 @@ def normalize_dlna_config(value):
     return DLNA_UPDATE_SERVICE.normalize_config(value)
 
 
+def iter_legacy_config_candidates():
+    seen = set()
+    candidates = []
+
+    def add_candidate(path):
+        normalized_path = os.path.abspath(str(path or ""))
+        if not normalized_path or normalized_path in seen:
+            return
+        if not os.path.isfile(normalized_path):
+            return
+        seen.add(normalized_path)
+        candidates.append(normalized_path)
+
+    add_candidate(LEGACY_CONFIG_FILE)
+
+    backups_root = os.path.join(PROJECT_ROOT, "backups")
+    if os.path.isdir(backups_root):
+        for entry in sorted(os.listdir(backups_root), reverse=True):
+            add_candidate(os.path.join(backups_root, entry, "flask_downloader_config.json"))
+
+    return candidates
+
+
 def load_app_config():
     return config_store_load_app_config(
         CONFIG_FILE,
@@ -941,24 +964,51 @@ def recover_legacy_dlna_config_if_needed(config_data):
     current_dlna = normalize_dlna_config(current_data.get("dlna"))
     current_data["dlna"] = current_dlna
 
-    if current_dlna.get("collections") or current_dlna.get("clients") or current_dlna.get("media_rules"):
+    legacy_dlna = None
+    for candidate_path in iter_legacy_config_candidates():
+        try:
+            with open(candidate_path, "r", encoding="utf-8") as fh:
+                legacy_raw = json.load(fh) or {}
+        except Exception:
+            continue
+        next_legacy_dlna = normalize_dlna_config((legacy_raw or {}).get("dlna"))
+        if next_legacy_dlna.get("collections") or next_legacy_dlna.get("clients") or next_legacy_dlna.get("media_rules"):
+            legacy_dlna = next_legacy_dlna
+            break
+
+    if legacy_dlna is None:
         return current_data, False
 
-    if not os.path.isfile(LEGACY_CONFIG_FILE):
-        return current_data, False
+    changed = False
 
-    try:
-        with open(LEGACY_CONFIG_FILE, "r", encoding="utf-8") as fh:
-            legacy_raw = json.load(fh) or {}
-    except Exception:
-        return current_data, False
+    current_collections = list(current_dlna.get("collections") or [])
+    current_collection_ids = {str(item.get("id") or "") for item in current_collections}
+    for item in legacy_dlna.get("collections") or []:
+        collection_id = str(item.get("id") or "")
+        if not collection_id or collection_id in current_collection_ids:
+            continue
+        current_collections.append(copy.deepcopy(item))
+        current_collection_ids.add(collection_id)
+        changed = True
+    if current_collections != list(current_dlna.get("collections") or []):
+        current_dlna["collections"] = current_collections
 
-    legacy_dlna = normalize_dlna_config((legacy_raw or {}).get("dlna"))
-    if not (legacy_dlna.get("collections") or legacy_dlna.get("clients") or legacy_dlna.get("media_rules")):
-        return current_data, False
+    if not (current_dlna.get("clients") or []):
+        current_dlna["clients"] = copy.deepcopy(legacy_dlna.get("clients") or [])
+        changed = changed or bool(current_dlna["clients"])
 
-    current_data["dlna"] = legacy_dlna
-    return current_data, True
+    if not (current_dlna.get("media_rules") or []) and (legacy_dlna.get("media_rules") or []):
+        current_dlna["media_rules"] = copy.deepcopy(legacy_dlna.get("media_rules") or [])
+        changed = True
+
+    if changed:
+        current_dlna["layout_version"] = max(
+            int(current_dlna.get("layout_version") or 0),
+            int(legacy_dlna.get("layout_version") or 0),
+        )
+        current_data["dlna"] = normalize_dlna_config(current_dlna)
+
+    return current_data, changed
 
 
 APP_CONFIG, LEGACY_DLNA_CONFIG_RECOVERED = recover_legacy_dlna_config_if_needed(load_app_config())
