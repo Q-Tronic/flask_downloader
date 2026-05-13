@@ -161,6 +161,8 @@ def start_background_schedulers(context):
     context["start_ffmpeg_scheduler_once"]()
     context["start_yt_dlp_scheduler_once"]()
     context["start_dlna_scheduler_once"]()
+    if context.get("start_dlna_autoheal_scheduler_once"):
+        context["start_dlna_autoheal_scheduler_once"]()
 
 
 __all__ = [

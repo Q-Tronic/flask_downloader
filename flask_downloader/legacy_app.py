@@ -161,6 +161,7 @@ SYSTEMD_SERVICE_NAME = CONFIG_SYSTEMD_SERVICE_NAME
 DLNA_PACKAGE_NAME = "gerbera"
 DLNA_SYSTEM_SERVICE_NAME = "gerbera"
 DLNA_CHECK_HOUR = 4
+DLNA_AUTOHEAL_INTERVAL_SECONDS = 30
 DLNA_SERVICE_NAME = CONFIG_DLNA_SERVICE_NAME
 DLNA_OFFICIAL_REPO_KEY_URL = "https://pkg.gerbera.io/public.asc"
 DLNA_OFFICIAL_REPO_KEYRING_FILE = os.path.join("/usr", "share", "keyrings", "gerbera-keyring.gpg")
@@ -232,6 +233,8 @@ FFMPEG_SCHEDULER_STARTED = False
 DLNA_INSTALL_LOCK = threading.Lock()
 DLNA_SCHEDULER_LOCK = threading.Lock()
 DLNA_SCHEDULER_STARTED = False
+DLNA_AUTOHEAL_LOCK = threading.Lock()
+DLNA_AUTOHEAL_STARTED = False
 DLNA_SYNC_LOCK = threading.Lock()
 MAINTENANCE_TASKS_LOCK = threading.Lock()
 MAINTENANCE_TASKS = {
@@ -3720,12 +3723,15 @@ def clear_dlna_database_files():
 
 def write_dlna_restart_guard_script():
     ensure_dlna_runtime_dirs()
+    app_python_path = shlex.quote(sys.executable or os.path.join(APP_ROOT, ".venv", "bin", "python"))
     script_content = """#!/bin/bash
 set -u
 
 STATE_FILE=%s
 EXPORT_ROOT=%s
 LOG_FILE=%s
+APP_ROOT=%s
+APP_PYTHON=%s
 RESET_AFTER_SEC=300
 
 mkdir -p "$(dirname "$STATE_FILE")" "$(dirname "$LOG_FILE")" "$EXPORT_ROOT"
@@ -3774,9 +3780,38 @@ prune_broken_symlinks() {
   fi
 }
 
+auto_prune_missing_rules() {
+  if [ ! -x "$APP_PYTHON" ]; then
+    return 0
+  fi
+  local prune_output
+  prune_output=$(
+    cd "$APP_ROOT" && "$APP_PYTHON" - <<'PY'
+from flask_downloader.legacy_app import prune_missing_dlna_media_rules
+result = prune_missing_dlna_media_rules(
+    files=None,
+    sync_runtime=False,
+    restart_service_if_active=False,
+)
+if result.get("changed"):
+    print(int(result.get("removed_count") or 0))
+PY
+  ) || true
+  prune_output=$(printf '%%s' "$prune_output" | tr -d '\\r' | tail -n 1)
+  case "$prune_output" in
+    ''|*[!0-9]*)
+      return 0
+      ;;
+  esac
+  if [ "$prune_output" -gt 0 ]; then
+    log_line "DLNA guard usunął $prune_output martwych reguł z konfiguracji przed restartem Gerbery."
+  fi
+}
+
 case "${1:-}" in
   prestart)
     prune_broken_symlinks
+    auto_prune_missing_rules
     load_state
     delay_seconds=0
     if [ "${RESTART_ATTEMPT:-0}" -eq 1 ]; then
@@ -3834,6 +3869,8 @@ esac
         shlex.quote(DLNA_RESTART_STATE_FILE),
         shlex.quote(DLNA_EXPORT_ROOT),
         shlex.quote(DLNA_LOG_FILE),
+        shlex.quote(APP_ROOT),
+        app_python_path,
     )
     with open(DLNA_RESTART_GUARD_SCRIPT_FILE, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(script_content)
@@ -4148,6 +4185,22 @@ def dlna_check_scheduler():
         time.sleep(sleep_seconds)
 
 
+def dlna_autoheal_scheduler():
+    while True:
+        try:
+            dlna_config = get_dlna_config_snapshot()
+            package_state = get_dlna_package_state_snapshot()
+            if dlna_config.get("enabled") and package_state.get("installed"):
+                prune_missing_dlna_media_rules(
+                    files=None,
+                    sync_runtime=True,
+                    restart_service_if_active=True,
+                )
+        except Exception:
+            pass
+        time.sleep(max(15, int(DLNA_AUTOHEAL_INTERVAL_SECONDS or 30)))
+
+
 def start_dlna_scheduler_once():
     global DLNA_SCHEDULER_STARTED
     with DLNA_SCHEDULER_LOCK:
@@ -4156,6 +4209,16 @@ def start_dlna_scheduler_once():
         thread = threading.Thread(target=dlna_check_scheduler, name="dlna-check-scheduler", daemon=True)
         thread.start()
         DLNA_SCHEDULER_STARTED = True
+
+
+def start_dlna_autoheal_scheduler_once():
+    global DLNA_AUTOHEAL_STARTED
+    with DLNA_AUTOHEAL_LOCK:
+        if DLNA_AUTOHEAL_STARTED:
+            return
+        thread = threading.Thread(target=dlna_autoheal_scheduler, name="dlna-autoheal-scheduler", daemon=True)
+        thread.start()
+        DLNA_AUTOHEAL_STARTED = True
 
 
 def get_dlna_collection_catalog(dlna_config=None):
