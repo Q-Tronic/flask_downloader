@@ -268,4 +268,4 @@ window.pageBootstrapData = {
     allCollectionName: {{ dlna_all_collection_name|tojson }}
 };
 </script>
-<script src="{{ url_for('static', filename='js/pages/dlna.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pages/dlna.js') }}?v={{ asset_version }}"></script>

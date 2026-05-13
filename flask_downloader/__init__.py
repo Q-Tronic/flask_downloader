@@ -1,6 +1,7 @@
 """Pakiet aplikacji Flask Downloader."""
 
 import os
+import time
 
 from flask import Flask
 
@@ -14,6 +15,12 @@ def create_app():
         template_folder=os.path.join(PROJECT_ROOT, "templates"),
         static_folder=os.path.join(PROJECT_ROOT, "static"),
     )
+    app.config["ASSET_VERSION"] = str(int(time.time()))
+
+    @app.context_processor
+    def inject_asset_version():
+        return {"asset_version": app.config.get("ASSET_VERSION", "1")}
+
     return configure_app(app)
 
 

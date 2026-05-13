@@ -502,4 +502,4 @@ window.pageBootstrapData = {
     userRows: {{ user_rows|tojson }}
 };
 </script>
-<script src="{{ url_for('static', filename='js/pages/settings.js') }}"></script>
+<script src="{{ url_for('static', filename='js/pages/settings.js') }}?v={{ asset_version }}"></script>

@@ -7,10 +7,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="shortcut icon" href="/favicon.svg">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}?v={{ asset_version }}">
 </head>
 <body>
-<script src="{{ url_for('static', filename='js/page-bootstrap.js') }}"></script>
+<script src="{{ url_for('static', filename='js/page-bootstrap.js') }}?v={{ asset_version }}"></script>
 {% include 'partials/_toast.html' %}
 <div class="app-shell">
     {% include 'partials/_sidebar.html' %}
@@ -19,6 +19,6 @@
         <div class="page-frame">{% include page_template %}</div>
     </main>
 </div>
-<script src="{{ url_for('static', filename='js/app-shell.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app-shell.js') }}?v={{ asset_version }}"></script>
 </body>
 </html>

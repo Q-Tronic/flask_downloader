@@ -660,7 +660,9 @@ function initializeSourcePicker() {
             sizeSelect.removeEventListener("change", handleSizeChange);
         });
     }
-    initializeSourcePicker();
+}
+
+initializeSourcePicker();
 }
 
 function handleSourceServerDownloadClick(event) {
