@@ -1270,6 +1270,7 @@ def normalize_saved_job_record(raw):
         "finished_at": None,
         "overwrite_existing": bool(raw.get("overwrite_existing")),
         "replace_paths": [str(path) for path in (raw.get("replace_paths") or []) if path],
+        "auto_dlna_collection_id": str(raw.get("auto_dlna_collection_id") or "").strip(),
     }
 
     if job["status"] not in allowed_statuses:
@@ -1324,6 +1325,7 @@ def serialize_job_for_storage(job):
         "finished_at": float(job.get("finished_at")) if job.get("finished_at") not in (None, "", False) else None,
         "overwrite_existing": bool(job.get("overwrite_existing")),
         "replace_paths": [str(path) for path in (job.get("replace_paths") or []) if path],
+        "auto_dlna_collection_id": str(job.get("auto_dlna_collection_id") or "").strip(),
     }
 
 
@@ -2396,6 +2398,10 @@ def extract_video_data(page_url, force_refresh=False):
     return SOURCE_MEDIA_SERVICE.extract_video_data(page_url, force_refresh=force_refresh)
 
 
+def extract_http_urls(raw_text):
+    return SOURCE_MEDIA_SERVICE.extract_http_urls(raw_text)
+
+
 def build_proxy_url(page_url, format_id):
     return SOURCE_MEDIA_SERVICE.build_proxy_url(page_url, format_id)
 
@@ -2410,6 +2416,14 @@ def build_result_with_proxy_urls(result, request_root):
 
 def find_format(result, format_id):
     return SOURCE_MEDIA_SERVICE.find_format(result, format_id)
+
+
+def choose_best_source(items, preferred_media_kind="video", extractor_name=""):
+    return SOURCE_MEDIA_SERVICE.choose_best_source(
+        items,
+        preferred_media_kind=preferred_media_kind,
+        extractor_name=extractor_name,
+    )
 
 
 def format_bytes_text(num_bytes):
@@ -2846,6 +2860,21 @@ def download_worker(job_id):
             relative_path=relative_path,
             persist=True,
         )
+        auto_dlna_collection_id = str(job.get("auto_dlna_collection_id") or "").strip()
+        if auto_dlna_collection_id and relative_path:
+            try:
+                assign_file_to_dlna_collection(
+                    storage_kind,
+                    relative_path,
+                    auto_dlna_collection_id,
+                    sync_runtime=False,
+                )
+            except Exception as exc:
+                update_job(
+                    job_id,
+                    error="Pobrano plik, ale nie udało się dodać go automatycznie do DLNA: %s" % exc,
+                    persist=True,
+                )
         sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
 
     except DownloadCancelledError as exc:
@@ -5179,6 +5208,22 @@ DLNA_LIBRARY_SERVICE = DlnaLibraryService(
     dlna_config_xml_file=DLNA_CONFIG_XML_FILE,
     dlna_service_unit_file=DLNA_SERVICE_UNIT_FILE,
 )
+
+
+def get_assignable_dlna_collections_for_current_user():
+    return DLNA_LIBRARY_SERVICE.get_assignable_collections_for_user(
+        username=get_current_username(),
+        is_admin=is_admin_authenticated(),
+    )
+
+
+def assign_file_to_dlna_collection(storage_kind, relative_path, collection_id, sync_runtime=True):
+    return DLNA_LIBRARY_SERVICE.assign_file_to_collection(
+        storage_kind,
+        relative_path,
+        collection_id,
+        sync_runtime=sync_runtime,
+    )
 
 PAGE_STATE_SERVICE = PageStateService(
     get_mount_info=get_mount_info,

@@ -124,6 +124,7 @@ class DownloadJobsService:
             "planned_filename": str(kwargs.get("planned_filename") or ""),
             "overwrite_existing": bool(kwargs.get("overwrite_existing")),
             "replace_paths": [str(path) for path in (kwargs.get("replace_paths") or []) if path],
+            "auto_dlna_collection_id": str(kwargs.get("auto_dlna_collection_id") or "").strip(),
         }
 
         with self._jobs_lock:

@@ -1,5 +1,101 @@
 (function() {
 const pageData = window.pageBootstrapData || {};
+const quickUrlInput = document.getElementById("quickUrlInput");
+const quickDlnaCollectionSelect = document.getElementById("quickDlnaCollectionSelect");
+
+function showUiToastMessage(message, kind) {
+    if (window.appUi && typeof window.appUi.showToast === "function") {
+        window.appUi.showToast(message, kind);
+        return;
+    }
+    if (kind === "error") {
+        alert(message);
+    }
+}
+
+function getQuickDlnaCollectionId() {
+    if (!quickDlnaCollectionSelect || quickDlnaCollectionSelect.disabled) {
+        return "";
+    }
+    return String(quickDlnaCollectionSelect.value || "").trim();
+}
+
+function setQuickButtonsBusy(busy, activeButton) {
+    document.querySelectorAll(".js-quick-download-trigger").forEach(function(button) {
+        const isActive = activeButton && button === activeButton;
+        if (!button.dataset.idleLabel) {
+            button.dataset.idleLabel = String(button.textContent || "").trim();
+        }
+        button.disabled = !!busy;
+        if (isActive) {
+            button.textContent = busy ? "Trwa..." : (button.dataset.idleLabel || button.textContent);
+        } else if (!busy) {
+            button.textContent = button.dataset.idleLabel || button.textContent;
+        }
+    });
+}
+
+async function runQuickDownload(mediaKind, triggerButton) {
+    if (!quickUrlInput) {
+        return;
+    }
+
+    const urlsText = String(quickUrlInput.value || "").trim();
+    if (!urlsText) {
+        showUiToastMessage("Wklej co najmniej jeden link do pobrania.", "error");
+        quickUrlInput.focus();
+        return;
+    }
+
+    setQuickButtonsBusy(true, triggerButton);
+
+    try {
+        const response = await fetch("/api/quick-downloads", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                urls_text: urlsText,
+                media_kind: mediaKind,
+                auto_dlna_collection_id: getQuickDlnaCollectionId(),
+            })
+        });
+
+        const data = await response.json().catch(function() {
+            return {};
+        });
+
+        if (!response.ok || !data.ok) {
+            showUiToastMessage((data && data.error) || "Nie udało się dodać szybkich pobrań.", "error");
+            return;
+        }
+
+        const queuedCount = Number(data.queued_count || 0);
+        const failedCount = Number(data.failed_count || 0);
+        const noun = mediaKind === "audio" ? "audio" : "wideo";
+        let toastMessage = queuedCount === 1
+            ? "Dodano 1 pobieranie " + noun + " do kolejki."
+            : "Dodano " + queuedCount + " pobrań " + noun + " do kolejki.";
+
+        if (failedCount > 0) {
+            toastMessage += " " + failedCount + " link" + (failedCount === 1 ? "" : (failedCount >= 2 && failedCount <= 4 ? "i" : "ów")) + " pominięto.";
+        }
+
+        showUiToastMessage(toastMessage, "success");
+        if (window.appUi && typeof window.appUi.refreshDownloadToasts === "function") {
+            window.appUi.refreshDownloadToasts();
+        }
+
+        quickUrlInput.value = String(data.remaining_urls_text || "").trim();
+        if (!quickUrlInput.value) {
+            quickUrlInput.blur();
+        }
+    } catch (err) {
+        showUiToastMessage("Błąd połączenia z serwerem: " + err, "error");
+    } finally {
+        setQuickButtonsBusy(false, triggerButton);
+    }
+}
+
 function buildExistingDownloadNotice(existingDownloads) {
     if (!existingDownloads) {
         return "";
@@ -74,7 +170,8 @@ async function startServerDownload(pageUrl, formatId, overwriteExisting) {
             body: JSON.stringify({
                 page_url: pageUrl,
                 format_id: formatId,
-                overwrite_existing: Boolean(overwriteExisting)
+                overwrite_existing: Boolean(overwriteExisting),
+                auto_dlna_collection_id: getQuickDlnaCollectionId(),
             })
         });
 
@@ -89,18 +186,16 @@ async function startServerDownload(pageUrl, formatId, overwriteExisting) {
         }
 
         if (!response.ok || !data.ok) {
-            alert(data.error || "Nie udało się dodać pobierania.");
+            showUiToastMessage(data.error || "Nie udało się dodać pobierania.", "error");
             return;
         }
 
-        if (window.appUi && typeof window.appUi.showToast === "function") {
-            window.appUi.showToast("Dodano pobieranie do kolejki. Status możesz śledzić w zadaniach bez odświeżania strony.", "success");
-        }
+        showUiToastMessage("Dodano pobieranie do kolejki. Status możesz śledzić w zadaniach bez odświeżania strony.", "success");
         if (window.appUi && typeof window.appUi.refreshDownloadToasts === "function") {
             window.appUi.refreshDownloadToasts();
         }
     } catch (err) {
-        alert("Błąd połączenia z serwerem: " + err);
+        showUiToastMessage("Błąd połączenia z serwerem: " + err, "error");
     }
 }
 
@@ -577,12 +672,24 @@ function handleSourceServerDownloadClick(event) {
     startServerDownload(serverButton.dataset.pageUrl || "", serverButton.dataset.formatId || "", false);
 }
 
+function handleQuickDownloadClick(event) {
+    const quickButton = event.target.closest(".js-quick-download-trigger");
+    if (!quickButton) {
+        return;
+    }
+
+    event.preventDefault();
+    runQuickDownload(quickButton.dataset.mediaKind || "video", quickButton);
+}
+
 document.addEventListener("click", handleSourceServerDownloadClick);
+document.addEventListener("click", handleQuickDownloadClick);
 
 if (typeof window.registerPageCleanup === "function") {
     window.registerPageCleanup(function() {
         clearSourceContextToast();
         document.removeEventListener("click", handleSourceServerDownloadClick);
+        document.removeEventListener("click", handleQuickDownloadClick);
     });
 }
 

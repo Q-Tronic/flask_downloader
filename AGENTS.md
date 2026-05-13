@@ -163,6 +163,13 @@
 
 ## Zachowanie pobierania i przejść
 - `Pobierz na serwer` ma tylko dodać zadanie do kolejki i pokazać status/toast bez przymusowego przechodzenia na stronę zadań.
+- Pole URL na stronie głównej ma przyjmować także wiele linków naraz; parser ma wyciągać wszystkie poprawne adresy `http/https` z całego pola, deduplikować je i zachowywać kolejność.
+- Podstawowy przycisk `Pobierz dane` na stronie głównej ma nadal służyć tylko do pojedynczego linku; jeśli w polu są wielokrotne adresy, UI ma pokazać czytelny błąd zamiast próbować renderować jeden losowy wynik.
+- Na stronie głównej obok `Pobierz dane` mają istnieć szybkie przyciski `Wideo BEST` i `Audio BEST`, które bez wchodzenia w szczegóły dodają do kolejki najlepsze dostępne źródło dla wszystkich linków z pola.
+- Szybkie przyciski `BEST` po udanym dodaniu do kolejki mają pokazywać toast po prawej stronie i czyścić pole URL; przy częściowym błędzie pole powinno zostawiać tylko te linki, których nie udało się dodać.
+- Pod formularzem URL na stronie głównej ma być zwięzły wybór `Dodaj po pobraniu do bukietu DLNA`; wybrany bukiet ma działać zarówno dla szybkich przycisków `BEST`, jak i dla zwykłego `Pobierz na serwer` z karty szczegółów źródła.
+- Lista bukietów w tym szybkim wyborze ma być filtrowana do tych, do których bieżący użytkownik ma dostęp; `admin` widzi wszystkie zwykłe bukiety, a zwykły użytkownik tylko te wynikające z jego aktualnych przypisań DLNA.
+- Jeśli job pobierania ma zapisany docelowy bukiet DLNA, po poprawnym zakończeniu pobierania backend ma automatycznie dopiąć pobrany plik do tego bukietu i zsynchronizować bibliotekę DLNA.
 - Jeśli extractor zwraca nazwę serii / programu, nazwa pobieranego pliku ma ją prefiksować przed tytułem odcinka w czytelnym formacie `Seria - Tytuł`, zamiast zapisywać sam goły tytuł odcinka.
 - Linki otwierające prawdziwe pliki, playlisty lub zewnętrzne strony mogą działać normalnie albo w nowej karcie, ale linki nawigujące po samym panelu mają zostać AJAXowe.
 - Zmiana `Format` i `Rozmiar / jakość` na stronie głównej ma odświeżać szczegóły źródła bez skoku viewportu do góry; podczas ładowania nie wolno zwijać sekcji tak, żeby przeglądarka sama korygowała scroll.

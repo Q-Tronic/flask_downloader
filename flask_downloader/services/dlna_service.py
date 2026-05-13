@@ -121,6 +121,41 @@ class DlnaLibraryService:
             for item in config.get("collections") or []
         }
 
+    def get_assignable_collections_for_user(self, username="", is_admin=False, dlna_config=None):
+        config = dlna_config or self._get_dlna_config_snapshot()
+        named_map = self.get_named_collection_map(config)
+        if not named_map:
+            return []
+
+        if is_admin:
+            return sorted(named_map.values(), key=lambda item: item["name"].lower())
+
+        normalized_username = str(username or "").strip()
+        if not normalized_username:
+            return []
+
+        visible_ids = set()
+        for client in config.get("clients") or []:
+            if not client.get("enabled", True):
+                continue
+            assigned_usernames = self.get_client_assigned_usernames(client)
+            if normalized_username not in assigned_usernames:
+                continue
+
+            client_collection_ids = self.get_client_visible_collection_ids(client, config)
+            if self._dlna_all_collection_id in client_collection_ids:
+                visible_ids.update(named_map.keys())
+                continue
+
+            for collection_id in client_collection_ids:
+                if collection_id in named_map:
+                    visible_ids.add(collection_id)
+
+        return sorted(
+            [named_map[collection_id] for collection_id in visible_ids if collection_id in named_map],
+            key=lambda item: item["name"].lower(),
+        )
+
     def get_library_candidates(self, files=None):
         files = files if files is not None else self._get_server_files()
         folders = {}
@@ -854,6 +889,23 @@ class DlnaLibraryService:
 
         self._set_dlna_config(dlna_config)
         self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
+
+    def assign_file_to_collection(self, storage_kind, relative_path, collection_id, *, sync_runtime=True):
+        dlna_config = self._get_dlna_config_snapshot()
+        changed = self.ensure_collection_membership_on_exact_rule(
+            dlna_config,
+            "file",
+            storage_kind,
+            relative_path,
+            collection_id,
+        )
+        if not changed:
+            return False
+
+        self._set_dlna_config(dlna_config)
+        if sync_runtime:
+            self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
+        return True
 
     def create_client(self, ip, description="", enabled=True, collection_ids=None, usernames=None):
         dlna_config = self._get_dlna_config_snapshot()

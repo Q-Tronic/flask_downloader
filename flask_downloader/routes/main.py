@@ -7,8 +7,10 @@ def register_main_routes(app, deps):
     get_mount_info = deps["get_mount_info"]
     require_authenticated_page = deps["require_authenticated_page"]
     is_valid_http_url = deps["is_valid_http_url"]
+    extract_http_urls = deps["extract_http_urls"]
     extract_video_data = deps["extract_video_data"]
     build_result_with_proxy_urls = deps["build_result_with_proxy_urls"]
+    get_assignable_dlna_collections_for_current_user = deps["get_assignable_dlna_collections_for_current_user"]
     get_daily_download_dir = deps["get_daily_download_dir"]
     get_yt_dlp_services_state = deps["get_yt_dlp_services_state"]
     INDEX_CONTENT_TEMPLATE = deps["INDEX_CONTENT_TEMPLATE"]
@@ -41,13 +43,17 @@ def register_main_routes(app, deps):
             if auth_error:
                 return auth_error
             input_url = request.form.get("url", "").strip()
+            parsed_urls = extract_http_urls(input_url)
 
             if not input_url:
                 error = "Podaj adres URL."
-            elif not is_valid_http_url(input_url):
+            elif not parsed_urls:
                 error = "Adres musi zaczynać się od http:// albo https://"
+            elif len(parsed_urls) > 1:
+                error = "Podgląd źródeł działa tylko dla pojedynczego linku. Użyj przycisków BEST, jeśli chcesz dodać wiele adresów naraz."
             else:
                 try:
+                    input_url = parsed_urls[0]
                     parsed = extract_video_data(input_url, force_refresh=True)
                     if not parsed["sources"]:
                         error = "yt-dlp nie zwrócił żadnych formatów wideo dla tej strony."
@@ -63,6 +69,7 @@ def register_main_routes(app, deps):
             error=error,
             result=result,
             input_url=input_url,
+            quick_dlna_collections=get_assignable_dlna_collections_for_current_user(),
             mount=mount,
             download_dir=get_daily_download_dir(),
         )

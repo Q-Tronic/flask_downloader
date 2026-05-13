@@ -15,11 +15,14 @@ def register_download_routes(app, deps):
     filter_jobs_for_viewer = deps["filter_jobs_for_viewer"]
     get_jobs_snapshot = deps["get_jobs_snapshot"]
     is_valid_http_url = deps["is_valid_http_url"]
+    extract_http_urls = deps["extract_http_urls"]
     extract_video_data = deps["extract_video_data"]
     build_result_with_proxy_urls = deps["build_result_with_proxy_urls"]
     find_format = deps["find_format"]
+    choose_best_source = deps["choose_best_source"]
     public_source_download_match_state = deps["public_source_download_match_state"]
     get_source_download_match_state = deps["get_source_download_match_state"]
+    get_assignable_dlna_collections_for_current_user = deps["get_assignable_dlna_collections_for_current_user"]
     ensure_share_ready = deps["ensure_share_ready"]
     normalize_storage_kind = deps["normalize_storage_kind"]
     create_job = deps["create_job"]
@@ -39,6 +42,45 @@ def register_download_routes(app, deps):
     DEFAULT_ADMIN_USERNAME = deps["DEFAULT_ADMIN_USERNAME"]
     can_access_owner = deps["can_access_owner"]
     get_user_storage_root = deps["get_user_storage_root"]
+
+    def get_allowed_dlna_collection_map():
+        return {
+            str(item.get("id") or "").strip(): item
+            for item in (get_assignable_dlna_collections_for_current_user() or [])
+            if str(item.get("id") or "").strip()
+        }
+
+    def normalize_requested_auto_dlna_collection_id(raw_value):
+        collection_id = str(raw_value or "").strip()
+        if not collection_id:
+            return ""
+
+        allowed_map = get_allowed_dlna_collection_map()
+        if collection_id not in allowed_map:
+            raise ValueError("Nie masz dostępu do wybranego bukietu DLNA.")
+        return collection_id
+
+    def enqueue_download_job(*, page_url, result, fmt, owner_username, overwrite_existing=False, auto_dlna_collection_id=""):
+        duplicate_state = get_source_download_match_state(result, fmt.get("format_id"), owner_username=owner_username)
+        storage_kind = normalize_storage_kind(fmt.get("media_kind") or "video")
+        if duplicate_state["same_quality_count"] and not overwrite_existing:
+            return None, duplicate_state
+
+        filename = build_download_filename(result.get("download_title") or result["title"], fmt)
+        job = create_job(
+            page_url,
+            str(fmt.get("format_id") or ""),
+            owner_username=owner_username,
+            storage_kind=storage_kind,
+            title=result["title"],
+            label=fmt.get("label") or fmt.get("format_id") or "",
+            filename=filename,
+            planned_filename=filename,
+            overwrite_existing=overwrite_existing,
+            replace_paths=[entry["path"] for entry in duplicate_state["same_quality"]],
+            auto_dlna_collection_id=auto_dlna_collection_id,
+        )
+        return job, duplicate_state
 
     @app.route("/api/files", methods=["GET"])
     def api_files():
@@ -145,6 +187,10 @@ def register_download_routes(app, deps):
         page_url = str(payload.get("page_url") or "").strip()
         format_id = str(payload.get("format_id") or "").strip()
         overwrite_existing = bool(payload.get("overwrite_existing"))
+        try:
+            auto_dlna_collection_id = normalize_requested_auto_dlna_collection_id(payload.get("auto_dlna_collection_id"))
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
 
         if not is_valid_http_url(page_url):
             return jsonify({"ok": False, "error": "Nieprawidłowy page_url."}), 400
@@ -166,8 +212,14 @@ def register_download_routes(app, deps):
             if not fmt:
                 return jsonify({"ok": False, "error": "Nie znaleziono wskazanego formatu."}), 404
 
-            duplicate_state = get_source_download_match_state(result, format_id, owner_username=owner_username)
-            storage_kind = normalize_storage_kind(fmt.get("media_kind") or "video")
+            job, duplicate_state = enqueue_download_job(
+                page_url=page_url,
+                result=result,
+                fmt=fmt,
+                owner_username=owner_username,
+                overwrite_existing=overwrite_existing,
+                auto_dlna_collection_id=auto_dlna_collection_id,
+            )
             if duplicate_state["same_quality_count"] and not overwrite_existing:
                 return jsonify({
                     "ok": False,
@@ -175,19 +227,6 @@ def register_download_routes(app, deps):
                     "error": "Na serwerze istnieje już plik w tej samej jakości.",
                     "existing_downloads": public_source_download_match_state(duplicate_state),
                 }), 409
-
-            job = create_job(
-                page_url,
-                format_id,
-                owner_username=owner_username,
-                storage_kind=storage_kind,
-                title=result["title"],
-                label=fmt.get("label") or fmt.get("format_id") or "",
-                filename=build_download_filename(result.get("download_title") or result["title"], fmt),
-                planned_filename=build_download_filename(result.get("download_title") or result["title"], fmt),
-                overwrite_existing=overwrite_existing,
-                replace_paths=[entry["path"] for entry in duplicate_state["same_quality"]],
-            )
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 500
 
@@ -196,6 +235,107 @@ def register_download_routes(app, deps):
             "job_id": job["job_id"],
             "status": job["status"],
         }), 202
+
+    @app.route("/api/quick-downloads", methods=["POST"])
+    def api_quick_downloads():
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        if not request.is_json:
+            return jsonify({"ok": False, "error": "Wymagany JSON."}), 400
+
+        payload = request.get_json(silent=True) or {}
+        raw_urls = payload.get("urls_text")
+        media_kind = normalize_storage_kind(payload.get("media_kind") or "video")
+
+        try:
+            auto_dlna_collection_id = normalize_requested_auto_dlna_collection_id(payload.get("auto_dlna_collection_id"))
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        urls = extract_http_urls(raw_urls)
+        if not urls:
+            return jsonify({"ok": False, "error": "Nie znaleziono żadnych poprawnych linków http/https."}), 400
+
+        if len(urls) > 50:
+            return jsonify({"ok": False, "error": "Jednorazowo możesz dodać maksymalnie 50 linków."}), 400
+
+        ok, message = ensure_share_ready(auto_remount=True)
+        if not ok:
+            return jsonify({
+                "ok": False,
+                "error": "Udział sieciowy offline. %s" % message
+            }), 503
+
+        owner_username = get_current_username()
+        queued_jobs = []
+        failed_items = []
+
+        for page_url in urls:
+            try:
+                result = extract_video_data(page_url, force_refresh=False)
+                sources = list(result.get("sources") or [])
+                if not sources:
+                    failed_items.append({
+                        "url": page_url,
+                        "error": "yt-dlp nie zwrócił żadnych źródeł dla tego linku.",
+                    })
+                    continue
+
+                best_source = choose_best_source(
+                    sources,
+                    preferred_media_kind=media_kind,
+                    extractor_name=result.get("extractor") or "",
+                )
+                if not best_source:
+                    failed_items.append({
+                        "url": page_url,
+                        "error": "Nie znaleziono odpowiedniego źródła do szybkiego pobrania.",
+                    })
+                    continue
+
+                job_source = dict(best_source)
+                if media_kind == "audio":
+                    job_source["media_kind"] = "audio"
+                    job_source["has_audio"] = True
+
+                job, duplicate_state = enqueue_download_job(
+                    page_url=page_url,
+                    result=result,
+                    fmt=job_source,
+                    owner_username=owner_username,
+                    overwrite_existing=False,
+                    auto_dlna_collection_id=auto_dlna_collection_id,
+                )
+                if duplicate_state["same_quality_count"]:
+                    failed_items.append({
+                        "url": page_url,
+                        "error": "Ta sama jakość jest już na serwerze.",
+                    })
+                    continue
+
+                queued_jobs.append({
+                    "job_id": job["job_id"],
+                    "url": page_url,
+                    "title": job.get("title") or "",
+                    "label": job.get("label") or "",
+                })
+            except Exception as exc:
+                failed_items.append({
+                    "url": page_url,
+                    "error": str(exc),
+                })
+
+        return jsonify({
+            "ok": bool(queued_jobs),
+            "queued_count": len(queued_jobs),
+            "failed_count": len(failed_items),
+            "queued_jobs": queued_jobs,
+            "failed_items": failed_items,
+            "remaining_urls_text": "\n".join(item["url"] for item in failed_items if item.get("url")),
+            "media_kind": media_kind,
+        }), (202 if queued_jobs else 400)
 
     @app.route("/api/jobs/<job_id>/cancel", methods=["POST"])
     def api_cancel_job(job_id):

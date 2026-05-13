@@ -15,14 +15,33 @@
     </div>
     {% if logged_in %}
         <form method="post" action="/" class="search-form" data-shell-async="true">
-            <input
-                type="url"
+            <textarea
+                id="quickUrlInput"
                 name="url"
+                class="search-form-textarea"
                 placeholder="https://example.com/video/..."
-                value="{{ input_url|default('') }}"
+                rows="3"
                 required
-            >
-            <button type="submit">Pobierz dane</button>
+            >{{ input_url|default('') }}</textarea>
+            <div class="search-form-actions">
+                <button type="submit">Pobierz dane</button>
+                <button type="button" class="btn btn-green js-quick-download-trigger" data-media-kind="video">Wideo BEST</button>
+                <button type="button" class="btn btn-download js-quick-download-trigger" data-media-kind="audio">Audio BEST</button>
+            </div>
+            <div class="search-form-extra">
+                <div class="search-form-extra-row">
+                    <label class="field-label" for="quickDlnaCollectionSelect">Dodaj po pobraniu do bukietu DLNA</label>
+                    <select id="quickDlnaCollectionSelect" name="auto_dlna_collection_id" {% if not quick_dlna_collections %}disabled{% endif %}>
+                        <option value="">Nie dodawaj do DLNA</option>
+                        {% for collection in quick_dlna_collections %}
+                            <option value="{{ collection.id }}">{{ collection.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="inline-note">
+                    Wklej jeden lub wiele linków. Najlepiej po jednym w każdej linii. Podgląd źródeł działa tylko dla pojedynczego adresu.
+                </div>
+            </div>
         </form>
 
         {% if error %}

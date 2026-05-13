@@ -1,9 +1,12 @@
 import os
+import re
 import time
 from urllib.parse import quote, urlparse
 
 
 class SourceMediaService:
+    URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+
     def __init__(
         self,
         *,
@@ -46,6 +49,26 @@ class SourceMediaService:
             return parsed.scheme in ("http", "https") and bool(parsed.netloc)
         except Exception:
             return False
+
+    @classmethod
+    def extract_http_urls(cls, raw_text):
+        text = str(raw_text or "").replace("\r\n", "\n").replace("\r", "\n")
+        seen = set()
+        results = []
+
+        for match in cls.URL_PATTERN.findall(text):
+            candidate = str(match or "").strip().rstrip("),.;")
+            if not candidate:
+                continue
+            if not cls.is_valid_http_url(candidate):
+                continue
+            dedupe_key = candidate.casefold()
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            results.append(candidate)
+
+        return results
 
     def get_download_output_ext(self, item):
         media_kind = self._normalize_storage_kind((item or {}).get("media_kind") or "video")
@@ -394,6 +417,129 @@ class SourceMediaService:
 
         precision = 0 if unit_index == 0 else 2
         return ("%0.*f %s" % (precision, value, units[unit_index])).replace(".00 ", " ")
+
+    @staticmethod
+    def get_source_bitrate(item):
+        try:
+            value = float((item or {}).get("bitrate_kbps") or 0)
+        except Exception:
+            value = 0
+        if value > 0:
+            return value
+
+        label = str((item or {}).get("label") or "")
+        match = re.search(r"(\d+(?:\.\d+)?)k\b", label, re.IGNORECASE)
+        if not match:
+            return 0.0
+        try:
+            return float(match.group(1))
+        except Exception:
+            return 0.0
+
+    def get_source_quality_rank(self, item):
+        return (
+            int((item or {}).get("height") or 0),
+            int((item or {}).get("width") or 0),
+            self.get_source_bitrate(item),
+            1 if (item or {}).get("has_audio") else 0,
+        )
+
+    @staticmethod
+    def get_source_container_preference(item, preferred_media_kind="video"):
+        ext = str((item or {}).get("ext") or "").lower()
+        if str(preferred_media_kind or "video").lower() == "audio":
+            if ext == "mp3":
+                return 4
+            if ext == "m4a":
+                return 3
+            if ext in ("aac", "opus"):
+                return 2
+            if ext in ("webm", "ogg"):
+                return 1
+            return 0
+
+        if ext == "mp4":
+            return 3
+        if ext == "mkv":
+            return 2
+        if ext == "webm":
+            return 1
+        return 0
+
+    @staticmethod
+    def compare_rank_desc(left, right):
+        max_length = max(len(left), len(right))
+        for index in range(max_length):
+            left_value = float(left[index] if index < len(left) else 0)
+            right_value = float(right[index] if index < len(right) else 0)
+            if left_value > right_value:
+                return -1
+            if left_value < right_value:
+                return 1
+        return 0
+
+    @staticmethod
+    def is_youtube_extractor(extractor_name):
+        return "youtube" in str(extractor_name or "").strip().lower()
+
+    def choose_best_source(self, items, preferred_media_kind="video", extractor_name=""):
+        candidates = list(items or [])
+        if not candidates:
+            return None
+
+        preferred_kind = str(preferred_media_kind or "video").strip().lower()
+        if preferred_kind == "audio":
+            audio_candidates = [
+                item for item in candidates
+                if str((item or {}).get("media_kind") or "video").strip().lower() == "audio"
+            ]
+            if audio_candidates:
+                candidates = audio_candidates
+            else:
+                av_candidates = [
+                    item for item in candidates
+                    if str((item or {}).get("media_kind") or "video").strip().lower() == "video"
+                    and bool((item or {}).get("has_audio"))
+                ]
+                if av_candidates:
+                    candidates = av_candidates
+        else:
+            video_candidates = [
+                item for item in candidates
+                if str((item or {}).get("media_kind") or "video").strip().lower() == "video"
+            ]
+            if video_candidates:
+                candidates = video_candidates
+
+        youtube_extractor = self.is_youtube_extractor(extractor_name)
+
+        def sort_key(item):
+            media_kind = str((item or {}).get("media_kind") or "video").strip().lower()
+            media_rank = 0 if media_kind == preferred_kind else 1
+
+            if preferred_kind == "audio":
+                quality_rank = (
+                    self.get_source_bitrate(item),
+                    1 if (item or {}).get("has_audio") else 0,
+                    int((item or {}).get("height") or 0),
+                    int((item or {}).get("width") or 0),
+                )
+            else:
+                quality_rank = self.get_source_quality_rank(item)
+
+            container_rank = self.get_source_container_preference(item, preferred_media_kind=preferred_kind)
+            youtube_audio_rank = 1 if (youtube_extractor and (item or {}).get("has_audio")) else 0
+
+            return (
+                media_rank,
+                tuple(-float(value) for value in quality_rank),
+                -container_rank,
+                -youtube_audio_rank,
+                str((item or {}).get("format_id") or ""),
+            )
+
+        candidates.sort(key=sort_key)
+        return candidates[0]
 
     def get_source_download_match_state(self, result, format_id, owner_username=None):
         target_item = self.find_format(result, format_id)

@@ -1,8 +1,32 @@
         .search-form {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) auto;
-            gap: 12px;
+            gap: 14px;
             margin-top: 18px;
+        }
+        .search-form-textarea {
+            min-height: 88px;
+            resize: vertical;
+            line-height: 1.45;
+        }
+        .search-form-actions {
+            display: flex;
+            align-items: stretch;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .search-form-actions > button,
+        .search-form-actions > .btn {
+            flex: 0 0 auto;
+        }
+        .search-form-extra {
+            display: grid;
+            gap: 10px;
+        }
+        .search-form-extra-row {
+            display: grid;
+            grid-template-columns: minmax(220px, 320px);
+            gap: 10px;
+            align-items: start;
         }
         .auth-form {
             display: grid;
@@ -19,6 +43,7 @@
         input[type="url"],
         input[type="text"],
         input[type="password"],
+        textarea,
         select {
             width: 100%;
             padding: 14px 16px;
@@ -32,6 +57,7 @@
         input[type="url"]:focus,
         input[type="text"]:focus,
         input[type="password"]:focus,
+        textarea:focus,
         select:focus {
             border-color: rgba(92, 167, 255, 0.65);
             box-shadow: 0 0 0 3px rgba(92, 167, 255, 0.15);
@@ -925,5 +951,12 @@
             .info-grid,
             .row {
                 grid-template-columns: 1fr;
+            }
+            .search-form-actions,
+            .search-form-extra-row {
+                grid-template-columns: 1fr;
+            }
+            .search-form-actions {
+                display: grid;
             }
         }
