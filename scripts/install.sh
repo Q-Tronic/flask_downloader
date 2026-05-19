@@ -54,6 +54,21 @@ RADIO_SERVICE_NAME="$RADIO_SERVICE_NAME_DEFAULT"
 RADIO_STATION_TEMPLATE="$RADIO_STATION_TEMPLATE_DEFAULT"
 INTERACTIVE_INPUT_FD=""
 STATUS_LINE_VISIBLE=0
+APP_DIR_EXISTED_BEFORE=0
+STORAGE_ROOT_EXISTED_BEFORE=0
+STORAGE_DOWNLOAD_DIR_EXISTED_BEFORE=0
+STORAGE_AUDIO_DIR_EXISTED_BEFORE=0
+STORAGE_USERS_DIR_EXISTED_BEFORE=0
+APP_USER_EXISTED_BEFORE=0
+APP_GROUP_EXISTED_BEFORE=0
+FLASK_SERVICE_FILE_EXISTED_BEFORE=0
+DLNA_SERVICE_FILE_EXISTED_BEFORE=0
+RADIO_SERVICE_FILE_EXISTED_BEFORE=0
+RADIO_STATION_TEMPLATE_FILE_EXISTED_BEFORE=0
+DLNA_EXPORT_ROOT_EXISTED_BEFORE=0
+GERBERA_REPO_KEY_EXISTED_BEFORE=0
+GERBERA_REPO_LIST_EXISTED_BEFORE=0
+CLEANUP_STATE_RECORDED=0
 
 trim_text() {
     local text="$1"
@@ -80,15 +95,19 @@ ensure_interactive_input_fd() {
     return 1
 }
 
-render_bar_text() {
+render_bar_text_with_slots() {
     local percent="$1"
-    local total_slots=28
+    local total_slots="${2:-28}"
     local filled=$(( percent * total_slots / 100 ))
     local empty=$(( total_slots - filled ))
     local bar
     bar="$(printf '%*s' "$filled" '' | tr ' ' '#')"
     bar="${bar}$(printf '%*s' "$empty" '' | tr ' ' '-')"
     printf "[%s] %3s%%" "$bar" "$percent"
+}
+
+render_bar_text() {
+    render_bar_text_with_slots "$1" 28
 }
 
 render_bar() {
@@ -109,22 +128,42 @@ format_elapsed() {
     printf "%02d:%02d" $(( seconds / 60 )) $(( seconds % 60 ))
 }
 
-step_percent_from_local() {
-    local local_percent="${1:-0}"
-    local start_percent=$(( (CURRENT_STEP - 1) * 100 / TOTAL_STEPS ))
-    local end_percent=$(( CURRENT_STEP * 100 / TOTAL_STEPS ))
-    local step_span=$(( end_percent - start_percent ))
+current_step_percent() {
+    printf "%d" $(( CURRENT_STEP * 100 / TOTAL_STEPS ))
+}
 
-    if ! [[ "$local_percent" =~ ^[0-9]+$ ]]; then
-        local_percent=0
+terminal_columns() {
+    local cols=""
+    if [[ -t 1 ]] && command -v tput >/dev/null 2>&1; then
+        cols="$(tput cols 2>/dev/null || true)"
     fi
-    if (( local_percent < 0 )); then
-        local_percent=0
-    elif (( local_percent > 100 )); then
-        local_percent=100
+    if ! [[ "$cols" =~ ^[0-9]+$ ]] || (( cols < 40 )); then
+        cols=80
+    fi
+    printf "%s" "$cols"
+}
+
+truncate_plain_text() {
+    local text="$1"
+    local limit="${2:-80}"
+    local ellipsis="..."
+
+    if ! [[ "$limit" =~ ^[0-9]+$ ]] || (( limit <= 0 )); then
+        printf ""
+        return 0
     fi
 
-    printf "%d" $(( start_percent + (step_span * local_percent / 100) ))
+    if (( ${#text} <= limit )); then
+        printf "%s" "$text"
+        return 0
+    fi
+
+    if (( limit <= ${#ellipsis} )); then
+        printf "%.*s" "$limit" "$ellipsis"
+        return 0
+    fi
+
+    printf "%s%s" "${text:0:$((limit - ${#ellipsis}))}" "$ellipsis"
 }
 
 show_live_status() {
@@ -137,15 +176,42 @@ show_live_status() {
     local activity_detail="${3:-}"
     local elapsed_seconds="${4:-0}"
     local overall_percent
+    local term_cols
+    local bar_slots=18
+    local bar_text=""
+    local detail_suffix=""
+    local short_elapsed=""
     local line
 
-    overall_percent="$(step_percent_from_local "$local_percent")"
-    line="${C_MUTED}$(render_bar_text "$overall_percent")${C_RESET} ${activity_label}"
-    if [[ -n "$activity_detail" ]]; then
-        line="${line} ${C_MUTED}|${C_RESET} ${activity_detail}"
+    overall_percent="$(current_step_percent)"
+    term_cols="$(terminal_columns)"
+    if (( term_cols < 70 )); then
+        bar_slots=12
     fi
-    line="${line} ${C_MUTED}|${C_RESET} ${C_BLUE}trwa $(format_elapsed "$elapsed_seconds")${C_RESET}"
-    printf "\r\033[2K%b" "$line"
+    if (( term_cols < 56 )); then
+        bar_slots=8
+    fi
+    bar_text="$(render_bar_text_with_slots "$overall_percent" "$bar_slots")"
+    short_elapsed="trwa $(format_elapsed "$elapsed_seconds")"
+
+    if [[ -n "$activity_detail" ]]; then
+        detail_suffix="$activity_detail"
+    fi
+    if [[ -n "$local_percent" && "$local_percent" != "0" ]]; then
+        if [[ -n "$detail_suffix" ]]; then
+            detail_suffix="${local_percent}% ${detail_suffix}"
+        else
+            detail_suffix="${local_percent}%"
+        fi
+    fi
+
+    line="${bar_text} ${activity_label}"
+    if [[ -n "$detail_suffix" ]]; then
+        line="${line} | ${detail_suffix}"
+    fi
+    line="${line} | ${short_elapsed}"
+    line="$(truncate_plain_text "$line" "$((term_cols - 1))")"
+    printf "\r\033[2K%s" "$line"
     STATUS_LINE_VISIBLE=1
 }
 
@@ -267,7 +333,7 @@ run_logged() {
 
     log_fail "${description}. Szczegóły: ${INSTALL_LOG}"
     tail -n 40 "$INSTALL_LOG" >&2 || true
-    exit 1
+    abort_install
 }
 
 run_logged_streamed() {
@@ -305,6 +371,163 @@ run_logged_streamed() {
 
     log_fail "${description}. Szczegóły: ${INSTALL_LOG}"
     tail -n 40 "$INSTALL_LOG" >&2 || true
+    abort_install
+}
+
+record_preinstall_state() {
+    [[ -e "$APP_DIR" ]] && APP_DIR_EXISTED_BEFORE=1
+    [[ -e "$STORAGE_ROOT" ]] && STORAGE_ROOT_EXISTED_BEFORE=1
+    [[ -d "$STORAGE_ROOT/flask_downloader" ]] && STORAGE_DOWNLOAD_DIR_EXISTED_BEFORE=1
+    [[ -d "$STORAGE_ROOT/flask_downloader_audio" ]] && STORAGE_AUDIO_DIR_EXISTED_BEFORE=1
+    [[ -d "$STORAGE_ROOT/flask_downloader_users" ]] && STORAGE_USERS_DIR_EXISTED_BEFORE=1
+    getent group "$APP_GROUP" >/dev/null 2>&1 && APP_GROUP_EXISTED_BEFORE=1
+    id -u "$APP_USER" >/dev/null 2>&1 && APP_USER_EXISTED_BEFORE=1
+    [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]] && FLASK_SERVICE_FILE_EXISTED_BEFORE=1
+    [[ -f "/etc/systemd/system/${DLNA_SERVICE_NAME}.service" ]] && DLNA_SERVICE_FILE_EXISTED_BEFORE=1
+    [[ -f "/etc/systemd/system/${RADIO_SERVICE_NAME}.service" ]] && RADIO_SERVICE_FILE_EXISTED_BEFORE=1
+    [[ -f "/etc/systemd/system/${RADIO_STATION_TEMPLATE}.service" ]] && RADIO_STATION_TEMPLATE_FILE_EXISTED_BEFORE=1
+    [[ -e "/dlna" ]] && DLNA_EXPORT_ROOT_EXISTED_BEFORE=1
+    [[ -f "/usr/share/keyrings/gerbera-keyring.gpg" ]] && GERBERA_REPO_KEY_EXISTED_BEFORE=1
+    [[ -f "/etc/apt/sources.list.d/gerbera.list" ]] && GERBERA_REPO_LIST_EXISTED_BEFORE=1
+    CLEANUP_STATE_RECORDED=1
+}
+
+cleanup_candidates_exist() {
+    if (( CLEANUP_STATE_RECORDED == 0 )); then
+        return 1
+    fi
+    if (( APP_DIR_EXISTED_BEFORE == 0 )) && [[ -e "$APP_DIR" ]]; then
+        return 0
+    fi
+    if (( STORAGE_DOWNLOAD_DIR_EXISTED_BEFORE == 0 )) && [[ -e "$STORAGE_ROOT/flask_downloader" ]]; then
+        return 0
+    fi
+    if (( STORAGE_AUDIO_DIR_EXISTED_BEFORE == 0 )) && [[ -e "$STORAGE_ROOT/flask_downloader_audio" ]]; then
+        return 0
+    fi
+    if (( STORAGE_USERS_DIR_EXISTED_BEFORE == 0 )) && [[ -e "$STORAGE_ROOT/flask_downloader_users" ]]; then
+        return 0
+    fi
+    if (( STORAGE_ROOT_EXISTED_BEFORE == 0 )) && [[ -e "$STORAGE_ROOT" ]]; then
+        return 0
+    fi
+    if (( FLASK_SERVICE_FILE_EXISTED_BEFORE == 0 )) && [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]]; then
+        return 0
+    fi
+    if (( DLNA_SERVICE_FILE_EXISTED_BEFORE == 0 )) && [[ -f "/etc/systemd/system/${DLNA_SERVICE_NAME}.service" ]]; then
+        return 0
+    fi
+    if (( RADIO_SERVICE_FILE_EXISTED_BEFORE == 0 )) && [[ -f "/etc/systemd/system/${RADIO_SERVICE_NAME}.service" ]]; then
+        return 0
+    fi
+    if (( RADIO_STATION_TEMPLATE_FILE_EXISTED_BEFORE == 0 )) && [[ -f "/etc/systemd/system/${RADIO_STATION_TEMPLATE}.service" ]]; then
+        return 0
+    fi
+    if (( DLNA_EXPORT_ROOT_EXISTED_BEFORE == 0 )) && [[ -e "/dlna" ]]; then
+        return 0
+    fi
+    if (( GERBERA_REPO_KEY_EXISTED_BEFORE == 0 )) && [[ -f "/usr/share/keyrings/gerbera-keyring.gpg" ]]; then
+        return 0
+    fi
+    if (( GERBERA_REPO_LIST_EXISTED_BEFORE == 0 )) && [[ -f "/etc/apt/sources.list.d/gerbera.list" ]]; then
+        return 0
+    fi
+    if (( APP_USER_EXISTED_BEFORE == 0 )) && id -u "$APP_USER" >/dev/null 2>&1; then
+        return 0
+    fi
+    if (( APP_GROUP_EXISTED_BEFORE == 0 )) && getent group "$APP_GROUP" >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
+}
+
+perform_install_cleanup() {
+    log_info "Usuwam pliki i usługi utworzone przez nieudaną instalację."
+
+    systemctl disable --now "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
+    systemctl disable --now "${DLNA_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+    systemctl disable --now "${RADIO_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+
+    if (( FLASK_SERVICE_FILE_EXISTED_BEFORE == 0 )); then
+        rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+    fi
+    if (( DLNA_SERVICE_FILE_EXISTED_BEFORE == 0 )); then
+        rm -f "/etc/systemd/system/${DLNA_SERVICE_NAME}.service"
+    fi
+    if (( RADIO_SERVICE_FILE_EXISTED_BEFORE == 0 )); then
+        rm -f "/etc/systemd/system/${RADIO_SERVICE_NAME}.service"
+    fi
+    if (( RADIO_STATION_TEMPLATE_FILE_EXISTED_BEFORE == 0 )); then
+        rm -f "/etc/systemd/system/${RADIO_STATION_TEMPLATE}.service"
+    fi
+    systemctl daemon-reload >/dev/null 2>&1 || true
+
+    if (( GERBERA_REPO_KEY_EXISTED_BEFORE == 0 )); then
+        rm -f "/usr/share/keyrings/gerbera-keyring.gpg"
+    fi
+    if (( GERBERA_REPO_LIST_EXISTED_BEFORE == 0 )); then
+        rm -f "/etc/apt/sources.list.d/gerbera.list"
+    fi
+
+    if (( DLNA_EXPORT_ROOT_EXISTED_BEFORE == 0 )); then
+        rm -rf /dlna
+    fi
+    if (( APP_DIR_EXISTED_BEFORE == 0 )); then
+        rm -rf "$APP_DIR"
+    fi
+    if (( STORAGE_DOWNLOAD_DIR_EXISTED_BEFORE == 0 )); then
+        rm -rf "$STORAGE_ROOT/flask_downloader"
+    fi
+    if (( STORAGE_AUDIO_DIR_EXISTED_BEFORE == 0 )); then
+        rm -rf "$STORAGE_ROOT/flask_downloader_audio"
+    fi
+    if (( STORAGE_USERS_DIR_EXISTED_BEFORE == 0 )); then
+        rm -rf "$STORAGE_ROOT/flask_downloader_users"
+    fi
+    if (( STORAGE_ROOT_EXISTED_BEFORE == 0 )); then
+        rm -rf "$STORAGE_ROOT"
+    fi
+    if (( APP_USER_EXISTED_BEFORE == 0 )); then
+        userdel -r "$APP_USER" >/dev/null 2>&1 || true
+    fi
+    if (( APP_GROUP_EXISTED_BEFORE == 0 )); then
+        groupdel "$APP_GROUP" >/dev/null 2>&1 || true
+    fi
+
+    log_ok "Usunięto pliki i usługi utworzone przez instalator."
+}
+
+offer_cleanup_after_failure() {
+    if ! cleanup_candidates_exist; then
+        return 0
+    fi
+
+    if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
+        log_warn "Instalacja nie powiodła się. Pozostawiam utworzone pliki do diagnostyki, bo tryb jest nieinteraktywny."
+        return 0
+    fi
+
+    if ! ensure_interactive_input_fd; then
+        log_warn "Instalacja nie powiodła się i nie mam dostępu do terminala, więc zostawiam pliki do ręcznej diagnostyki."
+        return 0
+    fi
+
+    local answer=""
+    printf "%s" "Czy usunąć pliki i usługi utworzone przez nieudaną instalację? [t/N]: " > /dev/tty
+    IFS= read -r -u "$INTERACTIVE_INPUT_FD" answer || true
+    answer="$(trim_text "$answer")"
+    case "${answer,,}" in
+        t|tak|y|yes)
+            perform_install_cleanup
+            ;;
+        *)
+            log_warn "Pozostawiono utworzone pliki do ręcznej diagnostyki."
+            ;;
+    esac
+}
+
+abort_install() {
+    offer_cleanup_after_failure
     exit 1
 }
 
@@ -319,27 +542,27 @@ begin_step() {
 require_root() {
     if [[ "${EUID}" -ne 0 ]]; then
         log_fail "Uruchom instalator jako root lub przez sudo."
-        exit 1
+        abort_install
     fi
 }
 
 detect_debian() {
     if [[ ! -f /etc/os-release ]]; then
         log_fail "Nie znaleziono /etc/os-release."
-        exit 1
+        abort_install
     fi
 
     # shellcheck disable=SC1091
     . /etc/os-release
     if [[ "${ID:-}" != "debian" ]]; then
         log_fail "Instalator obsługuje wyłącznie Debiana."
-        exit 1
+        abort_install
     fi
 
     DEBIAN_MAJOR="${VERSION_ID%%.*}"
     if [[ -z "${DEBIAN_MAJOR}" || "${DEBIAN_MAJOR}" -lt 10 ]]; then
         log_fail "Wymagany jest Debian 10 lub nowszy."
-        exit 1
+        abort_install
     fi
 }
 
@@ -349,7 +572,7 @@ prompt_default() {
     local answer
     if ! ensure_interactive_input_fd; then
         log_fail "Brak dostępu do terminala dla interaktywnych pytań. Użyj --non-interactive albo uruchom instalator przez: bash -c \"\$(curl -fsSL .../install.sh)\""
-        exit 1
+        abort_install
     fi
     printf "%s [%s]: " "$prompt" "$default_value" > /dev/tty
     IFS= read -r -u "$INTERACTIVE_INPUT_FD" answer || true
@@ -363,7 +586,7 @@ prompt_timeout_default() {
     local answer=""
     if ! ensure_interactive_input_fd; then
         log_fail "Brak dostępu do terminala dla interaktywnych pytań. Użyj --non-interactive albo uruchom instalator przez: bash -c \"\$(curl -fsSL .../install.sh)\""
-        exit 1
+        abort_install
     fi
     printf "%s [%s] (timeout %ss): " "$prompt" "$default_value" "$timeout_seconds" > /dev/tty
     IFS= read -r -t "$timeout_seconds" -u "$INTERACTIVE_INPUT_FD" answer || true
@@ -375,7 +598,7 @@ prompt_admin_password() {
     local second=""
     if ! ensure_interactive_input_fd; then
         log_fail "Brak dostępu do terminala dla hasła administratora. Użyj FLASK_DOWNLOADER_ADMIN_PASSWORD albo --admin-password."
-        exit 1
+        abort_install
     fi
     while true; do
         printf "%s" "Hasło dla pierwszego użytkownika admin: " > /dev/tty
@@ -848,7 +1071,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         *)
             log_fail "Nieznany parametr: $1"
-            exit 1
+            abort_install
             ;;
     esac
 done
@@ -885,7 +1108,7 @@ RADIO_STATION_TEMPLATE="$(resolve_install_value "${RADIO_STATION_TEMPLATE:-$RADI
 while ! validate_port_value "$APP_PORT"; do
     if [[ "$NON_INTERACTIVE" -eq 1 || "$APP_PORT_FROM_ARG" -eq 1 ]]; then
         log_fail "Port musi być liczbą z zakresu 1-65535."
-        exit 1
+        abort_install
     fi
     log_warn "Port musi być liczbą z zakresu 1-65535."
     APP_PORT="$(prompt_default 'Port aplikacji' "$APP_PORT_DEFAULT")"
@@ -896,7 +1119,7 @@ while ! port_is_available "$APP_PORT"; do
     fi
     if [[ "$NON_INTERACTIVE" -eq 1 || "$APP_PORT_FROM_ARG" -eq 1 ]]; then
         log_fail "Port ${APP_PORT} jest już zajęty."
-        exit 1
+        abort_install
     fi
     log_warn "Port ${APP_PORT} jest już zajęty."
     APP_PORT="$(prompt_default 'Port aplikacji' "$APP_PORT_DEFAULT")"
@@ -904,15 +1127,16 @@ done
 if [[ -n "$ADMIN_PASSWORD" ]]; then
     if [[ "${#ADMIN_PASSWORD}" -lt 4 ]]; then
         log_fail "Hasło admina musi mieć co najmniej 4 znaki."
-        exit 1
+        abort_install
     fi
 elif [[ "$NON_INTERACTIVE" -eq 1 ]]; then
     log_fail "W trybie nieinteraktywnym podaj hasło przez FLASK_DOWNLOADER_ADMIN_PASSWORD albo --admin-password."
-    exit 1
+    abort_install
 else
     prompt_admin_password
 fi
 log_ok "Zebrano ustawienia instalacyjne."
+record_preinstall_state
 
 begin_step "Instalacja pakietów systemowych"
 export DEBIAN_FRONTEND=noninteractive
@@ -936,7 +1160,7 @@ if [[ -d "$APP_DIR/.git" ]]; then
 else
     if [[ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name backups 2>/dev/null)" ]]; then
         log_fail "Katalog aplikacji nie jest pusty i nie wygląda na repo Git: $APP_DIR"
-        exit 1
+        abort_install
     fi
     rm -rf "$APP_DIR"
     run_logged "Klonuję kod aplikacji" git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"

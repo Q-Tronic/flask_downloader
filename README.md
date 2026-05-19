@@ -29,6 +29,7 @@ Instalator:
 - pyta o port aplikacji,
 - pyta o hasło pierwszego konta `admin`,
 - pozwala zostawić domyślne ścieżki, użytkownika usługi i nazwy usług przez zwykłe `Enter`,
+- przy nieudanej instalacji może usunąć pliki i usługi utworzone przez instalator, bez ruszania pakietów systemowych,
 - tworzy usługę `systemd`,
 - instaluje `yt-dlp`,
 - instaluje zarządzany `ffmpeg`,

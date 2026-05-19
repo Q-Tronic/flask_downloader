@@ -462,8 +462,10 @@ class DlnaUpdateService:
         if not gpg_binary:
             raise RuntimeError("Brakuje binarki gpg potrzebnej do instalacji oficjalnego repo Gerbera.")
 
-        os.makedirs(os.path.dirname(self._repo_keyring_file), exist_ok=True)
-        os.makedirs(os.path.dirname(self._repo_list_file), exist_ok=True)
+        keyring_dir = os.path.dirname(self._repo_keyring_file)
+        repo_list_dir = os.path.dirname(self._repo_list_file)
+        os.makedirs(keyring_dir, exist_ok=True)
+        os.makedirs(repo_list_dir, exist_ok=True)
 
         ascii_tmp = ""
         gpg_tmp = ""
@@ -471,7 +473,15 @@ class DlnaUpdateService:
             with tempfile.NamedTemporaryFile(delete=False) as ascii_fh:
                 ascii_fh.write(key_bytes)
                 ascii_tmp = ascii_fh.name
-            with tempfile.NamedTemporaryFile(delete=False) as gpg_fh:
+            # Plik tymczasowy dla końcowego keyringu musi powstać w tym samym
+            # katalogu co plik docelowy, żeby końcowy os.replace nie wpadał
+            # w EXDEV na systemach z osobnym /tmp (np. Debian 13 / trixie).
+            with tempfile.NamedTemporaryFile(
+                delete=False,
+                dir=keyring_dir,
+                prefix=".gerbera-keyring-",
+                suffix=".gpg",
+            ) as gpg_fh:
                 gpg_tmp = gpg_fh.name
 
             result = subprocess.run(
