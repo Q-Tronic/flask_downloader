@@ -5367,10 +5367,17 @@ def write_text_file_with_optional_sudo(path, text, *, encoding="utf-8", timeout=
         try:
             if os.geteuid() != 0:
                 sudo_binary = shutil.which("sudo")
-                tee_binary = shutil.which("tee") or "/usr/bin/tee"
+                writer_candidates = (
+                    "/usr/local/lib/flask-downloader/write-system-file",
+                    "/usr/local/libexec/flask-downloader/write-system-file",
+                )
+                writer_binary = next(
+                    (candidate for candidate in writer_candidates if os.path.isfile(candidate) and os.access(candidate, os.X_OK)),
+                    "",
+                )
                 if sudo_binary:
                     completed_process = subprocess.run(
-                        [sudo_binary, "-n", tee_binary, normalized_path],
+                        [sudo_binary, "-n", writer_binary or (shutil.which("tee") or "/usr/bin/tee"), normalized_path],
                         input=str(text or ""),
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.PIPE,

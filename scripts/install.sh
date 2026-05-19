@@ -71,6 +71,8 @@ GERBERA_REPO_LIST_EXISTED_BEFORE=0
 CLEANUP_STATE_RECORDED=0
 SUDOERS_RULE_FILE=""
 SUDOERS_RULE_FILE_EXISTED_BEFORE=0
+SYSTEM_FILE_WRITER_HELPER="/usr/local/lib/flask-downloader/write-system-file"
+SYSTEM_FILE_WRITER_HELPER_EXISTED_BEFORE=0
 
 trim_text() {
     local text="$1"
@@ -393,6 +395,7 @@ record_preinstall_state() {
     [[ -f "/usr/share/keyrings/gerbera-keyring.gpg" ]] && GERBERA_REPO_KEY_EXISTED_BEFORE=1
     [[ -f "/etc/apt/sources.list.d/gerbera.list" ]] && GERBERA_REPO_LIST_EXISTED_BEFORE=1
     [[ -n "$SUDOERS_RULE_FILE" && -f "$SUDOERS_RULE_FILE" ]] && SUDOERS_RULE_FILE_EXISTED_BEFORE=1
+    [[ -f "$SYSTEM_FILE_WRITER_HELPER" ]] && SYSTEM_FILE_WRITER_HELPER_EXISTED_BEFORE=1
     CLEANUP_STATE_RECORDED=1
 }
 
@@ -433,6 +436,9 @@ cleanup_candidates_exist() {
     if (( SUDOERS_RULE_FILE_EXISTED_BEFORE == 0 )) && [[ -n "$SUDOERS_RULE_FILE" && -f "$SUDOERS_RULE_FILE" ]]; then
         return 0
     fi
+    if (( SYSTEM_FILE_WRITER_HELPER_EXISTED_BEFORE == 0 )) && [[ -f "$SYSTEM_FILE_WRITER_HELPER" ]]; then
+        return 0
+    fi
     if (( GERBERA_REPO_KEY_EXISTED_BEFORE == 0 )) && [[ -f "/usr/share/keyrings/gerbera-keyring.gpg" ]]; then
         return 0
     fi
@@ -469,6 +475,10 @@ perform_install_cleanup() {
     fi
     if (( SUDOERS_RULE_FILE_EXISTED_BEFORE == 0 )) && [[ -n "$SUDOERS_RULE_FILE" ]]; then
         rm -f "$SUDOERS_RULE_FILE"
+    fi
+    if (( SYSTEM_FILE_WRITER_HELPER_EXISTED_BEFORE == 0 )); then
+        rm -f "$SYSTEM_FILE_WRITER_HELPER"
+        rmdir --ignore-fail-on-non-empty "$(dirname "$SYSTEM_FILE_WRITER_HELPER")" >/dev/null 2>&1 || true
     fi
     systemctl daemon-reload >/dev/null 2>&1 || true
 
@@ -550,6 +560,38 @@ build_sudoers_rule_file_path() {
         base_name="flask-downloader"
     fi
     printf "/etc/sudoers.d/%s-panel" "$base_name"
+}
+
+install_system_file_writer_helper() {
+    install -d -m 755 "$(dirname "$SYSTEM_FILE_WRITER_HELPER")"
+    cat > "$SYSTEM_FILE_WRITER_HELPER" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+target="${1:-}"
+if [[ -z "$target" ]]; then
+    echo "Brak ścieżki docelowej." >&2
+    exit 64
+fi
+
+target="$(readlink -f -- "$target" 2>/dev/null || printf '%s' "$target")"
+case "$target" in
+    /etc/systemd/system/*.service) ;;
+    *)
+        echo "Nieobsługiwana ścieżka docelowa: $target" >&2
+        exit 65
+        ;;
+esac
+
+target_dir="$(dirname "$target")"
+tmp_file="$(mktemp "${target_dir}/.$(basename "$target").tmp.XXXXXX")"
+trap 'rm -f "$tmp_file"' EXIT
+cat > "$tmp_file"
+chmod 0644 "$tmp_file"
+mv -f "$tmp_file" "$target"
+trap - EXIT
+EOF
+    chmod 755 "$SYSTEM_FILE_WRITER_HELPER"
 }
 
 begin_step() {
@@ -731,7 +773,7 @@ install_privileged_sudoers_rules() {
 
     cat > "$sudoers_file" <<EOF
 Defaults:${APP_USER} !requiretty
-${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl, /usr/bin/systemctl, /bin/mount, /usr/bin/mount
+${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl, /usr/bin/systemctl, /bin/mount, /usr/bin/mount, ${SYSTEM_FILE_WRITER_HELPER}
 EOF
     chmod 440 "$sudoers_file"
     if command -v visudo >/dev/null 2>&1; then
@@ -744,10 +786,17 @@ EOF
 
 verify_privileged_sudoers_rules() {
     local systemctl_binary
+    local probe_unit_file
     systemctl_binary="$(command -v systemctl || printf '/bin/systemctl')"
+    probe_unit_file="/etc/systemd/system/${SERVICE_NAME}-panel-probe.service"
 
     if [[ -z "$SUDOERS_RULE_FILE" || ! -f "$SUDOERS_RULE_FILE" ]]; then
         log_fail "Nie utworzono pliku sudoers dla użytkownika usługi: ${APP_USER}."
+        abort_install
+    fi
+
+    if [[ ! -x "$SYSTEM_FILE_WRITER_HELPER" ]]; then
+        log_fail "Nie udało się przygotować helpera do zapisu plików systemd."
         abort_install
     fi
 
@@ -755,6 +804,12 @@ verify_privileged_sudoers_rules() {
         log_fail "Użytkownik usługi ${APP_USER} nie dostał działających uprawnień sudo do systemctl."
         abort_install
     }
+
+    su -s /bin/sh -c "printf '%s\n' '[Unit]' 'Description=Flask Downloader panel probe' | sudo -n '$SYSTEM_FILE_WRITER_HELPER' '$probe_unit_file'" "$APP_USER" >>"$INSTALL_LOG" 2>&1 || {
+        log_fail "Użytkownik usługi ${APP_USER} nie dostał działających uprawnień do zapisu unitów systemd."
+        abort_install
+    }
+    rm -f "$probe_unit_file"
 }
 
 ensure_git_safe_directory() {
@@ -1200,6 +1255,7 @@ log_ok "Pakiety systemowe są gotowe."
 
 begin_step "Tworzenie użytkownika i uprawnień"
 ensure_group_and_user
+run_logged "Instaluję helper do bezpiecznego zapisu unitów systemd" install_system_file_writer_helper
 run_logged "Konfiguruję uprawnienia sudoers dla usera usługi" install_privileged_sudoers_rules
 run_logged "Weryfikuję uprawnienia sudo dla usera usługi" verify_privileged_sudoers_rules
 mkdir -p "$APP_DIR" "$APP_DIR/backups" "$STORAGE_ROOT"
