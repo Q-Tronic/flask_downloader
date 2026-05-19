@@ -27,9 +27,11 @@ tar \
     --exclude='.venv' \
     --exclude='__pycache__' \
     --exclude='data/*.json' \
+    --exclude='data/runtime' \
     --exclude='.env' \
     --exclude='backups' \
     --exclude='tools/dlna/runtime' \
+    --exclude='tools/ffmpeg' \
     -czf "$ARCHIVE_FILE" .
 
 scp -P "$PORT" "$ARCHIVE_FILE" "${USER_NAME}@${HOST}:${REMOTE_ARCHIVE}"
@@ -44,6 +46,7 @@ if [[ -d "$APP_DIR" ]]; then
         --exclude='data' \
         --exclude='.env' \
         --exclude='tools/dlna/runtime' \
+        --exclude='tools/ffmpeg' \
         -czf "$APP_DIR/backups/code-$TIMESTAMP.tgz" \
         -C "$APP_DIR" .
 fi

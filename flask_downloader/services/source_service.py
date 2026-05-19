@@ -133,6 +133,9 @@ class SourceMediaService:
         return "%s - %s" % (prefix, base_title)
 
     def build_download_basename(self, title, item):
+        media_kind = str((item or {}).get("media_kind") or "").strip().lower()
+        if media_kind == "audio":
+            return self._safe_filename(title, default="audio")
         label = item.get("label") or item.get("format_id") or "source"
         return self._safe_filename("%s_%s" % (title, label), default="video")
 

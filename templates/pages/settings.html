@@ -1,15 +1,22 @@
 
 <section class="page-card">
-    <h1 class="page-title">Konfiguracja</h1>
+    <div class="page-title-row">
+        <h1 class="page-title">Konfiguracja</h1>
+        <div
+            id="settingsMountStatus"
+            class="page-status-inline {{ 'is-online' if mount.online else 'is-offline' }}"
+            title="{{ mount.message }}"
+        >
+            <span class="page-status-icon" aria-hidden="true"></span>
+            <span class="page-status-text">
+                <span class="page-status-icon-dot" aria-hidden="true"></span>
+                {{ "Serwer danych online" if mount.online else "Serwer danych offline" }}
+            </span>
+        </div>
+    </div>
     <p class="muted">
         Tu ustawisz retencję wpisów z pobrań i główną lokalizację zapisu. Każde pobranie trafia automatycznie do podfolderu z datą w formacie <code>YYYY-MM-DD</code>.
     </p>
-
-    {% if mount.online %}
-        <div id="settingsMountStatus" class="mount-ok">{{ mount.message }}</div>
-    {% else %}
-        <div id="settingsMountStatus" class="mount-bad">{{ mount.message }}</div>
-    {% endif %}
 
     <div class="settings-overview-grid">
         <div class="overview-tile">
@@ -440,6 +447,105 @@
 
                 <div class="actions" style="margin-top: 4px;">
                     <a class="btn btn-secondary" href="/dlna" data-shell-nav="true">Otwórz pełną zakładkę DLNA</a>
+                </div>
+            </div>
+
+            <div class="stack-card service-card">
+                <div class="card-heading">
+                    <div class="card-title">Backend radia</div>
+                    <div class="card-subtitle">
+                        Wspólny backend internetu radia oparty o <code>Icecast</code> i <code>Liquidsoap</code>. Tu sprawdzisz pakiety, stan usługi backendowej i szybko przejdziesz do pełnej zakładki <code>Moje radio</code>.
+                    </div>
+                </div>
+
+                <div class="service-status-row">
+                    <span id="settingsRadioPackageStatusPill" class="service-status-pill {{ radio_backend_package_state.status_pill_kind }}">{{ radio_backend_package_state.status_pill_label }}</span>
+                    <div id="settingsRadioPackageCheckedAt" class="small">Ostatnie sprawdzenie: {{ radio_backend_package_state.checked_at_text }}</div>
+                </div>
+
+                <div class="settings-overview-grid">
+                    <div class="overview-tile">
+                        <span>Icecast na serwerze</span>
+                        <strong id="settingsRadioIcecastCurrentVersion">{{ (radio_backend_package_state.packages[0].current_version if radio_backend_package_state.packages|length > 0 else "brak") }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Liquidsoap na serwerze</span>
+                        <strong id="settingsRadioLiquidsoapCurrentVersion">{{ (radio_backend_package_state.packages[1].current_version if radio_backend_package_state.packages|length > 1 else "brak") }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Status backendu</span>
+                        <strong id="settingsRadioServiceStatus">{{ radio_backend_service_state.status_label }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Autostart backendu</span>
+                        <strong id="settingsRadioUnitState">{{ radio_backend_service_state.unit_file_label }}</strong>
+                    </div>
+                </div>
+
+                <div id="settingsRadioPackageErrorBox" class="error" {% if not radio_backend_package_state.check_error %}hidden{% endif %}>
+                    <span id="settingsRadioPackageErrorText">{% if radio_backend_package_state.check_error %}Ostatnia próba sprawdzenia zakończyła się błędem: {{ radio_backend_package_state.check_error }}{% endif %}</span>
+                </div>
+
+                <div id="settingsRadioServiceErrorBox" class="error" {% if not radio_backend_service_state.error %}hidden{% endif %}>
+                    <span id="settingsRadioServiceErrorText">{% if radio_backend_service_state.error %}Nie udało się odczytać pełnego statusu backendu radia: {{ radio_backend_service_state.error }}{% endif %}</span>
+                </div>
+
+                <div class="service-metric">
+                    <span>Runtime backendu</span>
+                    <strong><code id="settingsRadioRuntimeRoot">{{ radio_backend_service_state.runtime_root }}</code></strong>
+                </div>
+
+                <form id="settingsRadioCheckForm" method="post" action="/settings/radio-check" class="auth-form" data-maintenance-lock="radio_backend_install" data-settings-async="true">
+                    <button type="submit" class="btn btn-secondary full-width">Sprawdź backend radia</button>
+                </form>
+
+                <form id="settingsRadioActionForm" method="post" action="/settings/radio-install" class="auth-form" data-maintenance-lock="radio_backend_install" data-maintenance-start="radio_backend_install" data-settings-async="true" {% if not radio_backend_package_state.action_needed %}hidden{% endif %}>
+                    <button id="settingsRadioActionButton" type="submit" class="btn btn-green full-width">{{ radio_backend_package_state.action_button_label }}</button>
+                </form>
+
+                <div id="settingsRadioActionNote" class="inline-note" {% if radio_backend_package_state.action_needed %}hidden{% endif %}>
+                    Backend radia nie wymaga teraz instalacji ani aktualizacji.
+                </div>
+
+                <div id="settingsRadioTaskPanel" class="maintenance-task-panel" {% if not maintenance_tasks.radio_backend_install.visible %}hidden{% endif %}>
+                    <div class="service-status-row">
+                        <span id="settingsRadioTaskStatusPill" class="service-status-pill {{ maintenance_tasks.radio_backend_install.status_kind }}">{{ maintenance_tasks.radio_backend_install.status_label }}</span>
+                        <div id="settingsRadioTaskTime" class="small">
+                            {% if maintenance_tasks.radio_backend_install.active %}
+                                Start: {{ maintenance_tasks.radio_backend_install.started_at_text }}
+                            {% elif maintenance_tasks.radio_backend_install.finished_at_text %}
+                                Zakończono: {{ maintenance_tasks.radio_backend_install.finished_at_text }}
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="maintenance-task-head">
+                        <div id="settingsRadioTaskLabel" class="maintenance-task-label">{{ maintenance_tasks.radio_backend_install.title or "Instalacja backendu radia" }}</div>
+                        <div id="settingsRadioTaskPercent" class="maintenance-task-percent">
+                            {% if maintenance_tasks.radio_backend_install.progress_percent is not none %}
+                                {{ "%.1f"|format(maintenance_tasks.radio_backend_install.progress_percent) }}%
+                            {% else %}
+                                ...
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div id="settingsRadioTaskProgress" class="progress{% if maintenance_tasks.radio_backend_install.progress_percent is none %} is-indeterminate{% endif %}">
+                        <div id="settingsRadioTaskBar" class="progress-bar {% if maintenance_tasks.radio_backend_install.active %}downloading{% elif maintenance_tasks.radio_backend_install.status == 'success' %}completed{% elif maintenance_tasks.radio_backend_install.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if maintenance_tasks.radio_backend_install.progress_percent is not none %}{{ maintenance_tasks.radio_backend_install.progress_percent }}{% else %}38{% endif %}%;"></div>
+                    </div>
+                    <div id="settingsRadioTaskDetail" class="maintenance-task-detail">{{ maintenance_tasks.radio_backend_install.detail or "Po uruchomieniu instalacji zobaczysz tutaj kolejne etapy pracy." }}</div>
+                </div>
+
+                <form id="settingsRadioToggleForm" method="post" action="/settings/radio-toggle-service" class="auth-form" data-settings-async="true">
+                    <input type="hidden" name="enabled" value="{{ '0' if radio_backend_service_state.service_active else '1' }}">
+                    <button id="settingsRadioToggleButton" type="submit" class="btn btn-green full-width">{{ radio_backend_service_state.toggle_button_label }}</button>
+                </form>
+
+                <form id="settingsRadioRestartForm" method="post" action="/settings/radio-restart-service" class="auth-form" data-settings-async="true">
+                    <button id="settingsRadioRestartButton" type="submit" class="btn btn-stop full-width">Uruchom ponownie backend radia</button>
+                </form>
+
+                <div class="actions" style="margin-top: 4px;">
+                    <a class="btn btn-secondary" href="/radio" data-shell-nav="true">Otwórz pełną zakładkę radia</a>
+                    <a class="btn btn-secondary" href="/logs-radio-backend" target="_blank" rel="noopener">Log backendu radia</a>
                 </div>
             </div>
 

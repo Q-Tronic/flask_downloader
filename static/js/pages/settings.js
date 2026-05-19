@@ -171,8 +171,16 @@
             return;
         }
 
-        node.className = mount.online ? "mount-ok" : "mount-bad";
-        node.textContent = String(mount.message || "");
+        const online = !!mount.online;
+        node.className = "page-status-inline " + (online ? "is-online" : "is-offline");
+        node.title = String(mount.message || "");
+        node.innerHTML = `
+            <span class="page-status-icon" aria-hidden="true"></span>
+            <span class="page-status-text">
+                <span class="page-status-icon-dot" aria-hidden="true"></span>
+                ${online ? "Serwer danych online" : "Serwer danych offline"}
+            </span>
+        `;
     }
 
     function applyConfigState(config, todayDownloadDir, todayAudioDownloadDir) {
@@ -435,6 +443,75 @@
         setText("settingsDlnaServiceErrorText", hasError ? ("Nie udało się odczytać pełnego statusu usługi DLNA: " + state.error) : "");
     }
 
+    function findRadioPackage(state, packageName) {
+        const packages = Array.isArray(state && state.packages) ? state.packages : [];
+        return packages.find(function(item) {
+            return String(item && item.name || "").toLowerCase() === String(packageName || "").toLowerCase();
+        }) || null;
+    }
+
+    function applyRadioPackageState(state, task) {
+        if (!state) {
+            return;
+        }
+
+        const taskActive = !!(task && task.active);
+        const pillKind = taskActive ? "queued" : state.status_pill_kind;
+        const pillLabel = taskActive ? "Trwa instalacja backendu radia" : state.status_pill_label;
+        const icecastPackage = findRadioPackage(state, "icecast2");
+        const liquidsoapPackage = findRadioPackage(state, "liquidsoap");
+
+        setPill("settingsRadioPackageStatusPill", pillKind, pillLabel);
+        setText("settingsRadioPackageCheckedAt", "Ostatnie sprawdzenie: " + String(state.checked_at_text || ""));
+        setText("settingsRadioIcecastCurrentVersion", (icecastPackage && icecastPackage.current_version) || "brak");
+        setText("settingsRadioLiquidsoapCurrentVersion", (liquidsoapPackage && liquidsoapPackage.current_version) || "brak");
+
+        const hasError = !!state.check_error;
+        setHidden("settingsRadioPackageErrorBox", !hasError);
+        setText("settingsRadioPackageErrorText", hasError ? ("Ostatnia próba sprawdzenia zakończyła się błędem: " + state.check_error) : "");
+
+        const actionForm = document.getElementById("settingsRadioActionForm");
+        if (actionForm) {
+            actionForm.hidden = !taskActive && !state.action_needed;
+        }
+        const actionButton = document.getElementById("settingsRadioActionButton");
+        if (actionButton) {
+            actionButton.textContent = state.action_button_label || actionButton.textContent;
+            actionButton.dataset.idleLabel = actionButton.textContent;
+        }
+        setHidden("settingsRadioActionNote", taskActive || !!state.action_needed);
+        setGroupBusy("radio_backend_install", task, "Instalacja trwa...");
+        updateTaskPanel("settingsRadio", task, "Instalacja backendu radia");
+    }
+
+    function applyRadioServiceState(state) {
+        if (!state) {
+            return;
+        }
+
+        setText("settingsRadioServiceStatus", state.status_label || "");
+        setText("settingsRadioUnitState", state.unit_file_label || "");
+        setText("settingsRadioRuntimeRoot", state.runtime_root || "");
+
+        const toggleForm = document.getElementById("settingsRadioToggleForm");
+        if (toggleForm) {
+            const hiddenInput = toggleForm.querySelector('input[name="enabled"]');
+            if (hiddenInput) {
+                hiddenInput.value = state.service_active ? "0" : "1";
+            }
+        }
+
+        const toggleButton = document.getElementById("settingsRadioToggleButton");
+        if (toggleButton) {
+            toggleButton.textContent = state.toggle_button_label || toggleButton.textContent;
+            toggleButton.dataset.idleLabel = toggleButton.textContent;
+        }
+
+        const hasError = !!state.error;
+        setHidden("settingsRadioServiceErrorBox", !hasError);
+        setText("settingsRadioServiceErrorText", hasError ? ("Nie udało się odczytać pełnego statusu backendu radia: " + state.error) : "");
+    }
+
     function applyStateEnvelope(envelope) {
         const state = (envelope && (envelope.settings_state || envelope.state)) ? (envelope.settings_state || envelope.state) : envelope;
         if (!state) {
@@ -452,6 +529,8 @@
         applyFfmpegState(state.ffmpeg_state || {}, tasks.ffmpeg_install || null);
         applyDlnaPackageState(state.dlna_package_state || {}, tasks.dlna_install || null);
         applyDlnaServiceState(state.dlna_service_state || null);
+        applyRadioPackageState(state.radio_backend_package_state || {}, tasks.radio_backend_install || null);
+        applyRadioServiceState(state.radio_backend_service_state || null);
     }
 
     async function fetchSettingsState() {
@@ -490,10 +569,18 @@
                 busyLabel = "Sprawdzanie...";
             } else if (form.id === "ytDlpActionForm" || form.id === "ffmpegActionForm" || form.id === "settingsDlnaActionForm") {
                 busyLabel = "Uruchamianie...";
+            } else if (form.id === "settingsRadioActionForm") {
+                busyLabel = "Uruchamianie...";
             } else if (form.id === "settingsDlnaToggleForm") {
+                busyLabel = "Przełączanie...";
+            } else if (form.id === "settingsRadioToggleForm") {
                 busyLabel = "Przełączanie...";
             } else if (form.id === "settingsDlnaRestartForm") {
                 busyLabel = "Restartowanie...";
+            } else if (form.id === "settingsRadioRestartForm") {
+                busyLabel = "Restartowanie...";
+            } else if (form.id === "settingsRadioCheckForm") {
+                busyLabel = "Sprawdzanie...";
             }
         }
 

@@ -1,12 +1,19 @@
 
 <section id="dlnaPageRoot">
     <section class="page-card">
-        <h1 class="page-title">DLNA</h1>
+        <div class="page-title-row">
+            <h1 class="page-title">DLNA</h1>
+            <div id="dlnaMountStatus" class="page-status-inline is-online" title="Sprawdzanie statusu serwera danych...">
+                <span class="page-status-icon" aria-hidden="true"></span>
+                <span class="page-status-text">
+                    <span class="page-status-icon-dot" aria-hidden="true"></span>
+                    Serwer danych online
+                </span>
+            </div>
+        </div>
         <p class="muted">
             Tu ustawisz serwer DLNA, whitelistę klientów, kolekcje i bibliotekę mediów bez przebijania się przez pełne reloady strony.
         </p>
-
-        <div id="dlnaMountStatus" class="mount-bad">Sprawdzanie statusu montowania...</div>
 
         <div class="settings-overview-grid" id="dlnaSummaryGrid"></div>
 

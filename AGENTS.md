@@ -12,7 +12,9 @@
   - `data/config.json`
   - `data/jobs.json`
   - `data/users.json`
+  - `data/radios.json`
 - Repo ma zawierać tylko pliki przykładowe dla środowiska i danych, np. `.env.example`, `data/config.example.json`, `data/jobs.example.json`, `data/users.example.json`; prawdziwe dane i sekrety nie mogą trafiać do GitHub.
+  - dla modułu radia także `data/radios.example.json`
 - Przy migracji ze starego układu nie wolno zgubić istniejącej konfiguracji, użytkowników ani zadań; trzeba zachować zgodność wsteczną i bezpieczne przeniesienie danych.
 - Po migracji i późniejszym sprzątaniu legacy plików backend ma umieć odzyskać krytyczne sekcje konfiguracji DLNA także z najnowszego zarchiwizowanego `flask_downloader_config.json` w `backups/`, jeśli bieżące `data/config.json` straciło `media_rules`, a klienci i kolekcje nadal istnieją.
 - Jeśli stary rootowy `flask_downloader_config.json` nadal zawiera pełną konfigurację DLNA, a nowe `data/config.json` ma pustą sekcję `dlna`, aplikacja ma odzyskać tę sekcję z legacy configu zamiast zostawiać pustą bibliotekę.
@@ -27,12 +29,38 @@
 - Kliknięcie przycisku, submit formularza albo użycie pola wyboru nie może powodować głupiego przeładowania strony ani skoku na górę, jeśli dana akcja może zostać obsłużona w miejscu.
 - Wewnętrzna nawigacja między głównymi widokami aplikacji ma używać AJAX, a nie pełnego refreshu.
 - Akcje w ustawieniach mają używać `fetch` i aktualizować widok w miejscu.
+- Nowa zakładka `Moje radio` ma działać tym samym stylem: bez pełnych reloadów, z fetchowym zapisem i odświeżaniem stanu w miejscu.
+- Widok `Moje radio` ma być zwarty:
+  - sekcje `Runtime i sterowanie`, `Backend radia`, `Ustawienia stacji`, `eRDS / metadane` i `Biblioteka audio` mają być przełączane jako zakładki / menu, a nie jako długa ściana kart jedna pod drugą,
+  - karta `Panel radia` ma zachowywać czytelny odstęp od górnego podsumowania `Moje radio`, bez zlepiania obu sekcji w jedną ścianę,
+  - główne bloki runtime w `Panelu radia`, zwłaszcza `Backend wspólny` i `Bieżąca stacja`, mają układać się pionowo jeden pod drugim zamiast jako dwie szerokie kolumny obok siebie,
+  - polling stanu w `Moim radiu` nie może nadpisywać edytowanych właśnie formularzy; odświeżanie tła ma omijać pola z niezapisanymi zmianami aż do ręcznego zapisu,
+  - biblioteka audio ma używać jednej zwartej tabeli zamiast dwóch wielkich kolumn obok siebie,
+  - zaznaczanie plików do radia ma działać checkboxami i jednym zbiorczym zapisem,
+  - użytkownik ma mieć jeden szybki tryb `odtwarzaj całą bibliotekę użytkownika`, a dopiero potem możliwość odznaczania wykluczeń,
+  - upload własnych audio do radia ma obsługiwać wiele plików naraz z widocznym postępem i wynikiem walidacji,
+  - zakładka `Backend radia` ma być edytowalna tylko dla administratora; zwykły użytkownik widzi te pola wyłącznie jako podgląd read-only,
+  - zakładka `Ustawienia stacji` ma pokazywać per użytkownik osobne dane do nadawania live, w tym login, hasło i własny port takeover.
 - Sukcesy i błędy w ustawieniach pokazujemy jako toasty lub komunikaty w UI, bez pełnego refreshu.
 - Stan kart w ustawieniach ma być odświeżany cyklicznie z backendu.
 - Po AJAXowej podmianie widoku trzeba sprzątać stare timery i listenery, żeby nie dublować requestów i handlerów.
 - Elementy ukrywane przez atrybut `hidden`, zwłaszcza formularze akcji w ustawieniach, muszą być naprawdę niewidoczne także przy własnych stylach `display`; nie wolno dopuścić, żeby CSS typu `display: grid` nadpisywał ukrycie.
 - Skrypty osadzone w widokach, które są podmieniane AJAXowo, muszą działać w lokalnym scope, np. przez IIFE; nie mogą deklarować globalnych `const`/`let`, bo po wejściu drugi raz na ten sam widok wyłożą się na redeklaracji i zostawią placeholdery.
 - Panel `Konto` w bocznej kolumnie ma być zwięzły: bez rozwlekłych opisów uprawnień i bez list kafelków z możliwościami roli; status sesji ma być wyśrodkowany i czytelny zarówno dla `admin`, jak i `user`.
+- Widok gościa ma być maksymalnie prosty:
+  - formularz logowania nie może prefillować loginu `admin`,
+  - w bocznym panelu zostaje tylko zwięzły nagłówek `Logowanie` bez dodatkowych opisów,
+  - logo `VLC` w sidebarze ma działać jak link do strony głównej,
+  - nagłówki `Nawigacja`, `Konto` i `Logowanie` mają być wyśrodkowane.
+- Widok `Zadania pobierania` ma być zwarty:
+  - filtr `Widok użytkownika` dla administratora ma rozciągać się na pełną szerokość sekcji,
+  - nie wracamy tam do dodatkowych opisów o AJAX-ie, uprawnieniach administratora ani do linii z technicznymi katalogami docelowymi.
+- Widok `Pobrane pliki` ma trzymać ten sam zwarty styl:
+  - filtr `Widok użytkownika` dla administratora ma rozciągać się na pełną szerokość sekcji,
+  - nie wracamy tam do dodatkowych opisów o automatycznym AJAX-ie, uprawnieniach administratora ani do linii z technicznymi katalogami docelowymi.
+- Widok `Moje radio` ma być równie zwarty:
+  - nie wracamy do leadu opisowego pod nagłówkiem strony,
+  - filtr `Widok użytkownika` dla administratora ma rozciągać się na pełną szerokość pierwszego rzędu kafelków podsumowania.
 
 ## Ustawienia i panel utrzymania
 - Karta `yt-dlp` ma pokazywać:
@@ -71,6 +99,7 @@
 - Konwersja audio ma używać `ffmpeg` przez `yt-dlp` postprocessor `FFmpegExtractAudio`.
 - Docelowy codec: `mp3`.
 - Docelowa jakość: najwyższa sensowna VBR dla MP3, czyli `q=0`.
+- Nazwy finalnych plików audio nie mogą być zaśmiecane technicznymi etykietami źródła typu `_Audio_132k_webm`; dla audio preferujemy czysty tytuł materiału, a nie techniczny label formatu.
 - Trzeba jasno komunikować, że źródłowe `m4a` z YouTube nadal jest stratne, więc MP3 nie będzie bezstratne.
 - `Pobierz na serwer` dla audio oznacza pobranie i konwersję do `mp3`.
 - `Pobierz do przeglądarki` dla audio ma zwracać surowy plik źródłowy, np. `m4a` albo `webm`, bez udawania `mp3`.
@@ -94,11 +123,21 @@
   - tworzyć `.env`,
   - pytać o hasło pierwszego użytkownika `admin`,
   - hashować to hasło przed zapisaniem do `data/users.json`,
+  - inicjalizować `data/radios.json` według bieżącego schematu store, a nie przez przestarzały hardcoded payload,
+  - generować przy pierwszej inicjalizacji losowe sekrety backendu radia, zamiast zostawiać w runtime przewidywalne domyślne hasła source/admin,
+  - honorować także własne nazwy usług `systemd` podane przez env lub CLI, żeby dało się postawić równoległą instancję testową bez nadpisywania produkcyjnych unitów,
+  - po postawieniu środowiska aplikacji przygotowywać też pełny stack utrzymaniowy:
+    - aktualny `yt-dlp` w virtualenv,
+    - zarządzany `ffmpeg`,
+    - backend `Gerbera`,
+    - backend `Icecast` + `Liquidsoap`,
+    - potrzebne zależności systemowe, w tym `cifs-utils`, `iproute2` i `ffmpegthumbnailer`,
   - honorować wartości podane przez argumenty CLI albo zmienne środowiskowe bez ponownego dopytywania o te same pola,
   - nie nadpisywać istniejących danych aplikacji przy ponownym uruchomieniu,
   - pokazywać czytelny, kolorowy postęp i końcowe podsumowanie,
   - trzymać szczegółowe logi instalacji w osobnym pliku zamiast zalewać terminal pełnym outputem `apt` i `pip`.
 - Projekt ma zawierać skrypt deploy przez SSH, który robi backup kodu, nie narusza `data/` ani `.env` i restartuje usługę po wdrożeniu.
+- Skrypty deploy nie mogą pakować do archiwum zarządzanych binarek runtime typu `tools/ffmpeg/` ani katalogów runtime usług.
 
 ## DLNA
 - Backend serwera DLNA ma bazować na `Gerbera`.
@@ -161,6 +200,7 @@
 - Po awarii Gerbery wywołanej zniknięciem plików eksportu usługa ma sama próbować wstać ponownie z backoffem `10 s`, potem `1 min`, a od trzeciej próby `30 min`; przed każdą automatyczną próbą trzeba usunąć połamane symlinki z `/dlna` i oczyścić martwe reguły DLNA z konfiguracji, żeby restart miał szansę się utrzymać.
 - Ręczne usunięcie pliku poza aplikacją nie może zostawiać trwałych „martwych” reguł DLNA; aplikacja ma w tle okresowo czyścić brakujące wpisy z konfiguracji i synchronizować eksport bez czekania na ręczny resync administratora.
 - Dla starych wersji `Gerbera`, które nie obsługują `--check-config`, backend nie może blokować zapisu/synchronizacji przez testowy runtime-probe; wystarczy lokalna walidacja poprawności XML, a faktyczny stan należy oceniać na prawdziwym starcie usługi.
+- Tymczasowe probe'y i fallbacki używane do generowania lub walidacji configu `Gerbera` nie mogą zostawiać osieroconych procesów `gerbera` ani żywych sesji po zakończeniu testu; trzeba domykać cały process group, nie tylko proces nadrzędny.
 - Serwer DLNA ma logować do pliku `gerbera.log` w runtime projektu, a administrator musi mieć prosty podgląd tego logu w przeglądarce pod adresem `/logs-dlna`; normalny start/restart usługi nie powinien czyścić tego logu.
 - Log `gerbera.log` nie może rozrastać się bez końca: ma być ograniczony do około `5 MB`, a dla nowszej Gerbery trzeba preferować rotowanie logu zamiast pełnego debug streamu.
 - Własna usługa DLNA aplikacji nie może startować Gerbery z flagą pełnego debugowania `-D` w normalnym trybie pracy, bo zalewa log i zamula panel administracyjny.
@@ -182,6 +222,7 @@
 - Domyślny wybór źródła dla każdego serwisu ma preferować `wideo`, a dopiero potem najwyższą dostępną jakość; `audio` ma być tylko fallbackiem, gdy nie ma sensownego źródła wideo.
 - Przy remisie jakości warto preferować bardziej praktyczny kontener, zwłaszcza `mp4`, ale nie kosztem głównej zasady `wideo + najwyższa jakość`.
 - Górny status przestrzeni danych na stronie głównej ma być kompaktowym badge przy tytule `VLC Stream Extractor`, z prostą ikoną i stanem `online / offline`, a nie dużym zielonym lub czerwonym boksem pod nagłówkiem.
+- Ten sam kompaktowy badge `Serwer danych online / offline` ma być używany także na podstronach korzystających ze storage; nie wracamy do długich komunikatów typu `Udział sieciowy online: ...` ani do pokazywania technicznego komunikatu mounta wprost jako głównego tekstu sekcji.
 - Strona główna po zalogowaniu ma być zwięzła; nie wracamy do dodatkowych leadów typu `Wklej link...` ani do notek o pobieraniu do własnej przestrzeni pod formularzem.
 
 ## Użytkownicy i role
@@ -198,7 +239,8 @@
 - Zwykły użytkownik ma widzieć i obsługiwać tylko:
   - własne zadania pobierania,
   - własne pliki,
-  - własne pobieranie nowych materiałów.
+  - własne pobieranie nowych materiałów,
+  - własne radio i własną bibliotekę audio dla radia.
 - Administrator ma widzieć wszystko oraz:
   - tworzyć użytkowników,
   - edytować login i rolę istniejących użytkowników z panelu `Konfiguracja`,
@@ -206,7 +248,8 @@
   - ręcznie resetować hasła,
   - zmieniać własne hasło z sekcji `Konto` bez pełnego przeładowania całego panelu,
   - filtrować listę plików i listę zadań po użytkowniku,
-  - usuwać cudze pliki i cudze zadania.
+  - usuwać cudze pliki i cudze zadania,
+  - przeglądać i edytować radia innych użytkowników oraz globalne ustawienia backendu radia.
 - Każdy zalogowany użytkownik ma mieć możliwość zmiany własnego hasła z sekcji `Konto` w bocznym panelu.
 - Struktura katalogów użytkowników ma być:
   - `BASE/<user>/video/YYYY-MM-DD/...`
@@ -222,6 +265,55 @@
   - jego zadania,
   - jego powiązane wpisy DLNA.
 - DLNA pozostaje funkcją tylko dla administratora.
+- Moduł `Radio` jest per użytkownik:
+  - jeden użytkownik może mieć maksymalnie jedno własne radio,
+  - biblioteka radia ma korzystać z referencji do istniejących plików audio użytkownika, bez kopiowania ich drugi raz,
+  - źródła audio dla radia to zarówno audio pobrane przez obecny moduł, jak i własne pliki wgrane przez użytkownika,
+  - biblioteka radia ma wspierać dwa tryby:
+    - ręczny wybór pojedynczych pozycji,
+    - cała biblioteka użytkownika z listą wykluczeń,
+  - usunięcie pliku audio z panelu ma automatycznie wypinać go też z biblioteki radia,
+   - zmiana loginu albo usunięcie użytkownika ma aktualizować lub usuwać jego radio oraz powiązania z plikami,
+   - pełna konfiguracja i stan radia mają być trzymane w `data/radios.json`, a nie dokładane do `data/config.json`.
+- `eRDS` w radiu ma obsługiwać placeholdery tekstowe, w tym:
+  - `{sluchacze}` / `{sluchaczy}` dla liczby słuchaczy,
+  - `{sluchacze_odmiana}` dla odmiany `osoba / osoby / osób`,
+  - `{data}`,
+  - `{godzina}`,
+  - `{dzientygodnia}`,
+  - `{Dzientygodnia}`,
+  - `{nazwa_stacji}`,
+  - `{audycja}` jako nazwę audycji ustawioną w panelu stacji,
+  - `{dj}`:
+    - przy `AutoDJ` ma pokazywać nazwę DJ-a / AutoDJ ustawioną w panelu stacji,
+    - przy `Live DJ takeover` ma pokazywać tę samą nazwę DJ-a ustawioną dla wejścia live,
+  - `{utwor}` jako aktualnie grany utwór z `AutoDJ`,
+  - `{max_sluchaczy}` z limitu słuchaczy backendu radia,
+  - `{rekord_sluchaczy}` jako najwyższą zapisaną jednoczesną liczbę słuchaczy dla tej stacji, utrzymywaną w `data/radios.json`,
+  - `{rekord_sluchaczy_odmiana}` dla odmiany `osoba / osoby / osób` przy rekordzie słuchaczy.
+- Konfiguracja `eRDS` ma też wspierać opcję ukrywania nazw utworów między własnymi komunikatami stacji; przy aktywnym `stałym tekście` lub `rotacji` użytkownik musi móc wyłączyć automatyczne tytuły piosenek z playlisty.
+- Wpisy `eRDS` używające placeholdera `{utwor}` mają być wysyłane na serwer tylko wtedy, gdy na antenie gra `AutoDJ`; przy aktywnym wejściu `Live DJ takeover` takie linie mają być pomijane.
+- Runtime modułu `Radio` ma być przygotowany pod Linux:
+  - backend wspólny to `Icecast`,
+  - autopilot stacji to `Liquidsoap`,
+  - strumień `AAC` ma wychodzić przez encoder dostępny realnie w zainstalowanym buildzie `Liquidsoap`; nie wolno udawać wsparcia `fdkaac`, jeśli pakiety systemowe go nie dostarczają,
+  - jeśli bieżący build `Liquidsoap` nie ma jakościowego `AAC` przy niskim bitrate, panel ma preferować bezpieczniejsze presety `AAC` od `160 kbps` wzwyż zamiast wystawiać zbyt niskie wartości,
+  - panel `Moje radio` ma pozwalać nie tylko startować i zatrzymywać autopilota, ale też ręcznie przeskoczyć do następnego utworu bez restartowania całej stacji,
+  - zakładka `Backend` w `Moim radiu` ma być widoczna także dla zwykłego użytkownika, ale w trybie tylko do odczytu dla wspólnych ustawień backendu,
+  - każda stacja użytkownika ma mieć własne dane źródłowe `source username/password` do wyjścia na `Icecast`, a login do nadawania ma być unikalny między stacjami użytkowników,
+  - każda stacja użytkownika ma mieć własny port `live takeover`,
+  - pola haseł radia, zwłaszcza `hasło do nadawania`, `hasło source` i `hasło admin Icecast`, mają mieć w UI prosty przełącznik `Pokaż / Ukryj` bez przeładowania strony,
+  - `Live DJ takeover` ma działać jako wejście live per stacja, które automatycznie nadpisuje `AutoDJ` po połączeniu nadawcy i oddaje antenę z powrotem po rozłączeniu,
+  - losowy `AutoDJ` nie może zachowywać się jak czysty rzut kostką z dublem utworu jeden po drugim; ustawienia stacji mają mieć procentowy `dystans powtórki`, gdzie `0%` oznacza pełny random, a `100%` pełną tasowaną rundę bez powrotu utworu do końca obiegu,
+  - ochrona powtórek w losowym `AutoDJ` nie może być rozwalana przez okresowe przeładowywanie playlisty co kilka sekund; przy aktywnym `dystansie powtórki` tasowana runda ma być stabilna i przeładowywać się dopiero przy realnej zmianie pliku playlisty,
+  - karty runtime w `Panelu radia`, zwłaszcza `Backend wspólny` i `Bieżąca stacja`, mają zachowywać równy pionowy rytm: metryki, komunikaty i toolbary przycisków nie mogą sklejać się bez odstępów,
+  - dla starszych instalacji uruchomionych z katalogu pod `/root` runtime radia nie może zakładać startu `Icecast` jako `root`; pliki runtime muszą trafiać do lokalizacji dostępnej dla nie-rootowego użytkownika backendu, np. pod `/var/lib/<service>`,
+  - logi radia nie mogą rosnąć bez końca: log backendu, logi stacji i logi `Icecast` mają być ograniczone do około `5 MB` na plik,
+  - panel ma generować runtime i sterować usługami bez pełnych reloadów,
+  - w `Konfiguracji` ma istnieć osobna karta backendu radia z wersjami pakietów, stanem usługi, taskiem instalacji i przyciskami start/stop/restart,
+  - zakładka `Moje radio` ma pokazywać realny stan runtime stacji, mount streamu, słuchaczy, aktualne `eRDS` i szybkie sterowanie start/stop/restart,
+  - backend i stacje mają mieć osobne logi dostępne z panelu,
+  - instalator ma tworzyć także `data/radios.json` i zmienne `.env` potrzebne do nazw usług backendu radia.
 - Dla dużych zmian systemu uprawnień trzeba utrzymywać bieżącą checklistę wdrożenia w repo, żeby dało się wznowić pracę po przerwaniu sesji bez ponownego audytu całego kodu.
 
 ## Zasady utrzymania tego pliku

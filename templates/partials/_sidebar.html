@@ -1,10 +1,12 @@
 <aside class="sidebar">
     <section class="sidebar-panel brand-panel">
-        <div class="brand-mark">VLC</div>
-        <div class="brand-title">
-            <span>Stream</span>
-            <span>Extractor</span>
-        </div>
+        <a class="brand-link" href="/" data-shell-nav="true" aria-label="Przejdź do strony głównej">
+            <div class="brand-mark">VLC</div>
+            <div class="brand-title">
+                <span>Stream</span>
+                <span>Extractor</span>
+            </div>
+        </a>
     </section>
 
     <nav class="sidebar-panel">
@@ -14,6 +16,7 @@
             {% if logged_in %}
             <a class="side-link {% if active_page == 'jobs' %}is-active{% endif %}" href="/jobs" data-shell-nav="true">Zadania pobierania</a>
             <a class="side-link {% if active_page == 'downloads' %}is-active{% endif %}" href="/downloads" data-shell-nav="true">Pobrane pliki</a>
+            <a class="side-link {% if active_page == 'radio' %}is-active{% endif %}" href="/radio" data-shell-nav="true">Moje radio</a>
             <a class="side-link {% if active_page == 'services' %}is-active{% endif %}" href="/services" data-shell-nav="true">Lista Serwisów</a>
             {% endif %}
             {% if admin_logged_in %}

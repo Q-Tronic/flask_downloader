@@ -29,10 +29,13 @@ try {
         --exclude=__pycache__ `
         --exclude=.env `
         --exclude=backups `
+        --exclude=data/runtime `
         --exclude=tools/dlna/runtime `
+        --exclude=tools/ffmpeg `
         --exclude=data/config.json `
         --exclude=data/jobs.json `
         --exclude=data/users.json `
+        --exclude=data/radios.json `
         -czf $archiveFile `
         -C $projectRoot .
 
@@ -47,7 +50,7 @@ try {
 set -euo pipefail
 mkdir -p '$AppDir/backups'
 if [ -d '$AppDir' ]; then
-  tar --exclude='.venv' --exclude='data' --exclude='.env' --exclude='backups' --exclude='tools/dlna/runtime' -czf '$AppDir/backups/code-$timestamp.tgz' -C '$AppDir' .
+  tar --exclude='.venv' --exclude='data' --exclude='.env' --exclude='backups' --exclude='tools/dlna/runtime' --exclude='tools/ffmpeg' -czf '$AppDir/backups/code-$timestamp.tgz' -C '$AppDir' .
 fi
 if [ '$BackupRetentionCount' -gt 0 ] 2>/dev/null; then
   ls -1t '$AppDir'/backups/code-*.tgz 2>/dev/null | tail -n +$(($BackupRetentionCount + 1)) | xargs -r rm -f

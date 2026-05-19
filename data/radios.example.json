@@ -1,0 +1,79 @@
+{
+  "schema_version": 3,
+  "backend_update_state": {
+    "checked_at": 0.0,
+    "check_error": "",
+    "package_versions": {}
+  },
+  "global": {
+    "enabled": true,
+    "backend": "icecast",
+    "bind_ip": "",
+    "port": 8000,
+    "public_base_url": "",
+    "hostname": "",
+    "location": "Polska",
+    "admin_contact": "",
+    "source_password": "<ustaw-wlasne-haslo-source>",
+    "admin_username": "admin",
+    "admin_password": "<ustaw-wlasne-haslo-admin>",
+    "max_listeners": 200,
+    "default_stream_format": "mp3",
+    "default_bitrate_kbps": 192,
+    "metadata_refresh_seconds": 20,
+    "autostart_backend": false
+  },
+  "stations": {
+    "admin": {
+      "owner_username": "admin",
+      "enabled": false,
+      "name": "Radio admin",
+      "slug": "radio-admin",
+      "mount_name": "radio-admin.mp3",
+      "description": "",
+      "genre": "",
+      "autostart": false,
+      "stream": {
+        "format": "mp3",
+        "bitrate_kbps": 192
+      },
+      "source": {
+        "username": "source-radio-admin",
+        "password": "<ustaw-wlasne-haslo-live>"
+      },
+      "live": {
+        "enabled": true,
+        "port": 15421,
+        "mount_name": "live",
+        "show_name": "Wieczorna selekcja",
+        "dj_name": "DJ Kris"
+      },
+      "autopilot": {
+        "play_mode": "random",
+        "crossfade_seconds": 2,
+        "scan_interval_seconds": 30,
+        "jingle_every_tracks": 0,
+        "repeat_guard_percent": 100
+      },
+      "erds": {
+        "mode": "rotation",
+        "fixed_text": "",
+        "suppress_track_titles": false,
+        "rotation_interval_seconds": 20,
+        "templates": [
+          "Aktualnie słucha {sluchacze} {sluchacze_odmiana}",
+          "Dzisiaj jest {Dzientygodnia} - {data} - {godzina}",
+          "Słuchasz {nazwa_stacji}"
+        ]
+      },
+      "library": {
+        "mode": "all_user_audio",
+        "excluded_relative_paths": [],
+        "items": []
+      },
+      "stats": {
+        "listener_record": 0
+      }
+    }
+  }
+}

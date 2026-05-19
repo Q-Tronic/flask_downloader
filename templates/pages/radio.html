@@ -1,0 +1,550 @@
+<section id="radioPageRoot">
+    <section class="page-card">
+        <div class="page-title-row">
+            <h1 class="page-title">Moje radio</h1>
+            <div id="radioMountStatus" class="page-status-inline is-online" title="Sprawdzanie statusu serwera danych...">
+                <span class="page-status-icon" aria-hidden="true"></span>
+                <span class="page-status-text">
+                    <span class="page-status-icon-dot" aria-hidden="true"></span>
+                    Serwer danych online
+                </span>
+            </div>
+        </div>
+
+        <div id="radioScopeWrap" class="source-selector-grid radio-scope-wrap" hidden>
+            <div class="stack-card">
+                <label class="field-label" for="radioScopeSelect">Widok użytkownika</label>
+                <select id="radioScopeSelect"></select>
+            </div>
+        </div>
+
+        <div id="radioSummaryGrid" class="settings-overview-grid"></div>
+
+        <div class="dlna-item-actions" style="margin-top: 18px;">
+            <button id="radioCreateButton" type="button" class="btn btn-green">Utwórz radio</button>
+            <button id="radioDeleteButton" type="button" class="btn btn-delete" hidden>Usuń radio</button>
+            <div id="radioTopNote" class="inline-note"></div>
+        </div>
+    </section>
+
+    <section class="page-card radio-workspace-card">
+        <div class="radio-workspace-head">
+            <div>
+                <h2 class="section-title">Panel radia</h2>
+                <p id="radioWorkspaceNote" class="muted">
+                    Pięć zwartych zakładek i jedna wspólna tabela biblioteki audio.
+                </p>
+            </div>
+            <div id="radioTabStrip" class="radio-tab-strip">
+                <button type="button" class="radio-tab-button" data-radio-tab="runtime">Runtime</button>
+                <button type="button" class="radio-tab-button" data-radio-tab="backend">Backend</button>
+                <button type="button" class="radio-tab-button" data-radio-tab="station">Stacja</button>
+                <button type="button" class="radio-tab-button" data-radio-tab="erds">eRDS</button>
+                <button type="button" class="radio-tab-button" data-radio-tab="library">Biblioteka</button>
+            </div>
+        </div>
+
+        <section id="radioPanelRuntime" class="radio-panel" data-radio-panel="runtime">
+            <div class="radio-runtime-grid">
+                <div id="radioBackendRuntimeCard" class="stack-card" hidden>
+                    <div class="card-heading">
+                        <div class="card-title">Backend wspólny</div>
+                        <div class="card-subtitle">Wspólny silnik <code>Icecast</code> + <code>Liquidsoap</code> dla wszystkich stacji użytkowników.</div>
+                    </div>
+
+                    <div class="service-status-row">
+                        <span id="radioBackendStatusPill" class="service-status-pill muted">Sprawdzanie...</span>
+                        <div id="radioBackendStatusMeta" class="small">Czekam na dane backendu.</div>
+                    </div>
+
+                    <div class="settings-overview-grid">
+                        <div class="overview-tile">
+                            <span>Pakiety</span>
+                            <strong id="radioBackendPackagesLabel">brak danych</strong>
+                        </div>
+                        <div class="overview-tile">
+                            <span>Status usługi</span>
+                            <strong id="radioBackendServiceLabel">nieznany</strong>
+                        </div>
+                        <div class="overview-tile">
+                            <span>Runtime</span>
+                            <strong><code id="radioBackendRuntimeRoot">-</code></strong>
+                        </div>
+                        <div class="overview-tile">
+                            <span>Log backendu</span>
+                            <strong><code id="radioBackendLogPath">-</code></strong>
+                        </div>
+                    </div>
+
+                    <div id="radioBackendErrorBox" class="error" hidden>
+                        <span id="radioBackendErrorText"></span>
+                    </div>
+
+                    <div class="dlna-item-actions">
+                        <button id="radioBackendCheckButton" type="button" class="btn btn-secondary">Sprawdź</button>
+                        <button id="radioBackendInstallButton" type="button" class="btn btn-green" hidden>Instaluj</button>
+                        <button id="radioBackendToggleButton" type="button" class="btn btn-green">Start backendu</button>
+                        <button id="radioBackendRestartButton" type="button" class="btn btn-stop">Restart</button>
+                        <a id="radioBackendLogLink" href="/logs-radio-backend" target="_blank" rel="noopener" class="btn btn-secondary">Log backendu</a>
+                    </div>
+
+                    <div id="radioBackendTaskPanel" class="maintenance-task-panel" hidden>
+                        <div class="service-status-row">
+                            <span id="radioBackendTaskStatusPill" class="service-status-pill queued">Przetwarzanie</span>
+                            <div id="radioBackendTaskTime" class="small"></div>
+                        </div>
+                        <div class="maintenance-task-head">
+                            <div id="radioBackendTaskLabel" class="maintenance-task-label">Instalacja backendu radia</div>
+                            <div id="radioBackendTaskPercent" class="maintenance-task-percent">...</div>
+                        </div>
+                        <div id="radioBackendTaskProgress" class="progress is-indeterminate">
+                            <div id="radioBackendTaskBar" class="progress-bar queued" style="width:38%;"></div>
+                        </div>
+                        <div id="radioBackendTaskDetail" class="maintenance-task-detail">Po uruchomieniu instalacji zobaczysz tutaj kolejne etapy pracy.</div>
+                    </div>
+                </div>
+
+                <div id="radioStationRuntimeBlock" class="stack-card">
+                    <div class="card-heading">
+                        <div class="card-title">Bieżąca stacja</div>
+                        <div class="card-subtitle">Stan autopilota <code>Liquidsoap</code>, mount streamu, słuchacze i aktywne metadane dla bieżącego użytkownika.</div>
+                    </div>
+
+                    <div class="service-status-row">
+                        <span id="radioStationRuntimeStatusPill" class="service-status-pill muted">Brak radia</span>
+                        <div id="radioStationRuntimeMeta" class="small">Możesz uruchomić własne radio albo najpierw zbudować bibliotekę audio.</div>
+                    </div>
+
+                    <div class="settings-overview-grid">
+                        <div class="overview-tile">
+                            <span>Status mountu</span>
+                            <strong id="radioStationMountLabel">brak</strong>
+                        </div>
+                        <div class="overview-tile">
+                            <span>Słuchacze</span>
+                            <strong id="radioStationListenersLabel">0</strong>
+                        </div>
+                        <div class="overview-tile">
+                            <span>Publiczny URL</span>
+                            <strong id="radioStationPublicUrlLabel">brak</strong>
+                        </div>
+                        <div class="overview-tile">
+                            <span>Live takeover</span>
+                            <strong id="radioStationLiveStatusLabel">wyłączony</strong>
+                        </div>
+                        <div class="overview-tile">
+                            <span>Aktywne audio</span>
+                            <strong id="radioStationPlayableLabel">0</strong>
+                        </div>
+                    </div>
+
+                    <div class="service-metric">
+                        <span>Wejście live DJ</span>
+                        <strong id="radioStationLiveEndpointLabel">brak aktywnego wejścia live</strong>
+                    </div>
+
+                    <div class="service-metric">
+                        <span>Aktualne eRDS</span>
+                        <strong id="radioStationCurrentErds">brak aktywnego tekstu</strong>
+                    </div>
+
+                    <div class="service-metric">
+                        <span>Aktualny tytuł / song</span>
+                        <strong id="radioStationCurrentSong">brak danych</strong>
+                    </div>
+
+                    <div id="radioStationRuntimeErrorBox" class="error" hidden>
+                        <span id="radioStationRuntimeErrorText"></span>
+                    </div>
+
+                    <div class="dlna-item-actions">
+                        <button id="radioStationStartButton" type="button" class="btn btn-green">Start autopilota</button>
+                        <button id="radioStationStopButton" type="button" class="btn btn-stop">Stop autopilota</button>
+                        <button id="radioStationRestartButton" type="button" class="btn btn-secondary">Restart autopilota</button>
+                        <button id="radioStationNextButton" type="button" class="btn btn-secondary">Następny utwór</button>
+                        <a id="radioStationLogLink" href="/logs-radio-station" target="_blank" rel="noopener" class="btn btn-secondary">Log stacji</a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="radioPanelBackend" class="radio-panel" data-radio-panel="backend">
+            <div id="radioGlobalCard" class="stack-card">
+                <div class="card-heading">
+                    <div class="card-title">Backend radia</div>
+                    <div class="card-subtitle">Globalne ustawienia wspólnego backendu streamingu. Własny login i hasło do nadawania oraz port <code>Live DJ</code> są konfigurowane niżej w zakładce <strong>Stacja</strong>.</div>
+                </div>
+
+                <div id="radioGlobalReadonlyNote" class="inline-note" hidden>
+                    Podgląd tylko do odczytu. Te ustawienia backendu może zapisywać wyłącznie administrator.
+                </div>
+
+                <form id="radioGlobalForm" class="auth-form">
+                    <div class="dlna-inline-form is-wide">
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalPublicBaseUrl">Publiczny adres bazowy</label>
+                            <input id="radioGlobalPublicBaseUrl" type="text" name="public_base_url" placeholder="np. https://radio.twojadomena.pl">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalHostname">Hostname serwera</label>
+                            <input id="radioGlobalHostname" type="text" name="hostname" placeholder="np. radio.twojadomena.pl">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalBindIp">Adres bind</label>
+                            <input id="radioGlobalBindIp" type="text" name="bind_ip" placeholder="np. 0.0.0.0 albo 192.168.0.50">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalPort">Port</label>
+                            <input id="radioGlobalPort" type="text" name="port" inputmode="numeric">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalDefaultBitrate">Domyślny bitrate</label>
+                            <input id="radioGlobalDefaultBitrate" type="text" name="default_bitrate_kbps" inputmode="numeric">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalMaxListeners">Limit słuchaczy</label>
+                            <input id="radioGlobalMaxListeners" type="text" name="max_listeners" inputmode="numeric">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalLocation">Lokalizacja</label>
+                            <input id="radioGlobalLocation" type="text" name="location" placeholder="np. Polska">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalAdminContact">Kontakt admina</label>
+                            <input id="radioGlobalAdminContact" type="text" name="admin_contact" placeholder="np. admin@example.com">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalSourcePassword">Hasło source</label>
+                            <div class="radio-password-field">
+                                <input id="radioGlobalSourcePassword" type="password" name="source_password">
+                                <button type="button" class="btn btn-secondary radio-password-toggle" data-password-target="radioGlobalSourcePassword" data-show-label="Pokaż" data-hide-label="Ukryj" aria-pressed="false">Pokaż</button>
+                            </div>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalAdminUsername">Login admin Icecast</label>
+                            <input id="radioGlobalAdminUsername" type="text" name="admin_username">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalAdminPassword">Hasło admin Icecast</label>
+                            <div class="radio-password-field">
+                                <input id="radioGlobalAdminPassword" type="password" name="admin_password">
+                                <button type="button" class="btn btn-secondary radio-password-toggle" data-password-target="radioGlobalAdminPassword" data-show-label="Pokaż" data-hide-label="Ukryj" aria-pressed="false">Pokaż</button>
+                            </div>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioGlobalMetadataRefresh">Odświeżanie eRDS</label>
+                            <input id="radioGlobalMetadataRefresh" type="text" name="metadata_refresh_seconds" inputmode="numeric">
+                        </div>
+                    </div>
+
+                    <label class="dlna-checkbox">
+                        <input id="radioGlobalEnabled" type="checkbox" name="enabled">
+                        <span class="dlna-checkbox-text">
+                            <strong>Backend radia aktywny</strong>
+                            <span class="small">Przełącznik logiczny dla wspólnego silnika streamingu i generowania metadanych.</span>
+                        </span>
+                    </label>
+
+                    <label class="dlna-checkbox">
+                        <input id="radioGlobalAutostartBackend" type="checkbox" name="autostart_backend">
+                        <span class="dlna-checkbox-text">
+                            <strong>Autostart backendu</strong>
+                            <span class="small">Po stronie admina określa domyślny zamiar uruchamiania wspólnego backendu streamingu.</span>
+                        </span>
+                    </label>
+
+                    <div class="dlna-item-actions">
+                        <button type="submit" class="btn">Zapisz ustawienia backendu</button>
+                    </div>
+                </form>
+            </div>
+        </section>
+
+        <section id="radioPanelStation" class="radio-panel" data-radio-panel="station">
+            <div class="stack-card">
+                <div class="card-heading">
+                    <div class="card-title">Ustawienia stacji</div>
+                    <div class="card-subtitle">Nazwa, mount, format streamu, własne dane do nadawania i port <code>Live DJ takeover</code> dla tej konkretnej stacji.</div>
+                </div>
+
+                <div class="inline-note">
+                    Każde radio ma własny login i hasło do nadawania oraz własny port wejścia live. AutoDJ używa tych samych danych w tle, a po wejściu DJ-a live antena przechodzi na transmisję na żywo.
+                </div>
+
+                <form id="radioStationForm" class="auth-form">
+                    <div class="dlna-inline-form is-wide">
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationName">Nazwa stacji</label>
+                            <input id="radioStationName" type="text" name="name" required>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationDescription">Opis</label>
+                            <input id="radioStationDescription" type="text" name="description" placeholder="krótki opis radia">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationGenre">Gatunek</label>
+                            <input id="radioStationGenre" type="text" name="genre" placeholder="np. chillout, dance, retro">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationSlug">Slug</label>
+                            <input id="radioStationSlug" type="text" name="slug" placeholder="np. radio-admin">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationMountName">Mount streamu</label>
+                            <input id="radioStationMountName" type="text" name="mount_name" placeholder="np. radio-admin.mp3">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationFormat">Format streamu</label>
+                            <select id="radioStationFormat" name="stream_format">
+                                <option value="mp3">MP3</option>
+                                <option value="aac">AAC</option>
+                            </select>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationBitrate">Bitrate</label>
+                            <select id="radioStationBitrate" name="bitrate_kbps">
+                                <option value="128">128 kbps</option>
+                                <option value="160">160 kbps</option>
+                                <option value="192">192 kbps</option>
+                                <option value="256">256 kbps</option>
+                                <option value="320">320 kbps</option>
+                            </select>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationPlayMode">Tryb odtwarzania</label>
+                            <select id="radioStationPlayMode" name="play_mode">
+                                <option value="random">Losowo</option>
+                                <option value="sequential">Po kolei</option>
+                            </select>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationCrossfade">Crossfade</label>
+                            <input id="radioStationCrossfade" type="text" name="crossfade_seconds" inputmode="numeric">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationScanInterval">Rescan biblioteki</label>
+                            <input id="radioStationScanInterval" type="text" name="scan_interval_seconds" inputmode="numeric">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationJingleEveryTracks">Jingle co N utworów</label>
+                            <input id="radioStationJingleEveryTracks" type="text" name="jingle_every_tracks" inputmode="numeric">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationRepeatGuardPercent">Dystans powtórki (%)</label>
+                            <input id="radioStationRepeatGuardPercent" type="text" name="repeat_guard_percent" inputmode="numeric" placeholder="0-100">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationSourceUsername">Login do nadawania</label>
+                            <input id="radioStationSourceUsername" type="text" name="source_username" placeholder="np. source-radio-admin">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationSourcePassword">Hasło do nadawania</label>
+                            <div class="radio-password-field">
+                                <input id="radioStationSourcePassword" type="password" name="source_password" placeholder="hasło live/source">
+                                <button type="button" class="btn btn-secondary radio-password-toggle" data-password-target="radioStationSourcePassword" data-show-label="Pokaż" data-hide-label="Ukryj" aria-pressed="false">Pokaż</button>
+                            </div>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationLivePort">Port live takeover</label>
+                            <input id="radioStationLivePort" type="text" name="live_port" inputmode="numeric" placeholder="np. 15421">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationLiveShowName">Nazwa audycji</label>
+                            <input id="radioStationLiveShowName" type="text" name="live_show_name" placeholder="np. Wieczorna selekcja">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationLiveDjName">Nazwa DJ-a / AutoDJ</label>
+                            <input id="radioStationLiveDjName" type="text" name="live_dj_name" placeholder="np. DJ Kris">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationLiveHost">Host live</label>
+                            <input id="radioStationLiveHost" type="text" name="live_host" readonly>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationLiveMountName">Mount live</label>
+                            <input id="radioStationLiveMountName" type="text" name="live_mount_name" readonly>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioStationLiveEndpoint">Adres live</label>
+                            <input id="radioStationLiveEndpoint" type="text" name="live_endpoint" readonly>
+                        </div>
+                    </div>
+
+                    <div class="radio-switch-grid">
+                        <label class="dlna-checkbox">
+                            <input id="radioStationEnabled" type="checkbox" name="enabled">
+                            <span class="dlna-checkbox-text">
+                                <strong>Radio aktywne</strong>
+                                <span class="small">Przełącznik logiczny dla tej stacji i jej konfiguracji.</span>
+                            </span>
+                        </label>
+
+                        <label class="dlna-checkbox">
+                            <input id="radioStationAutostart" type="checkbox" name="autostart">
+                            <span class="dlna-checkbox-text">
+                                <strong>Autostart stacji</strong>
+                                <span class="small">Oznacza chęć uruchamiania tej stacji wraz z backendem.</span>
+                            </span>
+                        </label>
+
+                        <label class="dlna-checkbox">
+                            <input id="radioStationLiveEnabled" type="checkbox" name="live_enabled">
+                            <span class="dlna-checkbox-text">
+                                <strong>Live DJ takeover</strong>
+                                <span class="small">Gdy DJ połączy się na własny port live tej stacji, AutoDJ ustępuje miejsca transmisji na żywo.</span>
+                            </span>
+                        </label>
+                    </div>
+
+                    <div class="dlna-item-actions">
+                        <button type="submit" class="btn">Zapisz ustawienia stacji</button>
+                    </div>
+                </form>
+            </div>
+        </section>
+
+        <section id="radioPanelErds" class="radio-panel" data-radio-panel="erds">
+            <div class="stack-card">
+                <div class="card-heading">
+                    <div class="card-title">eRDS / metadane</div>
+                    <div class="card-subtitle">Własne teksty mogą korzystać z dnia tygodnia, daty, godziny i liczby słuchaczy.</div>
+                </div>
+
+                <form id="radioErdsForm" class="auth-form">
+                    <div class="dlna-inline-form is-wide">
+                        <div class="field-group">
+                            <label class="field-label" for="radioErdsMode">Tryb eRDS</label>
+                            <select id="radioErdsMode" name="mode">
+                                <option value="titles">Tytuły utworów</option>
+                                <option value="fixed">Stały tekst</option>
+                                <option value="rotation">Rotacja własnych tekstów</option>
+                            </select>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioErdsFixedText">Stały tekst</label>
+                            <input id="radioErdsFixedText" type="text" name="fixed_text" placeholder="np. Słuchasz mojego radia">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="radioErdsRotationInterval">Interwał rotacji</label>
+                            <input id="radioErdsRotationInterval" type="text" name="rotation_interval_seconds" inputmode="numeric">
+                        </div>
+                    </div>
+
+                    <label class="dlna-checkbox radio-inline-checkbox">
+                        <input id="radioErdsSuppressTrackTitles" type="checkbox" name="suppress_track_titles">
+                        <span class="dlna-checkbox-text">
+                            <strong>Nie pokazuj nazw piosenek między eRDS</strong>
+                            <span class="small">Przy trybie stałego tekstu lub rotacji blokuje tytuły utworów z playlisty, żeby metadata pozostawały przy własnych komunikatach stacji.</span>
+                        </span>
+                    </label>
+
+                    <div class="field-group">
+                        <label class="field-label" for="radioErdsTemplatesText">Szablony rotacji, po jednym w linii</label>
+                        <textarea id="radioErdsTemplatesText" name="templates_text" class="search-form-textarea" rows="5" placeholder="Aktualnie słucha {sluchacze} {sluchacze_odmiana}"></textarea>
+                    </div>
+
+                    <div class="dlna-item-actions">
+                        <button type="submit" class="btn">Zapisz ustawienia eRDS</button>
+                    </div>
+                </form>
+
+                <div class="radio-erds-layout">
+                    <div class="stack-card">
+                        <div class="card-title">Dostępne placeholdery</div>
+                        <div id="radioErdsPlaceholderList" class="radio-token-list"></div>
+                    </div>
+                    <div class="stack-card">
+                        <div class="card-title">Podgląd eRDS</div>
+                        <div class="radio-erds-note">Podgląd wykorzystuje aktualny czas serwera, bieżącą liczbę słuchaczy, rekord słuchaczy oraz rozróżnia AutoDJ i wejście live DJ.</div>
+                        <div id="radioErdsPreviewList" class="radio-preview-list"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="radioPanelLibrary" class="radio-panel" data-radio-panel="library">
+            <div class="stack-card">
+                <div class="card-heading">
+                    <div class="card-title">Biblioteka audio</div>
+                    <div class="card-subtitle">Jedna kompaktowa tabela: zaznaczasz checkboxami i zapisujesz jednym przyciskiem.</div>
+                </div>
+
+                <form id="radioUploadForm" class="auth-form" enctype="multipart/form-data">
+                    <div class="radio-upload-inline">
+                        <div class="field-group">
+                            <label class="field-label" for="radioUploadInput">Wgraj własne audio</label>
+                            <input id="radioUploadInput" type="file" name="files" multiple accept=".aac,.flac,.m4a,.mp3,.oga,.ogg,.opus,.wav,.webm,.wma,audio/*">
+                        </div>
+                        <button type="submit" class="btn btn-secondary">Dodaj pliki do radia</button>
+                    </div>
+                </form>
+
+                <div id="radioUploadProgressPanel" class="radio-upload-progress" hidden>
+                    <div class="radio-upload-progress-head">
+                        <strong id="radioUploadProgressLabel">Wgrywanie plików audio</strong>
+                        <span id="radioUploadProgressPercent">0%</span>
+                    </div>
+                    <div class="progress">
+                        <div id="radioUploadProgressBar" class="progress-bar downloading" style="width:0%;"></div>
+                    </div>
+                    <div class="radio-upload-progress-meta">
+                        <span id="radioUploadProgressFiles">0 / 0 plików</span>
+                        <span id="radioUploadProgressSpeed">0 B/s</span>
+                    </div>
+                    <div id="radioUploadProgressStatus" class="maintenance-task-detail">Czekam na upload.</div>
+                </div>
+
+                <form id="radioLibraryForm" class="auth-form">
+                    <div class="radio-library-toolbar">
+                        <div class="radio-mode-group">
+                            <button id="radioLibraryModeManualButton" type="button" class="btn btn-secondary">Ręcznie</button>
+                            <button id="radioLibraryUseAllButton" type="button" class="btn btn-green">Cała biblioteka</button>
+                        </div>
+                        <div class="radio-library-bulk-actions">
+                            <button id="radioLibraryIncludeVisibleButton" type="button" class="btn btn-secondary">Zaznacz</button>
+                            <button id="radioLibraryExcludeVisibleButton" type="button" class="btn btn-secondary">Odznacz</button>
+                        </div>
+                        <div class="radio-search-wrap">
+                            <label class="field-label" for="radioLibraryFilter">Filtr</label>
+                            <input id="radioLibraryFilter" type="text" placeholder="np. koncert, jingle, 2026-05-17">
+                        </div>
+                    </div>
+
+                    <div id="radioLibraryModeHelp" class="radio-mode-help"></div>
+                    <div id="radioLibraryStats" class="radio-library-stats"></div>
+
+                    <div class="radio-library-table-wrap">
+                        <table class="radio-library-table">
+                            <thead>
+                                <tr>
+                                    <th class="is-check">W radiu</th>
+                                    <th>Tytuł techniczny</th>
+                                    <th>Rola</th>
+                                    <th>Źródło</th>
+                                    <th>Plik audio</th>
+                                    <th class="is-actions">Akcja</th>
+                                </tr>
+                            </thead>
+                            <tbody id="radioLibraryTableBody">
+                                <tr>
+                                    <td colspan="6" class="radio-library-empty">Ładowanie biblioteki audio...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="dlna-item-actions">
+                        <button type="submit" class="btn">Zapisz bibliotekę</button>
+                    </div>
+                </form>
+            </div>
+        </section>
+    </section>
+</section>
+
+<script>
+window.pageBootstrapData = {
+    initialState: {{ radio_initial_state|tojson }}
+};
+</script>
+<script src="{{ url_for('static', filename='js/pages/radio.js') }}?v={{ asset_version }}"></script>

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TOTAL_STEPS=11
+TOTAL_STEPS=15
 CURRENT_STEP=0
 INSTALL_LOG="${FLASK_DOWNLOADER_INSTALL_LOG:-/tmp/flask_downloader_install.log}"
 
@@ -22,8 +22,11 @@ APP_USER_DEFAULT="flaskdl"
 APP_GROUP_DEFAULT="flaskdl"
 APP_PORT_DEFAULT="9999"
 APP_HOST_DEFAULT="0.0.0.0"
-SERVICE_NAME_DEFAULT="flask-downloader"
-DLNA_SERVICE_NAME_DEFAULT="flask-downloader-dlna"
+MAX_PARALLEL_DOWNLOADS_PER_USER_DEFAULT="3"
+SERVICE_NAME_DEFAULT="${FLASK_DOWNLOADER_SERVICE_NAME:-flask-downloader}"
+DLNA_SERVICE_NAME_DEFAULT="${FLASK_DOWNLOADER_DLNA_SERVICE_NAME:-}"
+RADIO_SERVICE_NAME_DEFAULT="${FLASK_DOWNLOADER_RADIO_SERVICE_NAME:-}"
+RADIO_STATION_TEMPLATE_DEFAULT="${FLASK_DOWNLOADER_RADIO_STATION_SERVICE_TEMPLATE:-}"
 DLNA_PORT_DEFAULT="49152"
 DLNA_CHANNEL_DEFAULT="latest"
 NON_INTERACTIVE=0
@@ -33,6 +36,10 @@ STORAGE_ROOT_FROM_ARG=0
 APP_USER_FROM_ARG=0
 APP_GROUP_FROM_ARG=0
 APP_PORT_FROM_ARG=0
+SERVICE_NAME_FROM_ARG=0
+DLNA_SERVICE_NAME_FROM_ARG=0
+RADIO_SERVICE_NAME_FROM_ARG=0
+RADIO_STATION_TEMPLATE_FROM_ARG=0
 
 REPO_URL="$REPO_URL_DEFAULT"
 BRANCH="$BRANCH_DEFAULT"
@@ -41,6 +48,10 @@ STORAGE_ROOT="$STORAGE_ROOT_DEFAULT"
 APP_USER="$APP_USER_DEFAULT"
 APP_GROUP="$APP_GROUP_DEFAULT"
 APP_PORT="$APP_PORT_DEFAULT"
+SERVICE_NAME="$SERVICE_NAME_DEFAULT"
+DLNA_SERVICE_NAME="$DLNA_SERVICE_NAME_DEFAULT"
+RADIO_SERVICE_NAME="$RADIO_SERVICE_NAME_DEFAULT"
+RADIO_STATION_TEMPLATE="$RADIO_STATION_TEMPLATE_DEFAULT"
 
 render_bar() {
     local percent="$1"
@@ -251,6 +262,65 @@ print(secrets.token_urlsafe(48))
 PY
 }
 
+run_app_bootstrap_task() {
+    local task_key="$1"
+    APP_DIR="$APP_DIR" "$APP_DIR/.venv/bin/python" - "$task_key" <<'PY'
+import os
+import sys
+
+app_dir = os.environ["APP_DIR"]
+task_key = str(sys.argv[1] or "").strip().lower()
+if not task_key:
+    print("Brak identyfikatora zadania bootstrap.")
+    raise SystemExit(1)
+
+os.chdir(app_dir)
+
+from flask_downloader.legacy_app import (  # noqa: E402
+    install_or_update_dlna_server,
+    install_or_update_ffmpeg,
+    install_or_update_radio_backend,
+    update_yt_dlp_package,
+)
+
+
+TASKS = {
+    "yt_dlp": update_yt_dlp_package,
+    "ffmpeg": install_or_update_ffmpeg,
+    "dlna": install_or_update_dlna_server,
+    "radio": install_or_update_radio_backend,
+}
+
+
+def progress_callback(**event):
+    percent = event.get("progress_percent")
+    status_label = str(event.get("status_label") or "").strip()
+    detail = str(event.get("detail") or "").strip()
+    prefix = "[%s]" % task_key
+    if percent not in (None, ""):
+        try:
+            prefix += " %05.1f%%" % float(percent)
+        except Exception:
+            pass
+    line = prefix
+    if status_label:
+        line += " " + status_label
+    if detail:
+        line += " | " + detail
+    print(line)
+
+
+task = TASKS.get(task_key)
+if task is None:
+    print("Nieznane zadanie bootstrap: %s" % task_key)
+    raise SystemExit(1)
+
+ok, message = task(progress_callback=progress_callback)
+print("[%s] result=%s message=%s" % (task_key, ok, message))
+raise SystemExit(0 if ok else 1)
+PY
+}
+
 write_env_file() {
     local env_file="$APP_DIR/.env"
     local secret_key="$1"
@@ -263,12 +333,15 @@ write_env_file() {
     cat > "$env_file" <<EOF
 FLASK_DOWNLOADER_HOST=${APP_HOST_DEFAULT}
 FLASK_DOWNLOADER_PORT=${APP_PORT}
+FLASK_DOWNLOADER_MAX_PARALLEL_DOWNLOADS_PER_USER=${MAX_PARALLEL_DOWNLOADS_PER_USER_DEFAULT}
 FLASK_SECRET_KEY=${secret_key}
 
 FLASK_DOWNLOADER_SERVICE_USER=${APP_USER}
 FLASK_DOWNLOADER_SERVICE_GROUP=${APP_GROUP}
-FLASK_DOWNLOADER_SERVICE_NAME=${SERVICE_NAME_DEFAULT}
-FLASK_DOWNLOADER_DLNA_SERVICE_NAME=${DLNA_SERVICE_NAME_DEFAULT}
+FLASK_DOWNLOADER_SERVICE_NAME=${SERVICE_NAME}
+FLASK_DOWNLOADER_DLNA_SERVICE_NAME=${DLNA_SERVICE_NAME}
+FLASK_DOWNLOADER_RADIO_SERVICE_NAME=${RADIO_SERVICE_NAME}
+FLASK_DOWNLOADER_RADIO_STATION_SERVICE_TEMPLATE=${RADIO_STATION_TEMPLATE}
 
 FLASK_DOWNLOADER_MOUNT_POINT=${STORAGE_ROOT}
 FLASK_DOWNLOADER_DOWNLOAD_DIR=${STORAGE_ROOT}/flask_downloader
@@ -287,8 +360,10 @@ initialize_data_files() {
     APP_DIR="$APP_DIR" ADMIN_PASSWORD="$ADMIN_PASSWORD" STORAGE_ROOT="$STORAGE_ROOT" "$APP_DIR/.venv/bin/python" - <<'PY'
 import json
 import os
+import secrets
 import time
 from werkzeug.security import generate_password_hash
+from flask_downloader.stores.radios_store import default_radio_store
 
 app_dir = os.environ["APP_DIR"]
 admin_password = os.environ["ADMIN_PASSWORD"]
@@ -299,9 +374,35 @@ os.makedirs(data_dir, exist_ok=True)
 config_path = os.path.join(data_dir, "config.json")
 jobs_path = os.path.join(data_dir, "jobs.json")
 users_path = os.path.join(data_dir, "users.json")
+radios_path = os.path.join(data_dir, "radios.json")
+config_example_path = os.path.join(data_dir, "config.example.json")
+users_example_path = os.path.join(data_dir, "users.example.json")
+jobs_example_path = os.path.join(data_dir, "jobs.example.json")
 
 user_root = os.path.join(storage_root, "flask_downloader_users")
-config_payload = {
+
+
+def load_example_json(path, fallback):
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+            if isinstance(payload, type(fallback)):
+                return payload
+        except Exception:
+            pass
+    return fallback
+
+
+def generate_runtime_secret(min_length=24):
+    raw = secrets.token_urlsafe(max(18, int(min_length or 24)))
+    text = str(raw or "").strip()
+    if len(text) < min_length:
+        text = (text + secrets.token_urlsafe(min_length))[:min_length]
+    return text[: max(min_length, 24)]
+
+
+config_payload = load_example_json(config_example_path, {
     "user_storage_root": user_root,
     "user_storage_layout_version": 2,
     "download_root": os.path.join(user_root, "admin", "video"),
@@ -320,38 +421,52 @@ config_payload = {
         "media_rules": [],
         "layout_version": 0,
         "last_sync_at": 0.0,
-        "last_sync_error": ""
-    }
-}
+        "last_sync_error": "",
+    },
+})
+config_payload["user_storage_root"] = user_root
+config_payload["download_root"] = os.path.join(user_root, "admin", "video")
+config_payload["audio_download_root"] = os.path.join(user_root, "admin", "audio")
 
 if not os.path.isfile(config_path):
     with open(config_path, "w", encoding="utf-8") as fh:
         json.dump(config_payload, fh, ensure_ascii=False, indent=2)
 
 if not os.path.isfile(jobs_path):
+    jobs_payload = load_example_json(jobs_example_path, [])
     with open(jobs_path, "w", encoding="utf-8") as fh:
-        json.dump([], fh, ensure_ascii=False, indent=2)
+        json.dump(jobs_payload, fh, ensure_ascii=False, indent=2)
 
 if not os.path.isfile(users_path):
-    users_payload = {
-        "schema_version": 1,
-        "users": [
-            {
-                "username": "admin",
-                "role": "admin",
-                "password_hash": generate_password_hash(admin_password),
-                "enabled": True,
-                "created_at": time.time(),
-            }
-        ],
-    }
+    users_payload = load_example_json(users_example_path, {"schema_version": 1, "users": []})
+    if not isinstance(users_payload, dict):
+        users_payload = {"schema_version": 1, "users": []}
+    users_payload["schema_version"] = int(users_payload.get("schema_version") or 1)
+    users_payload["users"] = [
+        {
+            "username": "admin",
+            "role": "admin",
+            "password_hash": generate_password_hash(admin_password),
+            "enabled": True,
+            "created_at": time.time(),
+        }
+    ]
     with open(users_path, "w", encoding="utf-8") as fh:
         json.dump(users_payload, fh, ensure_ascii=False, indent=2)
+
+if not os.path.isfile(radios_path):
+    radios_payload = default_radio_store()
+    global_payload = radios_payload.get("global") if isinstance(radios_payload, dict) else None
+    if isinstance(global_payload, dict):
+        global_payload["source_password"] = generate_runtime_secret(32)
+        global_payload["admin_password"] = generate_runtime_secret(32)
+    with open(radios_path, "w", encoding="utf-8") as fh:
+        json.dump(radios_payload, fh, ensure_ascii=False, indent=2)
 PY
 }
 
 install_systemd_service() {
-    local service_file="/etc/systemd/system/${SERVICE_NAME_DEFAULT}.service"
+    local service_file="/etc/systemd/system/${SERVICE_NAME}.service"
     local template_file="$APP_DIR/deploy/flask-downloader.service.template"
     local python_bin="$APP_DIR/.venv/bin/python"
     local env_file="$APP_DIR/.env"
@@ -365,8 +480,8 @@ install_systemd_service() {
         "$template_file" > "$service_file"
 
     systemctl daemon-reload
-    systemctl enable "${SERVICE_NAME_DEFAULT}.service" >/dev/null
-    systemctl restart "${SERVICE_NAME_DEFAULT}.service"
+    systemctl enable "${SERVICE_NAME}.service" >/dev/null
+    systemctl restart "${SERVICE_NAME}.service"
 }
 
 show_summary() {
@@ -383,7 +498,7 @@ show_summary() {
     printf "${C_MUTED}Storage użytkowników:${C_RESET} %s/flask_downloader_users\n" "$STORAGE_ROOT"
     printf "${C_MUTED}Log instalacji:${C_RESET} %s\n" "$INSTALL_LOG"
     printf "${C_MUTED}Status usługi:${C_RESET} "
-    systemctl is-active "${SERVICE_NAME_DEFAULT}.service" || true
+    systemctl is-active "${SERVICE_NAME}.service" || true
 }
 
 while [[ $# -gt 0 ]]; do
@@ -421,6 +536,26 @@ while [[ $# -gt 0 ]]; do
             APP_PORT_FROM_ARG=1
             shift 2
             ;;
+        --service-name)
+            SERVICE_NAME="$2"
+            SERVICE_NAME_FROM_ARG=1
+            shift 2
+            ;;
+        --dlna-service-name)
+            DLNA_SERVICE_NAME="$2"
+            DLNA_SERVICE_NAME_FROM_ARG=1
+            shift 2
+            ;;
+        --radio-service-name)
+            RADIO_SERVICE_NAME="$2"
+            RADIO_SERVICE_NAME_FROM_ARG=1
+            shift 2
+            ;;
+        --radio-station-template)
+            RADIO_STATION_TEMPLATE="$2"
+            RADIO_STATION_TEMPLATE_FROM_ARG=1
+            shift 2
+            ;;
         --admin-password)
             ADMIN_PASSWORD="$2"
             shift 2
@@ -450,6 +585,19 @@ STORAGE_ROOT="$(resolve_install_value "$STORAGE_ROOT" "$STORAGE_ROOT_FROM_ARG" '
 APP_USER="$(resolve_install_value "$APP_USER" "$APP_USER_FROM_ARG" 'Użytkownik Linux dla usługi' "$APP_USER_DEFAULT")"
 APP_GROUP="$(resolve_install_value "$APP_GROUP" "$APP_GROUP_FROM_ARG" 'Grupa Linux dla usługi' "$APP_GROUP_DEFAULT")"
 APP_PORT="$(resolve_install_value "$APP_PORT" "$APP_PORT_FROM_ARG" 'Port aplikacji' "$APP_PORT_DEFAULT" 30)"
+SERVICE_NAME="$(resolve_install_value "$SERVICE_NAME" "$SERVICE_NAME_FROM_ARG" 'Nazwa usługi Flask w systemd' "$SERVICE_NAME_DEFAULT")"
+if [[ -z "$DLNA_SERVICE_NAME_DEFAULT" ]]; then
+    DLNA_SERVICE_NAME_DEFAULT="${SERVICE_NAME}-dlna"
+fi
+if [[ -z "$RADIO_SERVICE_NAME_DEFAULT" ]]; then
+    RADIO_SERVICE_NAME_DEFAULT="${SERVICE_NAME}-radio"
+fi
+if [[ -z "$RADIO_STATION_TEMPLATE_DEFAULT" ]]; then
+    RADIO_STATION_TEMPLATE_DEFAULT="${SERVICE_NAME}-radio-station@"
+fi
+DLNA_SERVICE_NAME="$(resolve_install_value "${DLNA_SERVICE_NAME:-$DLNA_SERVICE_NAME_DEFAULT}" "$DLNA_SERVICE_NAME_FROM_ARG" 'Nazwa usługi DLNA w systemd' "$DLNA_SERVICE_NAME_DEFAULT")"
+RADIO_SERVICE_NAME="$(resolve_install_value "${RADIO_SERVICE_NAME:-$RADIO_SERVICE_NAME_DEFAULT}" "$RADIO_SERVICE_NAME_FROM_ARG" 'Nazwa backendu radia w systemd' "$RADIO_SERVICE_NAME_DEFAULT")"
+RADIO_STATION_TEMPLATE="$(resolve_install_value "${RADIO_STATION_TEMPLATE:-$RADIO_STATION_TEMPLATE_DEFAULT}" "$RADIO_STATION_TEMPLATE_FROM_ARG" 'Prefiks szablonu usług stacji radia' "$RADIO_STATION_TEMPLATE_DEFAULT")"
 while ! validate_port_value "$APP_PORT"; do
     if [[ "$NON_INTERACTIVE" -eq 1 || "$APP_PORT_FROM_ARG" -eq 1 ]]; then
         log_fail "Port musi być liczbą z zakresu 1-65535."
@@ -485,7 +633,7 @@ log_ok "Zebrano ustawienia instalacyjne."
 begin_step "Instalacja pakietów systemowych"
 export DEBIAN_FRONTEND=noninteractive
 run_logged "Odświeżam listę pakietów apt" apt-get update -y
-run_logged "Instaluję pakiety systemowe" apt-get install -y git ca-certificates curl python3 python3-venv python3-pip
+run_logged "Instaluję pakiety systemowe" apt-get install -y git ca-certificates curl python3 python3-venv python3-pip cifs-utils iproute2 ffmpegthumbnailer
 log_ok "Pakiety systemowe są gotowe."
 
 begin_step "Tworzenie użytkownika i uprawnień"
@@ -527,7 +675,26 @@ log_ok "Plik .env jest gotowy."
 begin_step "Inicjalizacja danych aplikacji"
 run_logged "Tworzę początkowe pliki danych aplikacji" initialize_data_files
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/data"
-log_ok "Pliki data/config.json, data/jobs.json i data/users.json są gotowe."
+log_ok "Pliki data/config.json, data/jobs.json, data/users.json i data/radios.json są gotowe."
+
+begin_step "Aktualizacja yt-dlp"
+run_logged "Aktualizuję yt-dlp w środowisku aplikacji" run_app_bootstrap_task yt_dlp
+log_ok "yt-dlp jest gotowy."
+
+begin_step "Instalacja ffmpeg"
+run_logged "Instaluję zarządzany ffmpeg dla aplikacji" run_app_bootstrap_task ffmpeg
+chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/tools" 2>/dev/null || true
+log_ok "ffmpeg jest gotowy."
+
+begin_step "Instalacja DLNA"
+run_logged "Instaluję backend Gerbera i przygotowuję runtime DLNA" run_app_bootstrap_task dlna
+chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/tools" 2>/dev/null || true
+log_ok "Backend DLNA jest gotowy."
+
+begin_step "Instalacja backendu radia"
+run_logged "Instaluję backend Icecast + Liquidsoap" run_app_bootstrap_task radio
+chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/data" "$APP_DIR/tools" 2>/dev/null || true
+log_ok "Backend radia jest gotowy."
 
 begin_step "Instalacja usługi systemd"
 run_logged "Instaluję i restartuję usługę systemd" install_systemd_service
@@ -535,7 +702,7 @@ log_ok "Usługa systemd została zainstalowana."
 
 begin_step "Weryfikacja działania"
 sleep 2
-run_logged "Sprawdzam status usługi ${SERVICE_NAME_DEFAULT}.service" systemctl --no-pager --full status "${SERVICE_NAME_DEFAULT}.service"
+run_logged "Sprawdzam status usługi ${SERVICE_NAME}.service" systemctl --no-pager --full status "${SERVICE_NAME}.service"
 log_ok "Usługa Flask Downloader działa poprawnie."
 
 begin_step "Podsumowanie"

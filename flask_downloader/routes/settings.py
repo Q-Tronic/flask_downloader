@@ -18,11 +18,15 @@ def register_settings_routes(app, deps):
     refresh_yt_dlp_update_state = deps["refresh_yt_dlp_update_state"]
     update_yt_dlp_package = deps["update_yt_dlp_package"]
     refresh_dlna_package_state = deps["refresh_dlna_package_state"]
+    refresh_radio_backend_package_state = deps["refresh_radio_backend_package_state"]
     build_dlna_json_response = deps["build_dlna_json_response"]
     install_or_update_dlna_server = deps["install_or_update_dlna_server"]
+    install_or_update_radio_backend = deps["install_or_update_radio_backend"]
     parse_boolean_flag = deps["parse_boolean_flag"]
     set_dlna_service_enabled = deps["set_dlna_service_enabled"]
     restart_dlna_service_now = deps["restart_dlna_service_now"]
+    set_radio_backend_enabled = deps["set_radio_backend_enabled"]
+    restart_radio_backend_now = deps["restart_radio_backend_now"]
     schedule_flask_service_restart = deps["schedule_flask_service_restart"]
     SYSTEMD_SERVICE_NAME = deps["SYSTEMD_SERVICE_NAME"]
 
@@ -294,6 +298,132 @@ def register_settings_routes(app, deps):
         except Exception as exc:
             if wants_json_response():
                 return build_dlna_json_response(ok=False, message=str(exc), kind="error", status_code=400)
+            set_ui_flash(str(exc), "error")
+
+        return redirect(url_for("settings_page"))
+
+    @app.route("/settings/radio-check", methods=["POST"])
+    def settings_check_radio_backend():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby sprawdzać backend radia.", "error")
+            return redirect(url_for("index"))
+
+        state = refresh_radio_backend_package_state(force=True)
+        if not state.get("linux_supported", True):
+            message = "Runtime radia wymaga Linuxa z apt i systemd. W tym środowisku możesz tylko zarządzać konfiguracją."
+            kind = "success"
+        elif state["check_error"]:
+            message = "Nie udało się sprawdzić pakietów backendu radia: %s" % state["check_error"]
+            kind = "error"
+        elif not state["installed"]:
+            message = "Backend radia nie jest jeszcze gotowy. Potrzebne są pakiety Icecast i Liquidsoap."
+            kind = "success"
+        elif state["update_available"]:
+            message = "Backend radia wymaga instalacji lub aktualizacji pakietów Icecast / Liquidsoap."
+            kind = "success"
+        else:
+            message = "Backend radia jest już gotowy."
+            kind = "success"
+
+        if wants_json_response():
+            return jsonify({
+                "ok": kind == "success",
+                "message": message,
+                "kind": kind,
+                "state": get_settings_page_state(),
+            }), (500 if kind == "error" else 200)
+
+        set_ui_flash(message, kind)
+        return redirect(url_for("settings_page"))
+
+    @app.route("/settings/radio-install", methods=["POST"])
+    def settings_install_radio_backend():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby instalować backend radia.", "error")
+            return redirect(url_for("index"))
+
+        started, task = start_maintenance_task(
+            "radio_backend_install",
+            "Instalacja backendu radia",
+            lambda progress_callback: install_or_update_radio_backend(progress_callback=progress_callback),
+        )
+        message = "Rozpoczęto instalację lub aktualizację backendu radia." if started else "Instalacja lub aktualizacja backendu radia już trwa."
+
+        if wants_json_response():
+            return jsonify({
+                "ok": True,
+                "started": started,
+                "message": message,
+                "task": task,
+                "state": get_settings_page_state(),
+            })
+
+        set_ui_flash(message, "success")
+        return redirect(url_for("settings_page"))
+
+    @app.route("/settings/radio-toggle-service", methods=["POST"])
+    def settings_toggle_radio_backend():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby przełączać backend radia.", "error")
+            return redirect(url_for("index"))
+
+        enabled = parse_boolean_flag(request.form.get("enabled"), default=False)
+        try:
+            set_radio_backend_enabled(enabled)
+            message = "Backend radia został %s." % ("włączony" if enabled else "wyłączony")
+            if wants_json_response():
+                return jsonify({
+                    "ok": True,
+                    "message": message,
+                    "kind": "success",
+                    "state": get_settings_page_state(),
+                })
+            set_ui_flash(message, "success")
+        except Exception as exc:
+            if wants_json_response():
+                return jsonify({
+                    "ok": False,
+                    "error": str(exc),
+                    "kind": "error",
+                    "state": get_settings_page_state(),
+                }), 400
+            set_ui_flash(str(exc), "error")
+
+        return redirect(url_for("settings_page"))
+
+    @app.route("/settings/radio-restart-service", methods=["POST"])
+    def settings_restart_radio_backend():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby restartować backend radia.", "error")
+            return redirect(url_for("index"))
+
+        try:
+            restart_radio_backend_now()
+            message = "Backend radia został zrestartowany."
+            if wants_json_response():
+                return jsonify({
+                    "ok": True,
+                    "message": message,
+                    "kind": "success",
+                    "state": get_settings_page_state(),
+                })
+            set_ui_flash(message, "success")
+        except Exception as exc:
+            if wants_json_response():
+                return jsonify({
+                    "ok": False,
+                    "error": str(exc),
+                    "kind": "error",
+                    "state": get_settings_page_state(),
+                }), 400
             set_ui_flash(str(exc), "error")
 
         return redirect(url_for("settings_page"))

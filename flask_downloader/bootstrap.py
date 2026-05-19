@@ -2,6 +2,7 @@ from flask_downloader.routes.auth import register_auth_routes
 from flask_downloader.routes.dlna import register_dlna_routes
 from flask_downloader.routes.downloads import register_download_routes
 from flask_downloader.routes.main import register_main_routes
+from flask_downloader.routes.radio import register_radio_routes
 from flask_downloader.routes.settings import register_settings_routes
 from flask_downloader.routes.users import register_user_management_routes
 
@@ -111,11 +112,15 @@ def register_application_routes(app, context):
         "refresh_yt_dlp_update_state": context["refresh_yt_dlp_update_state"],
         "update_yt_dlp_package": context["update_yt_dlp_package"],
         "refresh_dlna_package_state": context["refresh_dlna_package_state"],
+        "refresh_radio_backend_package_state": context["refresh_radio_backend_package_state"],
         "build_dlna_json_response": context["build_dlna_json_response"],
         "install_or_update_dlna_server": context["install_or_update_dlna_server"],
+        "install_or_update_radio_backend": context["install_or_update_radio_backend"],
         "parse_boolean_flag": context["parse_boolean_flag"],
         "set_dlna_service_enabled": context["set_dlna_service_enabled"],
         "restart_dlna_service_now": context["restart_dlna_service_now"],
+        "set_radio_backend_enabled": context["set_radio_backend_enabled"],
+        "restart_radio_backend_now": context["restart_radio_backend_now"],
         "schedule_flask_service_restart": context["schedule_flask_service_restart"],
         "SYSTEMD_SERVICE_NAME": context["SYSTEMD_SERVICE_NAME"],
     })
@@ -156,13 +161,49 @@ def register_application_routes(app, context):
         "delete_dlna_media_rule": context["delete_dlna_media_rule"],
     })
 
+    register_radio_routes(app, {
+        "require_authenticated_page": context["require_authenticated_page"],
+        "require_authenticated_json": context["require_authenticated_json"],
+        "is_admin_authenticated": context["is_admin_authenticated"],
+        "render_page": context["render_page"],
+        "set_ui_flash": context["set_ui_flash"],
+        "resolve_view_scope_username": context["resolve_view_scope_username"],
+        "get_current_username": context["get_current_username"],
+        "RADIO_CONTENT_TEMPLATE": context["RADIO_CONTENT_TEMPLATE"],
+        "get_radio_page_state": context["get_radio_page_state"],
+        "create_radio_station": context["create_radio_station"],
+        "update_radio_station": context["update_radio_station"],
+        "delete_radio_station": context["delete_radio_station"],
+        "update_radio_global_settings": context["update_radio_global_settings"],
+        "add_radio_library_paths": context["add_radio_library_paths"],
+        "bulk_save_radio_library": context["bulk_save_radio_library"],
+        "update_radio_library_item": context["update_radio_library_item"],
+        "remove_radio_library_item": context["remove_radio_library_item"],
+        "store_uploaded_radio_audio": context["store_uploaded_radio_audio"],
+        "store_uploaded_radio_audio_batch": context["store_uploaded_radio_audio_batch"],
+        "start_maintenance_task": context["start_maintenance_task"],
+        "refresh_radio_backend_package_state": context["refresh_radio_backend_package_state"],
+        "install_or_update_radio_backend": context["install_or_update_radio_backend"],
+        "set_radio_backend_enabled": context["set_radio_backend_enabled"],
+        "restart_radio_backend_now": context["restart_radio_backend_now"],
+        "control_radio_station": context["control_radio_station"],
+        "read_radio_log_file_for_browser": context["read_radio_log_file_for_browser"],
+        "get_radio_backend_log_file": context["get_radio_backend_log_file"],
+        "get_radio_station_log_file": context["get_radio_station_log_file"],
+        "RADIO_LOG_BROWSER_MAX_BYTES": context["RADIO_LOG_BROWSER_MAX_BYTES"],
+    })
+
 
 def start_background_schedulers(context):
     context["start_ffmpeg_scheduler_once"]()
     context["start_yt_dlp_scheduler_once"]()
     context["start_dlna_scheduler_once"]()
+    if context.get("start_radio_package_scheduler_once"):
+        context["start_radio_package_scheduler_once"]()
     if context.get("start_dlna_autoheal_scheduler_once"):
         context["start_dlna_autoheal_scheduler_once"]()
+    if context.get("start_radio_metadata_scheduler_once"):
+        context["start_radio_metadata_scheduler_once"]()
 
 
 __all__ = [

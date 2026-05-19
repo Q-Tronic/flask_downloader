@@ -9,10 +9,12 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 LEGACY_CONFIG_FILE = os.path.join(PROJECT_ROOT, "flask_downloader_config.json")
 LEGACY_JOBS_FILE = os.path.join(PROJECT_ROOT, "flask_downloader_jobs.json")
 LEGACY_USERS_FILE = os.path.join(PROJECT_ROOT, "flask_downloader_users.json")
+LEGACY_RADIOS_FILE = os.path.join(PROJECT_ROOT, "flask_downloader_radios.json")
 
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 JOBS_FILE = os.path.join(DATA_DIR, "jobs.json")
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
+RADIOS_FILE = os.path.join(DATA_DIR, "radios.json")
 
 
 def ensure_data_layout():
@@ -22,6 +24,7 @@ def ensure_data_layout():
         (LEGACY_CONFIG_FILE, CONFIG_FILE),
         (LEGACY_JOBS_FILE, JOBS_FILE),
         (LEGACY_USERS_FILE, USERS_FILE),
+        (LEGACY_RADIOS_FILE, RADIOS_FILE),
     )
 
     for legacy_path, current_path in file_pairs:
@@ -38,8 +41,10 @@ __all__ = [
     "LEGACY_CONFIG_FILE",
     "LEGACY_JOBS_FILE",
     "LEGACY_USERS_FILE",
+    "LEGACY_RADIOS_FILE",
     "CONFIG_FILE",
     "JOBS_FILE",
     "USERS_FILE",
+    "RADIOS_FILE",
     "ensure_data_layout",
 ]

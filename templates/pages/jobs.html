@@ -1,18 +1,21 @@
 
 <section class="page-card">
-    <h1 class="page-title">Zadania pobierania</h1>
-    <p class="muted">Statusy są odświeżane na bieżąco przez AJAX, bez ręcznego przeładowywania.</p>
-    <div id="mountBox" class="mount-bad">Sprawdzanie statusu montowania...</div>
-    <div class="footer-note" id="downloadDirInfo">Katalog docelowy: ...</div>
+    <div class="page-title-row">
+        <h1 class="page-title">Zadania pobierania</h1>
+        <div id="mountBox" class="page-status-inline is-online" title="Sprawdzanie statusu serwera danych...">
+            <span class="page-status-icon" aria-hidden="true"></span>
+            <span class="page-status-text">
+                <span class="page-status-icon-dot" aria-hidden="true"></span>
+                Serwer danych online
+            </span>
+        </div>
+    </div>
 </section>
 
 <section class="page-card">
     <h2 class="section-title">Aktywne i zakończone zadania</h2>
     <div class="section-note">Zakończone pobrania są automatycznie usuwane z listy po 3 dniach.</div>
-    <div id="jobsAdminHint" class="section-note">
-        Widzisz zadania zgodnie z uprawnieniami zalogowanego użytkownika.
-    </div>
-    <div id="jobsScopeWrap" class="source-selector-grid" hidden>
+    <div id="jobsScopeWrap" class="source-selector-grid jobs-scope-wrap" hidden>
         <div class="stack-card">
             <label class="field-label" for="jobsScopeSelect">Widok użytkownika</label>
             <select id="jobsScopeSelect"></select>

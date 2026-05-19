@@ -295,8 +295,19 @@
     function renderMount() {
         const mount = currentState.mount || {};
         const mountBox = document.getElementById("dlnaMountStatus");
-        mountBox.className = mount.online ? "mount-ok" : "mount-bad";
-        mountBox.textContent = String(mount.message || "");
+        if (!mountBox) {
+            return;
+        }
+        const online = !!mount.online;
+        mountBox.className = "page-status-inline " + (online ? "is-online" : "is-offline");
+        mountBox.title = String(mount.message || "");
+        mountBox.innerHTML = `
+            <span class="page-status-icon" aria-hidden="true"></span>
+            <span class="page-status-text">
+                <span class="page-status-icon-dot" aria-hidden="true"></span>
+                ${online ? "Serwer danych online" : "Serwer danych offline"}
+            </span>
+        `;
     }
 
     function renderSummary(updateFormValues) {

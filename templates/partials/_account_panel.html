@@ -38,14 +38,11 @@
     {% else %}
         <div class="admin-login-shell">
             <div class="admin-login-title">Logowanie</div>
-            <div class="admin-login-subtitle">
-                Zaloguj się, aby zobaczyć swoje pliki, swoje pobrania i rozpocząć nowe zadania.
-            </div>
         </div>
         <form method="post" action="/admin/login" class="auth-form" data-shell-async="true">
             <input type="hidden" name="next" value="{{ current_path }}">
             <label class="field-label" for="authUsername">Login</label>
-            <input id="authUsername" type="text" name="username" autocomplete="username" value="admin" required>
+            <input id="authUsername" type="text" name="username" autocomplete="username" required>
             <label class="field-label" for="authPassword">Hasło</label>
             <input id="authPassword" type="password" name="password" autocomplete="current-password" required>
             <button type="submit" class="btn full-width">Zaloguj</button>

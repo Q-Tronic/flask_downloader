@@ -9,7 +9,9 @@ class PageStateService:
         refresh_ffmpeg_update_state,
         refresh_yt_dlp_update_state,
         refresh_dlna_package_state,
+        refresh_radio_backend_package_state,
         get_dlna_service_state,
+        get_radio_backend_service_state,
         get_flask_service_state,
         build_user_management_rows,
         get_dlna_page_state,
@@ -27,7 +29,9 @@ class PageStateService:
         self._refresh_ffmpeg_update_state = refresh_ffmpeg_update_state
         self._refresh_yt_dlp_update_state = refresh_yt_dlp_update_state
         self._refresh_dlna_package_state = refresh_dlna_package_state
+        self._refresh_radio_backend_package_state = refresh_radio_backend_package_state
         self._get_dlna_service_state = get_dlna_service_state
+        self._get_radio_backend_service_state = get_radio_backend_service_state
         self._get_flask_service_state = get_flask_service_state
         self._build_user_management_rows = build_user_management_rows
         self._get_dlna_page_state = get_dlna_page_state
@@ -48,7 +52,9 @@ class PageStateService:
             "ffmpeg_state": self._refresh_ffmpeg_update_state(force=False),
             "yt_dlp_state": self._refresh_yt_dlp_update_state(force=False),
             "dlna_package_state": self._refresh_dlna_package_state(force=False),
+            "radio_backend_package_state": self._refresh_radio_backend_package_state(force=False),
             "dlna_service_state": self._get_dlna_service_state(),
+            "radio_backend_service_state": self._get_radio_backend_service_state(),
             "service_state": self._get_flask_service_state(),
         }
         if include_user_rows:

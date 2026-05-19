@@ -9,6 +9,7 @@ __pycache__/
 data/*.json
 !data/.gitkeep
 !data/*.example.json
+data/runtime/
 
 *.log
 *.tgz
@@ -16,4 +17,5 @@ backups/
 app.py.backup_before_template_split
 
 tools/dlna/runtime/
+tools/ffmpeg/
 dlna/

@@ -7,6 +7,7 @@ import platform
 import re
 import shlex
 import shutil
+import signal
 import sys
 import tarfile
 import tempfile
@@ -59,10 +60,14 @@ from flask_downloader.config import (
     MAX_PARALLEL_DOWNLOADS_PER_USER as CONFIG_MAX_PARALLEL_DOWNLOADS_PER_USER,
     APP_PORT as CONFIG_APP_PORT,
     APP_SECRET_KEY as CONFIG_APP_SECRET_KEY,
+    APP_SERVICE_GROUP as CONFIG_APP_SERVICE_GROUP,
     APP_SERVICE_NAME as CONFIG_SYSTEMD_SERVICE_NAME,
+    APP_SERVICE_USER as CONFIG_APP_SERVICE_USER,
     AUDIO_DOWNLOAD_DIR as CONFIG_AUDIO_DOWNLOAD_DIR,
     DLNA_DEFAULT_PORT as CONFIG_DLNA_DEFAULT_PORT,
     DLNA_PREFERRED_REPO_CHANNEL as CONFIG_DLNA_PREFERRED_REPO_CHANNEL,
+    RADIO_SERVICE_NAME as CONFIG_RADIO_SERVICE_NAME,
+    RADIO_STATION_SERVICE_TEMPLATE as CONFIG_RADIO_STATION_SERVICE_TEMPLATE,
     DLNA_SERVICE_NAME as CONFIG_DLNA_SERVICE_NAME,
     DOWNLOAD_DIR as CONFIG_DOWNLOAD_DIR,
     MOUNT_POINT as CONFIG_MOUNT_POINT,
@@ -76,6 +81,7 @@ from flask_downloader.paths import (
     JOBS_FILE,
     LEGACY_CONFIG_FILE,
     PROJECT_ROOT,
+    RADIOS_FILE,
     USERS_FILE,
     ensure_data_layout,
 )
@@ -92,6 +98,8 @@ from flask_downloader.services.dlna_service import DlnaLibraryService
 from flask_downloader.services.dlna_runtime_service import DlnaRuntimeService
 from flask_downloader.services.dlna_update_service import DlnaUpdateService
 from flask_downloader.services.page_state_service import PageStateService
+from flask_downloader.services.radio_runtime_service import RadioRuntimeService
+from flask_downloader.services.radio_service import RadioService
 from flask_downloader.stores.config_store import (
     load_app_config as config_store_load_app_config,
     write_app_config as config_store_write_app_config,
@@ -114,6 +122,10 @@ from flask_downloader.stores.users_store import (
     update_user_password as users_store_update_user_password,
     verify_user_credentials as users_store_verify_user_credentials,
     write_user_store as users_store_write_user_store,
+)
+from flask_downloader.stores.radios_store import (
+    load_radio_store as radios_store_load_radio_store,
+    write_radio_store as radios_store_write_radio_store,
 )
 from flask_downloader.utils import auth as auth_utils
 from flask_downloader.utils.formatting import build_natural_sort_key, format_duration, format_ts
@@ -144,6 +156,8 @@ DEFAULT_ADMIN_VIDEO_ROOT = os.path.join(USER_STORAGE_ROOT, DEFAULT_ADMIN_USERNAM
 DEFAULT_ADMIN_AUDIO_ROOT = os.path.join(USER_STORAGE_ROOT, DEFAULT_ADMIN_USERNAME, "audio")
 USER_STORAGE_LAYOUT_VERSION = 2
 MAX_PARALLEL_DOWNLOADS_PER_USER = CONFIG_MAX_PARALLEL_DOWNLOADS_PER_USER
+APP_SERVICE_USER = CONFIG_APP_SERVICE_USER
+APP_SERVICE_GROUP = CONFIG_APP_SERVICE_GROUP
 
 MOUNT_RETRY_COOLDOWN = 15
 DEFAULT_COMPLETED_JOB_RETENTION_DAYS = 3
@@ -163,6 +177,8 @@ DLNA_SYSTEM_SERVICE_NAME = "gerbera"
 DLNA_CHECK_HOUR = 4
 DLNA_AUTOHEAL_INTERVAL_SECONDS = 30
 DLNA_SERVICE_NAME = CONFIG_DLNA_SERVICE_NAME
+RADIO_SERVICE_NAME = CONFIG_RADIO_SERVICE_NAME
+RADIO_STATION_SERVICE_TEMPLATE = CONFIG_RADIO_STATION_SERVICE_TEMPLATE
 DLNA_OFFICIAL_REPO_KEY_URL = "https://pkg.gerbera.io/public.asc"
 DLNA_OFFICIAL_REPO_KEYRING_FILE = os.path.join("/usr", "share", "keyrings", "gerbera-keyring.gpg")
 DLNA_OFFICIAL_REPO_LIST_FILE = os.path.join("/etc", "apt", "sources.list.d", "gerbera.list")
@@ -207,6 +223,11 @@ DLNA_ALL_COLLECTION_NAME = "Wszystkie aktywne media"
 DLNA_VIRTUAL_LAYOUT_VERSION = 4
 GERBERA_CONFIG_NS = "http://gerbera.io/config/2"
 GERBERA_LEGACY_CONFIG_NS = "http://mediatomb.cc/config/2"
+RADIO_RUNTIME_ROOT = os.path.join(DATA_DIR, "runtime", "radio")
+RADIO_LOG_DIR = os.path.join(RADIO_RUNTIME_ROOT, "logs")
+RADIO_BACKEND_LOG_FILE = os.path.join(RADIO_LOG_DIR, "radio-backend.log")
+RADIO_LOG_BROWSER_MAX_BYTES = 1024 * 1024
+RADIO_LOG_TAIL_READ_BYTES = 256 * 1024
 
 ET.register_namespace("", GERBERA_CONFIG_NS)
 
@@ -231,6 +252,7 @@ FFMPEG_INSTALL_LOCK = threading.Lock()
 FFMPEG_SCHEDULER_LOCK = threading.Lock()
 FFMPEG_SCHEDULER_STARTED = False
 DLNA_INSTALL_LOCK = threading.Lock()
+RADIO_INSTALL_LOCK = threading.Lock()
 DLNA_SCHEDULER_LOCK = threading.Lock()
 DLNA_SCHEDULER_STARTED = False
 DLNA_AUTOHEAL_LOCK = threading.Lock()
@@ -241,6 +263,7 @@ MAINTENANCE_TASKS = {
     "yt_dlp_update": create_maintenance_task_state("Aktualizacja yt-dlp"),
     "ffmpeg_install": create_maintenance_task_state("Instalacja ffmpeg"),
     "dlna_install": create_maintenance_task_state("Instalacja serwera DLNA"),
+    "radio_backend_install": create_maintenance_task_state("Instalacja backendu radia"),
 }
 MAINTENANCE_SERVICE = MaintenanceTaskService(
     MAINTENANCE_TASKS,
@@ -293,8 +316,12 @@ SERVICES_CONTENT_TEMPLATE = 'pages/services.html'
 DLNA_CONTENT_TEMPLATE = 'pages/dlna.html'
 
 
+RADIO_CONTENT_TEMPLATE = 'pages/radio.html'
+
+
 APP_CONFIG_LOCK = threading.Lock()
 USER_STORE_LOCK = threading.Lock()
+RADIO_STORE_LOCK = threading.Lock()
 
 
 def normalize_username(value):
@@ -553,6 +580,9 @@ def update_user_account(username, new_username, role):
             write_user_store_locked()
             updated_user = copy.deepcopy(target_user)
 
+        if previous_owner != next_owner:
+            rename_radio_station_owner(previous_owner, next_owner)
+
         if has_request_context() and get_current_username() == previous_owner:
             refreshed_user = get_user_by_username(next_owner)
             if refreshed_user:
@@ -578,6 +608,11 @@ def update_user_account(username, new_username, role):
                 previous_root = os.path.abspath(get_user_root(previous_owner))
                 if os.path.isdir(current_root) and not os.path.lexists(previous_root):
                     shutil.move(current_root, previous_root)
+
+            try:
+                rename_radio_station_owner(next_owner, previous_owner)
+            except Exception:
+                pass
 
         with USER_STORE_LOCK:
             restored = False
@@ -702,6 +737,7 @@ def delete_user_account(username):
     if os.path.isdir(user_root):
         shutil.rmtree(user_root)
 
+    delete_radio_station_for_user(normalized_username)
     sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
     return deleted_user
 
@@ -2303,6 +2339,8 @@ def get_settings_maintenance_state():
         "ffmpeg_state": get_ffmpeg_update_state_snapshot(),
         "dlna_package_state": get_dlna_package_state_snapshot(),
         "dlna_service_state": get_dlna_service_state(),
+        "radio_backend_package_state": get_radio_backend_package_state(),
+        "radio_backend_service_state": get_radio_backend_service_state(),
         "tasks": get_all_maintenance_task_snapshots(),
     }
 
@@ -3215,15 +3253,310 @@ def delete_job_record(job_id):
 
 
 def delete_managed_download_file(relative_path, storage_kind="video", owner_username=None):
-    return DOWNLOAD_JOBS_SERVICE.delete_managed_file(
+    parsed = parse_managed_relative_path(relative_path)
+    effective_storage_kind = normalize_storage_kind((parsed or {}).get("storage_kind") or storage_kind or "video")
+    ok, message, status_code = DOWNLOAD_JOBS_SERVICE.delete_managed_file(
         relative_path,
         storage_kind=storage_kind,
         owner_username=owner_username,
     )
+    if ok and effective_storage_kind == "audio":
+        remove_radio_file_references(relative_path)
+    return ok, message, status_code
 
 
 def get_server_files(scope_username=""):
     return STORAGE_SERVICE.get_server_files(scope_username=scope_username)
+
+
+RADIO_STORE = radios_store_load_radio_store(
+    RADIOS_FILE,
+    normalize_username=normalize_username,
+    parse_managed_relative_path=parse_managed_relative_path,
+)
+
+
+def write_radio_store_locked():
+    radios_store_write_radio_store(RADIOS_FILE, RADIO_STORE)
+
+
+def get_radio_store_snapshot():
+    with RADIO_STORE_LOCK:
+        return copy.deepcopy(RADIO_STORE)
+
+
+RADIO_SERVICE = RadioService(
+    radios_store=RADIO_STORE,
+    radios_lock=RADIO_STORE_LOCK,
+    write_radio_store_locked=write_radio_store_locked,
+    get_radio_store_snapshot=get_radio_store_snapshot,
+    normalize_username=normalize_username,
+    parse_managed_relative_path=parse_managed_relative_path,
+    build_managed_relative_path=build_managed_relative_path,
+    safe_relative_download_path=safe_relative_download_path,
+    resolve_download_path=resolve_download_path,
+    get_relative_download_path=get_relative_download_path,
+    build_managed_file_url=build_managed_file_url,
+    format_relative_path_for_user=format_relative_path_for_user,
+    get_current_username=get_current_username,
+    is_admin_authenticated=is_admin_authenticated,
+    get_users_snapshot=get_users_snapshot,
+    get_server_files=get_server_files,
+    get_mount_info=get_mount_info,
+    safe_filename=safe_filename,
+    get_daily_download_dir=get_daily_download_dir,
+    ensure_share_ready=ensure_share_ready,
+    format_ts=format_ts,
+)
+
+RADIO_RUNTIME_SERVICE = None
+
+
+def get_radio_runtime_service():
+    global RADIO_RUNTIME_SERVICE
+    if RADIO_RUNTIME_SERVICE is None:
+        RADIO_RUNTIME_SERVICE = RadioRuntimeService(
+            radios_store=RADIO_STORE,
+            radios_lock=RADIO_STORE_LOCK,
+            write_radio_store_locked=write_radio_store_locked,
+            get_radio_store_snapshot=get_radio_store_snapshot,
+            normalize_username=normalize_username,
+            resolve_download_path=resolve_download_path,
+            format_ts=format_ts,
+            app_service_user=APP_SERVICE_USER,
+            app_service_group=APP_SERVICE_GROUP,
+            app_root=APP_ROOT,
+            runtime_root=RADIO_RUNTIME_ROOT,
+            backend_service_name=RADIO_SERVICE_NAME,
+            station_service_template_name=RADIO_STATION_SERVICE_TEMPLATE,
+            requests_module=requests,
+            is_linux_runtime=is_linux_runtime,
+            get_generic_service_state=get_generic_service_state,
+        run_systemctl_command=run_systemctl_command,
+        run_systemctl_command_result=run_systemctl_command_result,
+        systemd_quote_arg=systemd_quote_arg,
+        build_erds_preview_lines=RADIO_SERVICE.build_erds_preview_lines,
+        build_library_table_rows=RADIO_SERVICE.build_library_table_rows,
+    )
+    return RADIO_RUNTIME_SERVICE
+
+
+def get_radio_backend_package_state():
+    return get_radio_runtime_service().get_backend_package_state_snapshot()
+
+
+def refresh_radio_backend_package_state(force=False):
+    return get_radio_runtime_service().refresh_backend_package_state(force=force)
+
+
+def install_or_update_radio_backend(progress_callback=None):
+    with RADIO_INSTALL_LOCK:
+        return get_radio_runtime_service().install_or_update_backend(progress_callback=progress_callback)
+
+
+def get_radio_backend_service_state():
+    return get_radio_runtime_service().get_backend_service_state()
+
+
+def set_radio_backend_enabled(enabled):
+    return get_radio_runtime_service().set_backend_enabled(enabled)
+
+
+def restart_radio_backend_now():
+    return get_radio_runtime_service().restart_backend_service_now()
+
+
+def control_radio_station(owner_username, action):
+    return get_radio_runtime_service().control_station(owner_username, action)
+
+
+def sync_radio_runtime(restart_backend_if_active=False, restart_active_stations=False):
+    return get_radio_runtime_service().sync_runtime(
+        restart_backend_if_active=restart_backend_if_active,
+        restart_active_stations=restart_active_stations,
+    )
+
+
+def sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False):
+    return get_radio_runtime_service().sync_runtime_safe(
+        restart_backend_if_active=restart_backend_if_active,
+        restart_active_stations=restart_active_stations,
+    )
+
+
+def read_radio_log_file_for_browser(path, max_bytes=RADIO_LOG_BROWSER_MAX_BYTES):
+    return get_radio_runtime_service().read_text_log_file_for_browser(path, max_bytes=max_bytes)
+
+
+def get_radio_backend_log_file():
+    return get_radio_runtime_service().get_backend_log_file()
+
+
+def get_radio_station_log_file(owner_username):
+    return get_radio_runtime_service().get_station_log_file(owner_username)
+
+
+def start_radio_package_scheduler_once():
+    return get_radio_runtime_service().start_package_scheduler_once()
+
+
+def start_radio_metadata_scheduler_once():
+    return get_radio_runtime_service().start_metadata_scheduler_once()
+
+
+def get_radio_page_state(owner_username=""):
+    page_state = RADIO_SERVICE.get_page_state(owner_username=owner_username)
+    scope_username = str(page_state.get("scope_username") or "").strip()
+    station_runtime_state = get_radio_runtime_service().get_station_runtime_state(scope_username) if scope_username else {}
+    page_state["backend_package_state"] = get_radio_backend_package_state()
+    page_state["backend_service_state"] = get_radio_backend_service_state()
+    page_state["station_runtime_state"] = station_runtime_state
+    page_state["backend_install_task"] = get_maintenance_task_snapshot("radio_backend_install")
+    if page_state.get("station_exists") and page_state.get("station"):
+        listener_count = int(station_runtime_state.get("listeners") or 0)
+        station_payload = page_state.get("station") or {}
+        station_stats = dict(station_payload.get("stats") or {})
+        station_stats["listener_record"] = int(
+            station_runtime_state.get("listener_record")
+            or station_stats.get("listener_record")
+            or 0
+        )
+        station_payload["stats"] = station_stats
+        page_state["station"] = station_payload
+        page_state["erds_preview_lines"] = RADIO_SERVICE.build_erds_preview_lines(
+            station_payload,
+            listener_count=listener_count,
+            runtime_context=station_runtime_state,
+            global_config=page_state.get("global_config") or {},
+        )
+        summary = dict(page_state.get("summary") or {})
+        summary["listeners"] = listener_count
+        summary["station_service_active"] = bool(station_runtime_state.get("service_active"))
+        summary["mount_connected"] = bool(station_runtime_state.get("mount_connected"))
+        summary["current_erds_text"] = str(station_runtime_state.get("current_erds_text") or "")
+        summary["current_song"] = str(station_runtime_state.get("current_song") or "")
+        summary["current_program_name"] = str(station_runtime_state.get("current_program_name") or "")
+        summary["current_dj_name"] = str(station_runtime_state.get("current_dj_name") or "")
+        summary["listener_record"] = int(station_runtime_state.get("listener_record") or 0)
+        summary["max_listeners"] = int(station_runtime_state.get("max_listeners") or 0)
+        summary["playable_music_count"] = int(station_runtime_state.get("playable_music_count") or 0)
+        summary["playable_insert_count"] = int(station_runtime_state.get("playable_insert_count") or 0)
+        page_state["summary"] = summary
+    return page_state
+
+
+def create_radio_station(owner_username):
+    result = RADIO_SERVICE.create_station(owner_username)
+    sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return result
+
+
+def update_radio_station(owner_username, payload):
+    previous_runtime_state = get_radio_runtime_service().get_station_runtime_state(owner_username)
+    result = RADIO_SERVICE.update_station(owner_username, payload)
+    restart_station = bool(payload.get("restart_runtime")) or any(
+        key in (payload or {})
+        for key in ("enabled", "autostart", "name", "description", "genre", "slug", "mount_name", "stream", "source", "live", "autopilot")
+    )
+    sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    if not bool(result.get("enabled", False)):
+        get_radio_runtime_service().stop_and_disable_station(owner_username)
+    elif restart_station and previous_runtime_state.get("service_active"):
+        try:
+            get_radio_runtime_service().control_station(owner_username, "restart")
+        except Exception:
+            pass
+    else:
+        try:
+            get_radio_runtime_service().metadata_tick()
+        except Exception:
+            pass
+    return result
+
+
+def delete_radio_station(owner_username):
+    get_radio_runtime_service().stop_and_disable_station(owner_username)
+    result = RADIO_SERVICE.delete_station(owner_username)
+    sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return result
+
+
+def update_radio_global_settings(payload):
+    result = RADIO_SERVICE.update_global_settings(payload)
+    sync_radio_runtime_safe(restart_backend_if_active=True, restart_active_stations=True)
+    return result
+
+
+def add_radio_library_paths(owner_username, relative_paths, source_type="download"):
+    result = RADIO_SERVICE.add_library_paths(owner_username, relative_paths, source_type=source_type)
+    sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return result
+
+
+def bulk_save_radio_library(owner_username, mode="manual", rows=None):
+    result = RADIO_SERVICE.bulk_save_library(owner_username, mode=mode, rows=rows)
+    sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return result
+
+
+def update_radio_library_item(owner_username, item_id, display_title="", role="music", enabled=True):
+    result = RADIO_SERVICE.update_library_item(
+        owner_username,
+        item_id,
+        display_title=display_title,
+        role=role,
+        enabled=enabled,
+    )
+    sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return result
+
+
+def remove_radio_library_item(owner_username, item_id):
+    result = RADIO_SERVICE.remove_library_item(owner_username, item_id)
+    sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return result
+
+
+def store_uploaded_radio_audio(owner_username, file_storage):
+    result = RADIO_SERVICE.store_uploaded_audio(owner_username, file_storage)
+    sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return result
+
+
+def store_uploaded_radio_audio_batch(owner_username, file_storages):
+    result = RADIO_SERVICE.store_uploaded_audio_batch(owner_username, file_storages)
+    sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return result
+
+
+def cleanup_missing_radio_library_items(owner_username=None):
+    changed = RADIO_SERVICE.cleanup_missing_library_items(owner_username)
+    if changed:
+        sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return changed
+
+
+def remove_radio_file_references(relative_path):
+    changed = RADIO_SERVICE.remove_file_references(relative_path)
+    if changed:
+        sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return changed
+
+
+def rename_radio_station_owner(previous_username, next_username):
+    get_radio_runtime_service().stop_and_disable_station(previous_username)
+    changed = RADIO_SERVICE.rename_user_station(previous_username, next_username)
+    if changed:
+        sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return changed
+
+
+def delete_radio_station_for_user(username):
+    get_radio_runtime_service().stop_and_disable_station(username)
+    changed = RADIO_SERVICE.delete_user_station(username)
+    if changed:
+        sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return changed
 
 
 def gerbera_namespace_for(node):
@@ -4007,6 +4340,57 @@ def validate_dlna_gerbera_config(binary_path="", allow_runtime_probe=True):
     raise RuntimeError(detail[-1600:] or "Walidacja config.xml Gerbera zakończyła się błędem.")
 
 
+def terminate_spawned_process_tree(process, wait_timeout=5):
+    if process is None:
+        return
+
+    try:
+        if process.poll() is not None:
+            return
+    except Exception:
+        return
+
+    if os.name != "nt":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except Exception:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+        try:
+            process.wait(timeout=max(1, int(wait_timeout or 5)))
+            return
+        except Exception:
+            pass
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+    else:
+        try:
+            process.terminate()
+        except Exception:
+            pass
+        try:
+            process.wait(timeout=max(1, int(wait_timeout or 5)))
+            return
+        except Exception:
+            pass
+        try:
+            process.kill()
+        except Exception:
+            pass
+
+    try:
+        process.wait(timeout=max(1, int(wait_timeout or 5)))
+    except Exception:
+        pass
+
+
 def probe_dlna_gerbera_startup(binary_path=""):
     binary = str(binary_path or get_dlna_binary_path() or "").strip()
     if not binary:
@@ -4065,15 +4449,7 @@ def probe_dlna_gerbera_startup(binary_path=""):
             detail = "\n".join(read_recent_log_file_lines(DLNA_LOG_FILE, lines=12)).strip()
         raise RuntimeError(detail or "Gerbera zakończyła testowy start błędem bez komunikatu.")
     finally:
-        if process.poll() is None:
-            try:
-                process.kill()
-            except Exception:
-                pass
-            try:
-                process.wait(timeout=5)
-            except Exception:
-                pass
+        terminate_spawned_process_tree(process, wait_timeout=5)
         if process.stdout:
             try:
                 process.stdout.close()
@@ -4647,15 +5023,7 @@ def try_generate_gerbera_config_via_runtime(binary_path):
 
         return parsed_tree
     finally:
-        try:
-            if process.poll() is None:
-                process.kill()
-        except Exception:
-            pass
-        try:
-            process.wait(timeout=5)
-        except Exception:
-            pass
+        terminate_spawned_process_tree(process, wait_timeout=5)
         if process.stderr:
             try:
                 process.stderr.close()
@@ -5617,7 +5985,9 @@ PAGE_STATE_SERVICE = PageStateService(
     refresh_ffmpeg_update_state=refresh_ffmpeg_update_state,
     refresh_yt_dlp_update_state=refresh_yt_dlp_update_state,
     refresh_dlna_package_state=refresh_dlna_package_state,
+    refresh_radio_backend_package_state=refresh_radio_backend_package_state,
     get_dlna_service_state=get_dlna_service_state,
+    get_radio_backend_service_state=get_radio_backend_service_state,
     get_flask_service_state=get_flask_service_state,
     build_user_management_rows=build_user_management_rows,
     get_dlna_page_state=DLNA_LIBRARY_SERVICE.get_page_state,

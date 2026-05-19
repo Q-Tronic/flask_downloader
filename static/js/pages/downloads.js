@@ -21,6 +21,16 @@ function formatBytes(bytes) {
     return num.toFixed(i === 0 ? 0 : 2) + " " + units[i];
 }
 
+function showToast(message, kind) {
+    if (window.appUi && typeof window.appUi.showToast === "function") {
+        window.appUi.showToast(message, kind);
+        return;
+    }
+    if (kind === "error") {
+        alert(message);
+    }
+}
+
 async function deleteServerFile(filename, storageKind, ownerUsername) {
     if (!confirm("Usunąć plik z serwera?")) {
         return;
@@ -49,11 +59,49 @@ async function deleteServerFile(filename, storageKind, ownerUsername) {
     }
 }
 
-function renderAdminHint(adminLoggedIn) {
-    const hint = document.getElementById("filesAdminHint");
-    hint.textContent = adminLoggedIn
-        ? "Administrator może przełączać widok między użytkownikami i usuwać ich pliki po potwierdzeniu."
-        : "Widzisz tylko własne pliki i możesz usuwać je po potwierdzeniu.";
+async function addAudioFileToRadio(relativePath, ownerUsername, triggerButton) {
+    if (!relativePath) {
+        return;
+    }
+
+    if (triggerButton) {
+        if (!triggerButton.dataset.idleLabel) {
+            triggerButton.dataset.idleLabel = String(triggerButton.textContent || "").trim();
+        }
+        triggerButton.disabled = true;
+        triggerButton.textContent = "Dodawanie...";
+    }
+
+    try {
+        const response = await fetch("/api/radio/library", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                action: "add",
+                owner_username: ownerUsername || "",
+                relative_path: relativePath,
+                source_type: "download"
+            })
+        });
+        const data = await response.json().catch(function() {
+            return {};
+        });
+
+        if (!response.ok || !data.ok) {
+            showToast((data && (data.error || data.message)) || "Nie udało się dodać pliku do radia.", "error");
+            return;
+        }
+
+        showToast(data.message || "Dodano plik do biblioteki radia.", "success");
+        refreshData();
+    } catch (err) {
+        showToast("Błąd dodawania do radia: " + err, "error");
+    } finally {
+        if (triggerButton) {
+            triggerButton.disabled = false;
+            triggerButton.textContent = triggerButton.dataset.idleLabel || "Dodaj do radia";
+        }
+    }
 }
 
 function renderScope(adminLoggedIn, availableUsers, scopeUsername, currentUser) {
@@ -96,7 +144,10 @@ function renderFiles(files, adminLoggedIn) {
         const ownerHtml = adminLoggedIn
             ? '<div class="small">Właściciel: ' + ownerUsername + '</div>'
             : "";
-        const actionsHtml = '<div class="file-actions"><button type="button" class="btn btn-delete js-delete-file" data-file-name="' + relativePath + '" data-storage-kind="' + storageKind + '" data-owner-username="' + ownerUsername + '">Usuń plik</button></div>';
+        const radioActionHtml = storageKind === "audio"
+            ? '<button type="button" class="btn btn-secondary js-add-file-to-radio" data-file-name="' + relativePath + '" data-owner-username="' + ownerUsername + '">Dodaj do radia</button>'
+            : "";
+        const actionsHtml = '<div class="file-actions">' + radioActionHtml + '<button type="button" class="btn btn-delete js-delete-file" data-file-name="' + relativePath + '" data-storage-kind="' + storageKind + '" data-owner-username="' + ownerUsername + '">Usuń plik</button></div>';
 
         return `
             <div class="file-item">
@@ -111,20 +162,17 @@ function renderFiles(files, adminLoggedIn) {
 
 function renderMount(mount) {
     const box = document.getElementById("mountBox");
-    const info = document.getElementById("downloadDirInfo");
-
-    if (mount.online) {
-        box.className = "mount-ok";
-        box.textContent = "Udział sieciowy online: " + mount.message;
-    } else {
-        box.className = "mount-bad";
-        box.textContent = "Udział sieciowy offline: " + mount.message;
-    }
-
-    if (mount.audio_download_dir && mount.audio_download_dir !== mount.download_dir) {
-        info.textContent = "Katalogi docelowe: wideo " + (mount.download_dir || "-") + " | audio " + (mount.audio_download_dir || "-");
-    } else {
-        info.textContent = "Katalog docelowy: " + (mount.download_dir || "-");
+    if (box) {
+        const online = !!(mount && mount.online);
+        box.className = "page-status-inline " + (online ? "is-online" : "is-offline");
+        box.title = String((mount && mount.message) || "");
+        box.innerHTML = `
+            <span class="page-status-icon" aria-hidden="true"></span>
+            <span class="page-status-text">
+                <span class="page-status-icon-dot" aria-hidden="true"></span>
+                ${online ? "Serwer danych online" : "Serwer danych offline"}
+            </span>
+        `;
     }
 }
 
@@ -144,6 +192,17 @@ async function handleDownloadsClick(event) {
         if (filename) {
             await deleteServerFile(filename, storageKind, ownerUsername);
         }
+        return;
+    }
+
+    const addToRadioBtn = event.target.closest(".js-add-file-to-radio");
+    if (addToRadioBtn) {
+        event.preventDefault();
+        await addAudioFileToRadio(
+            addToRadioBtn.dataset.fileName || "",
+            addToRadioBtn.dataset.ownerUsername || "",
+            addToRadioBtn
+        );
     }
 }
 
@@ -155,7 +214,6 @@ async function refreshData() {
         const response = await fetch("/api/files" + query);
         const data = await response.json();
         renderMount(data.mount);
-        renderAdminHint(Boolean(data.admin_logged_in));
         renderScope(Boolean(data.admin_logged_in), data.available_users || [], data.scope_username || "", data.current_user || "");
         renderFiles(data.files || [], Boolean(data.admin_logged_in));
     } catch (err) {

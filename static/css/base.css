@@ -76,6 +76,22 @@
             text-align: center;
             padding-bottom: 20px;
         }
+        .brand-link {
+            display: grid;
+            gap: 14px;
+            justify-items: center;
+            text-align: center;
+            text-decoration: none;
+            color: inherit;
+        }
+        .brand-link:hover .brand-mark,
+        .brand-link:focus-visible .brand-mark {
+            transform: translateY(-1px);
+            box-shadow: 0 16px 28px rgba(52, 120, 205, 0.42);
+        }
+        .brand-link:focus-visible {
+            outline: none;
+        }
         .brand-mark {
             width: 52px;
             height: 52px;
@@ -89,6 +105,7 @@
             font-size: 18px;
             margin-bottom: 14px;
             box-shadow: 0 12px 24px rgba(52, 120, 205, 0.35);
+            transition: transform 0.18s ease, box-shadow 0.18s ease;
         }
         .brand-title {
             display: grid;
@@ -118,6 +135,7 @@
             letter-spacing: 0.12em;
             color: var(--accent-strong);
             margin-bottom: 12px;
+            text-align: center;
         }
         .side-nav {
             display: grid;

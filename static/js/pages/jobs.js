@@ -72,13 +72,6 @@ async function cancelJob(jobId) {
     }
 }
 
-function renderAdminHint(adminLoggedIn) {
-    const hint = document.getElementById("jobsAdminHint");
-    hint.textContent = adminLoggedIn
-        ? "Administrator może filtrować zadania po użytkownikach oraz zatrzymywać i usuwać ich wpisy."
-        : "Widzisz tylko własne zadania i możesz nimi zarządzać.";
-}
-
 function renderScope(adminLoggedIn, availableUsers, scopeUsername, currentUser) {
     const wrap = document.getElementById("jobsScopeWrap");
     const select = document.getElementById("jobsScopeSelect");
@@ -179,20 +172,17 @@ function renderJobs(jobs, adminLoggedIn) {
 
 function renderMount(mount) {
     const box = document.getElementById("mountBox");
-    const info = document.getElementById("downloadDirInfo");
-
-    if (mount.online) {
-        box.className = "mount-ok";
-        box.textContent = "Udział sieciowy online: " + mount.message;
-    } else {
-        box.className = "mount-bad";
-        box.textContent = "Udział sieciowy offline: " + mount.message;
-    }
-
-    if (mount.audio_download_dir && mount.audio_download_dir !== mount.download_dir) {
-        info.textContent = "Katalogi docelowe: wideo " + (mount.download_dir || "-") + " | audio " + (mount.audio_download_dir || "-");
-    } else {
-        info.textContent = "Katalog docelowy: " + (mount.download_dir || "-");
+    if (box) {
+        const online = !!(mount && mount.online);
+        box.className = "page-status-inline " + (online ? "is-online" : "is-offline");
+        box.title = String((mount && mount.message) || "");
+        box.innerHTML = `
+            <span class="page-status-icon" aria-hidden="true"></span>
+            <span class="page-status-text">
+                <span class="page-status-icon-dot" aria-hidden="true"></span>
+                ${online ? "Serwer danych online" : "Serwer danych offline"}
+            </span>
+        `;
     }
 }
 
@@ -231,7 +221,6 @@ async function refreshData() {
         const response = await fetch("/api/jobs" + query);
         const data = await response.json();
         renderMount(data.mount);
-        renderAdminHint(Boolean(data.admin_logged_in));
         renderScope(Boolean(data.admin_logged_in), data.available_users || [], data.scope_username || "", data.current_user || "");
         renderJobs(data.jobs || [], Boolean(data.admin_logged_in));
     } catch (err) {
