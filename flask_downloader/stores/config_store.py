@@ -8,6 +8,7 @@ def load_app_config(
     normalize_user_storage_root,
     normalize_download_root,
     normalize_audio_download_root,
+    normalize_storage_config,
     normalize_retention_days,
     normalize_yt_dlp_update_state,
     normalize_ffmpeg_update_state,
@@ -26,6 +27,7 @@ def load_app_config(
                 data["user_storage_layout_version"] = max(1, int(raw.get("user_storage_layout_version") or 1))
             except Exception:
                 data["user_storage_layout_version"] = 1
+            data["storage"] = normalize_storage_config(raw.get("storage", data.get("storage")))
             data["download_root"] = normalize_download_root(raw.get("download_root", data["download_root"]))
             data["audio_download_root"] = normalize_audio_download_root(raw.get("audio_download_root", data["audio_download_root"]))
             data["job_retention_days"] = normalize_retention_days(raw.get("job_retention_days", data["job_retention_days"]))

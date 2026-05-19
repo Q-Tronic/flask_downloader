@@ -42,9 +42,6 @@ class DownloadPathService:
             else self._get_user_storage_root(owner_username, kind)
         )
 
-        if not os.path.ismount(self._mount_point):
-            return False, "Punkt montowania nie jest aktywny: %s" % self._mount_point
-
         if not os.path.isdir(download_root):
             try:
                 os.makedirs(download_root, exist_ok=True)

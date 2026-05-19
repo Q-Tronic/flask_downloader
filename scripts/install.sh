@@ -16,6 +16,7 @@ C_MUTED="\033[38;5;245m"
 
 APP_DIR_DEFAULT="/opt/flask_downloader"
 STORAGE_ROOT_DEFAULT="/srv/flask_downloader/share"
+NETWORK_STORAGE_ROOT_DEFAULT="/srv/flask_downloader/share-net"
 REPO_URL_DEFAULT="${FLASK_DOWNLOADER_REPO_URL:-https://github.com/Q-Tronic/flask_downloader.git}"
 BRANCH_DEFAULT="${FLASK_DOWNLOADER_BRANCH:-main}"
 APP_USER_DEFAULT="flaskdl"
@@ -45,6 +46,7 @@ REPO_URL="$REPO_URL_DEFAULT"
 BRANCH="$BRANCH_DEFAULT"
 APP_DIR="$APP_DIR_DEFAULT"
 STORAGE_ROOT="$STORAGE_ROOT_DEFAULT"
+NETWORK_STORAGE_ROOT="$NETWORK_STORAGE_ROOT_DEFAULT"
 APP_USER="$APP_USER_DEFAULT"
 APP_GROUP="$APP_GROUP_DEFAULT"
 APP_PORT="$APP_PORT_DEFAULT"
@@ -56,6 +58,7 @@ INTERACTIVE_INPUT_FD=""
 STATUS_LINE_VISIBLE=0
 APP_DIR_EXISTED_BEFORE=0
 STORAGE_ROOT_EXISTED_BEFORE=0
+NETWORK_STORAGE_ROOT_EXISTED_BEFORE=0
 STORAGE_DOWNLOAD_DIR_EXISTED_BEFORE=0
 STORAGE_AUDIO_DIR_EXISTED_BEFORE=0
 STORAGE_USERS_DIR_EXISTED_BEFORE=0
@@ -73,6 +76,8 @@ SUDOERS_RULE_FILE=""
 SUDOERS_RULE_FILE_EXISTED_BEFORE=0
 SYSTEM_FILE_WRITER_HELPER="/usr/local/lib/flask-downloader/write-system-file"
 SYSTEM_FILE_WRITER_HELPER_EXISTED_BEFORE=0
+STORAGE_CONTROL_HELPER="/usr/local/lib/flask-downloader/storage-control"
+STORAGE_CONTROL_HELPER_EXISTED_BEFORE=0
 
 trim_text() {
     local text="$1"
@@ -184,6 +189,8 @@ show_live_status() {
     local bar_slots=18
     local bar_text=""
     local detail_suffix=""
+    local step_label=""
+    local step_progress_text=""
     local short_elapsed=""
     local line
 
@@ -197,19 +204,31 @@ show_live_status() {
     fi
     bar_text="$(render_bar_text_with_slots "$overall_percent" "$bar_slots")"
     short_elapsed="trwa $(format_elapsed "$elapsed_seconds")"
-
-    if [[ -n "$activity_detail" ]]; then
-        detail_suffix="$activity_detail"
+    step_label="Krok ${CURRENT_STEP}/${TOTAL_STEPS}"
+    if (( term_cols < 72 )); then
+        step_label="K${CURRENT_STEP}/${TOTAL_STEPS}"
     fi
+
     if [[ -n "$local_percent" && "$local_percent" != "0" ]]; then
+        step_progress_text="etap ${local_percent}%"
+    fi
+
+    if (( term_cols < 90 )); then
+        activity_detail=""
+    fi
+
+    if [[ -n "$step_progress_text" ]]; then
+        detail_suffix="$step_progress_text"
+    fi
+    if [[ -n "$activity_detail" ]]; then
         if [[ -n "$detail_suffix" ]]; then
-            detail_suffix="${local_percent}% ${detail_suffix}"
+            detail_suffix="${detail_suffix} | ${activity_detail}"
         else
-            detail_suffix="${local_percent}%"
+            detail_suffix="$activity_detail"
         fi
     fi
 
-    line="${bar_text} ${activity_label}"
+    line="${step_label} ${bar_text} ${activity_label}"
     if [[ -n "$detail_suffix" ]]; then
         line="${line} | ${detail_suffix}"
     fi
@@ -382,6 +401,7 @@ record_preinstall_state() {
     SUDOERS_RULE_FILE="$(build_sudoers_rule_file_path)"
     [[ -e "$APP_DIR" ]] && APP_DIR_EXISTED_BEFORE=1
     [[ -e "$STORAGE_ROOT" ]] && STORAGE_ROOT_EXISTED_BEFORE=1
+    [[ -e "$NETWORK_STORAGE_ROOT" ]] && NETWORK_STORAGE_ROOT_EXISTED_BEFORE=1
     [[ -d "$STORAGE_ROOT/flask_downloader" ]] && STORAGE_DOWNLOAD_DIR_EXISTED_BEFORE=1
     [[ -d "$STORAGE_ROOT/flask_downloader_audio" ]] && STORAGE_AUDIO_DIR_EXISTED_BEFORE=1
     [[ -d "$STORAGE_ROOT/flask_downloader_users" ]] && STORAGE_USERS_DIR_EXISTED_BEFORE=1
@@ -396,6 +416,7 @@ record_preinstall_state() {
     [[ -f "/etc/apt/sources.list.d/gerbera.list" ]] && GERBERA_REPO_LIST_EXISTED_BEFORE=1
     [[ -n "$SUDOERS_RULE_FILE" && -f "$SUDOERS_RULE_FILE" ]] && SUDOERS_RULE_FILE_EXISTED_BEFORE=1
     [[ -f "$SYSTEM_FILE_WRITER_HELPER" ]] && SYSTEM_FILE_WRITER_HELPER_EXISTED_BEFORE=1
+    [[ -f "$STORAGE_CONTROL_HELPER" ]] && STORAGE_CONTROL_HELPER_EXISTED_BEFORE=1
     CLEANUP_STATE_RECORDED=1
 }
 
@@ -418,6 +439,9 @@ cleanup_candidates_exist() {
     if (( STORAGE_ROOT_EXISTED_BEFORE == 0 )) && [[ -e "$STORAGE_ROOT" ]]; then
         return 0
     fi
+    if (( NETWORK_STORAGE_ROOT_EXISTED_BEFORE == 0 )) && [[ -e "$NETWORK_STORAGE_ROOT" ]]; then
+        return 0
+    fi
     if (( FLASK_SERVICE_FILE_EXISTED_BEFORE == 0 )) && [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]]; then
         return 0
     fi
@@ -437,6 +461,9 @@ cleanup_candidates_exist() {
         return 0
     fi
     if (( SYSTEM_FILE_WRITER_HELPER_EXISTED_BEFORE == 0 )) && [[ -f "$SYSTEM_FILE_WRITER_HELPER" ]]; then
+        return 0
+    fi
+    if (( STORAGE_CONTROL_HELPER_EXISTED_BEFORE == 0 )) && [[ -f "$STORAGE_CONTROL_HELPER" ]]; then
         return 0
     fi
     if (( GERBERA_REPO_KEY_EXISTED_BEFORE == 0 )) && [[ -f "/usr/share/keyrings/gerbera-keyring.gpg" ]]; then
@@ -480,6 +507,10 @@ perform_install_cleanup() {
         rm -f "$SYSTEM_FILE_WRITER_HELPER"
         rmdir --ignore-fail-on-non-empty "$(dirname "$SYSTEM_FILE_WRITER_HELPER")" >/dev/null 2>&1 || true
     fi
+    if (( STORAGE_CONTROL_HELPER_EXISTED_BEFORE == 0 )); then
+        rm -f "$STORAGE_CONTROL_HELPER"
+        rmdir --ignore-fail-on-non-empty "$(dirname "$STORAGE_CONTROL_HELPER")" >/dev/null 2>&1 || true
+    fi
     systemctl daemon-reload >/dev/null 2>&1 || true
 
     if (( GERBERA_REPO_KEY_EXISTED_BEFORE == 0 )); then
@@ -506,6 +537,9 @@ perform_install_cleanup() {
     fi
     if (( STORAGE_ROOT_EXISTED_BEFORE == 0 )); then
         rm -rf "$STORAGE_ROOT"
+    fi
+    if (( NETWORK_STORAGE_ROOT_EXISTED_BEFORE == 0 )); then
+        rm -rf "$NETWORK_STORAGE_ROOT"
     fi
     if (( APP_USER_EXISTED_BEFORE == 0 )); then
         userdel -r "$APP_USER" >/dev/null 2>&1 || true
@@ -592,6 +626,16 @@ mv -f "$tmp_file" "$target"
 trap - EXIT
 EOF
     chmod 755 "$SYSTEM_FILE_WRITER_HELPER"
+}
+
+install_storage_control_helper() {
+    local source_helper="$APP_DIR/deploy/storage-control.py"
+    if [[ ! -f "$source_helper" ]]; then
+        log_fail "Brakuje pliku helpera storage-control w repozytorium: $source_helper"
+        abort_install
+    fi
+    install -d -m 755 "$(dirname "$STORAGE_CONTROL_HELPER")"
+    install -m 755 "$source_helper" "$STORAGE_CONTROL_HELPER"
 }
 
 begin_step() {
@@ -774,6 +818,7 @@ install_privileged_sudoers_rules() {
     cat > "$sudoers_file" <<EOF
 Defaults:${APP_USER} !requiretty
 ${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl, /usr/bin/systemctl, /bin/mount, /usr/bin/mount, ${SYSTEM_FILE_WRITER_HELPER}
+${APP_USER} ALL=(root) NOPASSWD: ${STORAGE_CONTROL_HELPER}
 EOF
     chmod 440 "$sudoers_file"
     if command -v visudo >/dev/null 2>&1; then
@@ -810,6 +855,30 @@ verify_privileged_sudoers_rules() {
         abort_install
     }
     rm -f "$probe_unit_file"
+}
+
+verify_storage_control_helper() {
+    local probe_log
+    if [[ ! -x "$STORAGE_CONTROL_HELPER" ]]; then
+        log_fail "Nie udało się zainstalować helpera storage-control."
+        abort_install
+    fi
+
+    probe_log="$(mktemp)"
+    if su -s /bin/sh -c "printf '{}' | sudo -n '$STORAGE_CONTROL_HELPER' invalid-action" "$APP_USER" >"$probe_log" 2>&1; then
+        cat "$probe_log" >>"$INSTALL_LOG" 2>/dev/null || true
+        rm -f "$probe_log"
+        return 0
+    fi
+
+    cat "$probe_log" >>"$INSTALL_LOG" 2>/dev/null || true
+    if grep -q "Nieznana akcja helpera storage-control" "$probe_log"; then
+        rm -f "$probe_log"
+        return 0
+    fi
+    rm -f "$probe_log"
+    log_fail "Użytkownik usługi ${APP_USER} nie dostał działających uprawnień sudo do helpera storage-control."
+    abort_install
 }
 
 ensure_git_safe_directory() {
@@ -904,10 +973,14 @@ FLASK_DOWNLOADER_DLNA_SERVICE_NAME=${DLNA_SERVICE_NAME}
 FLASK_DOWNLOADER_RADIO_SERVICE_NAME=${RADIO_SERVICE_NAME}
 FLASK_DOWNLOADER_RADIO_STATION_SERVICE_TEMPLATE=${RADIO_STATION_TEMPLATE}
 
-FLASK_DOWNLOADER_MOUNT_POINT=${STORAGE_ROOT}
+FLASK_DOWNLOADER_MOUNT_POINT=${NETWORK_STORAGE_ROOT}
 FLASK_DOWNLOADER_DOWNLOAD_DIR=${STORAGE_ROOT}/flask_downloader
 FLASK_DOWNLOADER_AUDIO_DOWNLOAD_DIR=${STORAGE_ROOT}/flask_downloader_audio
 FLASK_DOWNLOADER_USER_STORAGE_ROOT=${STORAGE_ROOT}/flask_downloader_users
+FLASK_DOWNLOADER_LOCAL_STORAGE_ROOT=${STORAGE_ROOT}
+FLASK_DOWNLOADER_NETWORK_STORAGE_MOUNT_DIR=${NETWORK_STORAGE_ROOT}
+FLASK_DOWNLOADER_NETWORK_STORAGE_CREDENTIALS_FILE=/etc/flask-downloader/network-share.credentials
+FLASK_DOWNLOADER_NETWORK_STORAGE_HELPER=${STORAGE_CONTROL_HELPER}
 
 FLASK_DOWNLOADER_SMB_SHARE=
 FLASK_DOWNLOADER_SMB_CREDENTIALS_FILE=
@@ -918,7 +991,7 @@ EOF
 }
 
 initialize_data_files() {
-    APP_DIR="$APP_DIR" ADMIN_PASSWORD="$ADMIN_PASSWORD" STORAGE_ROOT="$STORAGE_ROOT" "$APP_DIR/.venv/bin/python" - <<'PY'
+    APP_DIR="$APP_DIR" ADMIN_PASSWORD="$ADMIN_PASSWORD" STORAGE_ROOT="$STORAGE_ROOT" NETWORK_STORAGE_ROOT="$NETWORK_STORAGE_ROOT" "$APP_DIR/.venv/bin/python" - <<'PY'
 import json
 import os
 import secrets
@@ -929,6 +1002,7 @@ from werkzeug.security import generate_password_hash
 app_dir = os.environ["APP_DIR"]
 admin_password = os.environ["ADMIN_PASSWORD"]
 storage_root = os.environ["STORAGE_ROOT"]
+network_storage_root = os.environ["NETWORK_STORAGE_ROOT"]
 sys.path.insert(0, app_dir)
 
 from flask_downloader.stores.radios_store import default_radio_store
@@ -968,6 +1042,26 @@ def generate_runtime_secret(min_length=24):
 
 
 config_payload = load_example_json(config_example_path, {
+    "storage": {
+        "active_backend": "local",
+        "local": {
+            "root": storage_root,
+        },
+        "network": {
+            "share": "",
+            "subpath": "",
+            "mount_dir": network_storage_root,
+            "username": "",
+            "domain": "",
+            "credentials_file": "/etc/flask-downloader/network-share.credentials",
+            "cifs_version": "3.0",
+            "iocharset": "utf8",
+            "password_saved": False,
+            "last_test_ok": False,
+            "last_test_message": "",
+            "last_test_at": 0.0,
+        },
+    },
     "user_storage_root": user_root,
     "user_storage_layout_version": 2,
     "download_root": os.path.join(user_root, "admin", "video"),
@@ -989,6 +1083,32 @@ config_payload = load_example_json(config_example_path, {
         "last_sync_error": "",
     },
 })
+storage_payload = config_payload.get("storage")
+if not isinstance(storage_payload, dict):
+    storage_payload = {}
+storage_payload["active_backend"] = "local"
+local_payload = storage_payload.get("local")
+if not isinstance(local_payload, dict):
+    local_payload = {}
+local_payload["root"] = storage_root
+storage_payload["local"] = local_payload
+network_payload = storage_payload.get("network")
+if not isinstance(network_payload, dict):
+    network_payload = {}
+network_payload.setdefault("share", "")
+network_payload.setdefault("subpath", "")
+network_payload["mount_dir"] = network_storage_root
+network_payload.setdefault("username", "")
+network_payload.setdefault("domain", "")
+network_payload["credentials_file"] = "/etc/flask-downloader/network-share.credentials"
+network_payload.setdefault("cifs_version", "3.0")
+network_payload.setdefault("iocharset", "utf8")
+network_payload.setdefault("password_saved", False)
+network_payload.setdefault("last_test_ok", False)
+network_payload.setdefault("last_test_message", "")
+network_payload.setdefault("last_test_at", 0.0)
+storage_payload["network"] = network_payload
+config_payload["storage"] = storage_payload
 config_payload["user_storage_root"] = user_root
 config_payload["download_root"] = os.path.join(user_root, "admin", "video")
 config_payload["audio_download_root"] = os.path.join(user_root, "admin", "audio")
@@ -1109,7 +1229,8 @@ show_summary() {
     printf "${C_MUTED}Użytkownik usługi:${C_RESET} %s:%s\n" "$APP_USER" "$APP_GROUP"
     printf "${C_MUTED}Plik środowiskowy:${C_RESET} %s/.env\n" "$APP_DIR"
     printf "${C_MUTED}Dane aplikacji:${C_RESET} %s/data\n" "$APP_DIR"
-    printf "${C_MUTED}Storage użytkowników:${C_RESET} %s/flask_downloader_users\n" "$STORAGE_ROOT"
+    printf "${C_MUTED}Lokalny storage użytkowników:${C_RESET} %s/flask_downloader_users\n" "$STORAGE_ROOT"
+    printf "${C_MUTED}Katalog montowania udziału:${C_RESET} %s\n" "$NETWORK_STORAGE_ROOT"
     printf "${C_MUTED}Log instalacji:${C_RESET} %s\n" "$INSTALL_LOG"
     printf "${C_MUTED}Status usługi:${C_RESET} "
     systemctl is-active "${SERVICE_NAME}.service" || true
@@ -1258,9 +1379,9 @@ ensure_group_and_user
 run_logged "Instaluję helper do bezpiecznego zapisu unitów systemd" install_system_file_writer_helper
 run_logged "Konfiguruję uprawnienia sudoers dla usera usługi" install_privileged_sudoers_rules
 run_logged "Weryfikuję uprawnienia sudo dla usera usługi" verify_privileged_sudoers_rules
-mkdir -p "$APP_DIR" "$APP_DIR/backups" "$STORAGE_ROOT"
+mkdir -p "$APP_DIR" "$APP_DIR/backups" "$STORAGE_ROOT" "$NETWORK_STORAGE_ROOT"
 mkdir -p "$STORAGE_ROOT/flask_downloader" "$STORAGE_ROOT/flask_downloader_audio" "$STORAGE_ROOT/flask_downloader_users/admin/video" "$STORAGE_ROOT/flask_downloader_users/admin/audio"
-chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" "$STORAGE_ROOT"
+chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" "$STORAGE_ROOT" "$NETWORK_STORAGE_ROOT"
 log_ok "Użytkownik i katalogi systemowe są gotowe."
 
 begin_step "Pobranie kodu aplikacji"
@@ -1279,6 +1400,8 @@ else
     ensure_git_safe_directory
 fi
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
+run_logged "Instaluję helper do montowania udziału sieciowego" install_storage_control_helper
+run_logged "Weryfikuję helper do montowania udziału sieciowego" verify_storage_control_helper
 log_ok "Kod aplikacji jest gotowy."
 
 begin_step "Tworzenie środowiska Python"

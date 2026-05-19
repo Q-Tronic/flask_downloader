@@ -74,6 +74,10 @@ from flask_downloader.config import (
     SMB_CREDENTIALS_FILE as CONFIG_SMB_CREDENTIALS_FILE,
     SMB_SHARE as CONFIG_SMB_SHARE,
     USER_STORAGE_ROOT as CONFIG_USER_STORAGE_ROOT,
+    LOCAL_STORAGE_ROOT as CONFIG_LOCAL_STORAGE_ROOT,
+    NETWORK_STORAGE_CREDENTIALS_FILE as CONFIG_NETWORK_STORAGE_CREDENTIALS_FILE,
+    NETWORK_STORAGE_HELPER as CONFIG_NETWORK_STORAGE_HELPER,
+    NETWORK_STORAGE_MOUNT_DIR as CONFIG_NETWORK_STORAGE_MOUNT_DIR,
 )
 from flask_downloader.paths import (
     CONFIG_FILE,
@@ -89,6 +93,7 @@ from flask_downloader.bootstrap import register_application_routes, start_backgr
 from flask_downloader.services.jobs_service import DownloadJobsService, JobViewService
 from flask_downloader.services.maintenance_service import MaintenanceTaskService
 from flask_downloader.services.storage_service import ManagedStorageService
+from flask_downloader.services.storage_backend_service import StorageBackendService
 from flask_downloader.services.system_service import SystemServiceHelper
 from flask_downloader.services.download_service import DownloadPathService
 from flask_downloader.services.source_service import SourceMediaService
@@ -149,6 +154,10 @@ ensure_data_layout()
 
 SMB_SHARE = CONFIG_SMB_SHARE
 SMB_CREDENTIALS_FILE = CONFIG_SMB_CREDENTIALS_FILE
+LOCAL_STORAGE_ROOT = CONFIG_LOCAL_STORAGE_ROOT
+NETWORK_STORAGE_MOUNT_DIR = CONFIG_NETWORK_STORAGE_MOUNT_DIR
+NETWORK_STORAGE_CREDENTIALS_FILE = CONFIG_NETWORK_STORAGE_CREDENTIALS_FILE
+NETWORK_STORAGE_HELPER = CONFIG_NETWORK_STORAGE_HELPER
 DEFAULT_ADMIN_USERNAME = "admin"
 DEFAULT_ADMIN_PASSWORD = "admin"
 USER_STORAGE_ROOT = CONFIG_USER_STORAGE_ROOT
@@ -774,12 +783,176 @@ def default_dlna_config():
     }
 
 
-def default_app_config():
+def normalize_storage_backend_kind(value):
+    return "network" if str(value or "").strip().lower() == "network" else "local"
+
+
+def normalize_absolute_storage_path(value, field_label="Katalog danych", fallback=""):
+    text = str(value or fallback or "").strip()
+    if not text:
+        raise ValueError("%s nie może być pusty." % field_label)
+    path = os.path.abspath(text)
+    if not path or path in ("", ".", os.path.abspath(".")):
+        raise ValueError("%s ma nieprawidłową wartość." % field_label)
+    return path.rstrip("/\\") or path
+
+
+def normalize_network_share_value(value, allow_empty=True):
+    text = str(value or "").strip()
+    if not text:
+        return "" if allow_empty else text
+    if not text.startswith("//"):
+        raise ValueError("Adres udziału sieciowego musi mieć format //host/udział.")
+    parts = [item for item in text.split("/") if item]
+    if len(parts) < 2:
+        raise ValueError("Adres udziału sieciowego musi mieć format //host/udział.")
+    return "//%s/%s" % (parts[0], parts[1])
+
+
+def normalize_network_subpath_value(value):
+    text = str(value or "").strip().replace("\\", "/").strip("/")
+    if not text:
+        return ""
+    normalized = os.path.normpath(text).replace("\\", "/").strip("/")
+    if normalized in ("", ".", "..") or normalized.startswith("../"):
+        raise ValueError("Podfolder udziału sieciowego ma nieprawidłową wartość.")
+    return normalized
+
+
+def normalize_simple_storage_text(value, *, max_len=255):
+    text = str(value or "").strip()
+    if len(text) > max_len:
+        raise ValueError("Wartość pola jest za długa.")
+    return text
+
+
+def normalize_storage_test_state(raw):
+    if not isinstance(raw, dict):
+        raw = {}
+    try:
+        checked_at = float(raw.get("last_test_at") or 0.0)
+    except Exception:
+        checked_at = 0.0
     return {
-        "user_storage_root": USER_STORAGE_ROOT,
+        "last_test_ok": bool(raw.get("last_test_ok", False)),
+        "last_test_message": str(raw.get("last_test_message") or "").strip(),
+        "last_test_at": checked_at,
+    }
+
+
+def get_default_local_storage_root():
+    candidate = str(LOCAL_STORAGE_ROOT or "").strip()
+    if candidate:
+        return os.path.abspath(candidate)
+    current_user_root = os.path.abspath(str(USER_STORAGE_ROOT or "").strip() or os.path.join(MOUNT_POINT, "flask_downloader_users"))
+    return os.path.abspath(os.path.dirname(current_user_root))
+
+
+def get_default_network_mount_dir():
+    candidate = str(NETWORK_STORAGE_MOUNT_DIR or "").strip()
+    if candidate:
+        return os.path.abspath(candidate)
+    if str(MOUNT_POINT or "").strip():
+        return os.path.abspath(MOUNT_POINT)
+    return os.path.abspath("/srv/flask_downloader/network-share")
+
+
+def get_default_network_credentials_file():
+    candidate = str(NETWORK_STORAGE_CREDENTIALS_FILE or SMB_CREDENTIALS_FILE or "").strip()
+    if candidate:
+        return os.path.abspath(candidate)
+    return os.path.abspath("/etc/flask-downloader/network-share.credentials")
+
+
+def default_storage_config():
+    credentials_file = get_default_network_credentials_file()
+    return {
+        "active_backend": "network" if str(SMB_SHARE or "").strip() else "local",
+        "local": {
+            "root": get_default_local_storage_root(),
+        },
+        "network": {
+            "share": str(SMB_SHARE or "").strip(),
+            "subpath": "",
+            "mount_dir": get_default_network_mount_dir(),
+            "username": "",
+            "domain": "",
+            "credentials_file": credentials_file,
+            "cifs_version": "3.0",
+            "iocharset": "utf8",
+            "password_saved": bool(credentials_file and os.path.isfile(credentials_file)),
+            "last_test_ok": False,
+            "last_test_message": "",
+            "last_test_at": 0.0,
+        },
+    }
+
+
+def normalize_storage_config(value):
+    base = default_storage_config()
+    raw = dict(value or {}) if isinstance(value, dict) else {}
+    raw_local = dict(raw.get("local") or {}) if isinstance(raw.get("local"), dict) else {}
+    raw_network = dict(raw.get("network") or {}) if isinstance(raw.get("network"), dict) else {}
+    network_test_state = normalize_storage_test_state(raw_network)
+
+    credentials_file = normalize_absolute_storage_path(
+        raw_network.get("credentials_file") or base["network"]["credentials_file"],
+        "Plik poświadczeń SMB",
+    )
+    password_saved = bool(raw_network.get("password_saved", False))
+    if not password_saved and credentials_file and os.path.isfile(credentials_file):
+        password_saved = True
+
+    normalized = {
+        "active_backend": normalize_storage_backend_kind(raw.get("active_backend") or base["active_backend"]),
+        "local": {
+            "root": normalize_absolute_storage_path(
+                raw_local.get("root") or base["local"]["root"],
+                "Lokalny katalog danych",
+            ),
+        },
+        "network": {
+            "share": normalize_network_share_value(raw_network.get("share") or base["network"]["share"], allow_empty=True),
+            "subpath": normalize_network_subpath_value(raw_network.get("subpath") or base["network"]["subpath"]),
+            "mount_dir": normalize_absolute_storage_path(
+                raw_network.get("mount_dir") or base["network"]["mount_dir"],
+                "Katalog montowania udziału sieciowego",
+            ),
+            "username": normalize_simple_storage_text(raw_network.get("username") or base["network"]["username"], max_len=120),
+            "domain": normalize_simple_storage_text(raw_network.get("domain") or base["network"]["domain"], max_len=120),
+            "credentials_file": credentials_file,
+            "cifs_version": normalize_simple_storage_text(raw_network.get("cifs_version") or base["network"]["cifs_version"], max_len=32) or "3.0",
+            "iocharset": normalize_simple_storage_text(raw_network.get("iocharset") or base["network"]["iocharset"], max_len=32) or "utf8",
+            "password_saved": password_saved,
+            **network_test_state,
+        },
+    }
+    return normalized
+
+
+def get_storage_active_root(storage_config=None):
+    config = normalize_storage_config(storage_config or default_storage_config())
+    if config["active_backend"] == "network":
+        return os.path.abspath(config["network"]["mount_dir"])
+    return os.path.abspath(config["local"]["root"])
+
+
+def hydrate_storage_paths(config_data):
+    payload = copy.deepcopy(config_data or {})
+    storage_config = normalize_storage_config(payload.get("storage"))
+    active_root = get_storage_active_root(storage_config)
+    user_storage_root = os.path.join(active_root, "flask_downloader_users")
+    payload["storage"] = storage_config
+    payload["user_storage_root"] = user_storage_root
+    payload["download_root"] = os.path.join(user_storage_root, DEFAULT_ADMIN_USERNAME, "video")
+    payload["audio_download_root"] = os.path.join(user_storage_root, DEFAULT_ADMIN_USERNAME, "audio")
+    return payload
+
+
+def default_app_config():
+    return hydrate_storage_paths({
+        "storage": default_storage_config(),
         "user_storage_layout_version": USER_STORAGE_LAYOUT_VERSION,
-        "download_root": DEFAULT_ADMIN_VIDEO_ROOT,
-        "audio_download_root": DEFAULT_ADMIN_AUDIO_ROOT,
         "job_retention_days": DEFAULT_COMPLETED_JOB_RETENTION_DAYS,
         "yt_dlp_update_state": {
             "latest_version": "",
@@ -789,7 +962,7 @@ def default_app_config():
         "ffmpeg_update_state": default_ffmpeg_update_state(),
         "dlna_update_state": default_dlna_update_state(),
         "dlna": default_dlna_config(),
-    }
+    })
 
 
 DLNA_UPDATE_SERVICE = DlnaUpdateService(
@@ -823,16 +996,7 @@ DLNA_UPDATE_SERVICE = DlnaUpdateService(
 
 
 def normalize_storage_root(value):
-    path = os.path.abspath(str(value or "").strip())
-    mount_root = os.path.abspath(MOUNT_POINT)
-
-    if not path:
-        raise ValueError("Katalog pobierania nie może być pusty.")
-
-    if os.path.commonpath([mount_root, path]) != mount_root:
-        raise ValueError("Katalog pobierania musi znajdować się w obrębie %s." % MOUNT_POINT)
-
-    return path.rstrip("/\\") or mount_root
+    return normalize_absolute_storage_path(value, "Katalog danych")
 
 
 def normalize_user_storage_root(value):
@@ -989,18 +1153,20 @@ def iter_legacy_config_candidates():
 
 
 def load_app_config():
-    return config_store_load_app_config(
+    loaded = config_store_load_app_config(
         CONFIG_FILE,
         default_app_config,
         normalize_user_storage_root,
         normalize_download_root,
         normalize_audio_download_root,
+        normalize_storage_config,
         normalize_retention_days,
         normalize_yt_dlp_update_state,
         normalize_ffmpeg_update_state,
         normalize_dlna_update_state,
         normalize_dlna_config,
     )
+    return hydrate_storage_paths(loaded)
 
 
 def recover_legacy_dlna_config_if_needed(config_data):
@@ -1056,6 +1222,7 @@ def recover_legacy_dlna_config_if_needed(config_data):
 
 
 APP_CONFIG, LEGACY_DLNA_CONFIG_RECOVERED = recover_legacy_dlna_config_if_needed(load_app_config())
+APP_CONFIG = hydrate_storage_paths(APP_CONFIG)
 if LEGACY_DLNA_CONFIG_RECOVERED:
     config_store_write_app_config(CONFIG_FILE, APP_CONFIG)
 
@@ -1064,14 +1231,46 @@ def write_app_config_locked():
     config_store_write_app_config(CONFIG_FILE, APP_CONFIG)
 
 
-def save_app_config(download_root, audio_download_root, job_retention_days):
+def save_app_config(
+    *,
+    download_root=None,
+    audio_download_root=None,
+    job_retention_days,
+    active_backend=None,
+    local_storage_root=None,
+    network_storage=None,
+):
     previous_config = get_config_snapshot()
     previous_user_root = os.path.abspath(previous_config.get("user_storage_root") or USER_STORAGE_ROOT)
-    normalized_user_root = normalize_user_storage_root(download_root)
-    next_user_root = os.path.abspath(normalized_user_root)
     normalized_days = normalize_retention_days(job_retention_days)
+    previous_storage = normalize_storage_config(previous_config.get("storage"))
+    next_storage_raw = copy.deepcopy(previous_storage)
+
+    if local_storage_root is None and download_root:
+        local_storage_root = download_root
+    if active_backend is not None:
+        next_storage_raw["active_backend"] = active_backend
+    if local_storage_root:
+        next_storage_raw.setdefault("local", {})
+        next_storage_raw["local"]["root"] = local_storage_root
+    if isinstance(network_storage, dict):
+        next_storage_raw.setdefault("network", {})
+        next_storage_raw["network"].update(network_storage)
+
+    next_storage = normalize_storage_config(next_storage_raw)
+    next_payload = hydrate_storage_paths({
+        "storage": next_storage,
+        "user_storage_layout_version": USER_STORAGE_LAYOUT_VERSION,
+        "job_retention_days": normalized_days,
+    })
+    normalized_user_root = normalize_user_storage_root(next_payload["user_storage_root"])
+    next_user_root = os.path.abspath(normalized_user_root)
+
+    if next_storage["active_backend"] == "network" and not os.path.ismount(get_storage_active_root(next_storage)):
+        raise ValueError("Aktywny backend jest ustawiony na udział sieciowy, ale udział nie jest teraz zamontowany.")
 
     payload = {
+        "storage": next_storage,
         "user_storage_root": normalized_user_root,
         "user_storage_layout_version": USER_STORAGE_LAYOUT_VERSION,
         "download_root": os.path.join(normalized_user_root, DEFAULT_ADMIN_USERNAME, "video"),
@@ -1122,9 +1321,91 @@ def save_app_config(download_root, audio_download_root, job_retention_days):
 
     with APP_CONFIG_LOCK:
         APP_CONFIG.update(payload)
+        APP_CONFIG.update(hydrate_storage_paths(APP_CONFIG))
         write_app_config_locked()
 
     return dict(payload)
+
+
+def update_storage_network_test_state(ok, message, **extra):
+    with APP_CONFIG_LOCK:
+        storage = normalize_storage_config(APP_CONFIG.get("storage"))
+        network = dict(storage.get("network") or {})
+        network["last_test_ok"] = bool(ok)
+        network["last_test_message"] = str(message or "").strip()
+        network["last_test_at"] = time.time()
+        if "password_saved" in extra:
+            network["password_saved"] = bool(extra.get("password_saved"))
+        storage["network"] = normalize_storage_config({"active_backend": storage.get("active_backend"), "local": storage.get("local"), "network": network})["network"]
+        APP_CONFIG["storage"] = storage
+        APP_CONFIG.update(hydrate_storage_paths(APP_CONFIG))
+        write_app_config_locked()
+        return copy.deepcopy(storage)
+
+
+def build_updated_storage_config(*, active_backend=None, local_root=None, network_updates=None):
+    storage = get_storage_config_snapshot()
+    next_storage = copy.deepcopy(storage)
+    if active_backend is not None:
+        next_storage["active_backend"] = normalize_storage_backend_kind(active_backend)
+    if local_root is not None:
+        next_storage.setdefault("local", {})
+        next_storage["local"]["root"] = local_root
+    if isinstance(network_updates, dict):
+        next_storage.setdefault("network", {})
+        next_storage["network"].update(network_updates)
+    return normalize_storage_config(next_storage)
+
+
+def test_network_storage_config(storage_config, *, password="", keep_existing_password=True):
+    response = STORAGE_BACKEND_SERVICE.test_network_config(
+        storage_config,
+        password=password,
+        keep_existing_password=keep_existing_password,
+    )
+    update_storage_network_test_state(
+        True,
+        response.get("message") or "Połączenie z udziałem sieciowym działa poprawnie.",
+        password_saved=bool(password) or bool(storage_config.get("network", {}).get("password_saved")),
+    )
+    return response
+
+
+def configure_network_storage_config(storage_config, *, password="", keep_existing_password=True, mount_now=False):
+    response = STORAGE_BACKEND_SERVICE.configure_network_storage(
+        storage_config,
+        password=password,
+        keep_existing_password=keep_existing_password,
+        mount_now=mount_now,
+    )
+    update_storage_network_test_state(
+        True,
+        response.get("message") or "Konfiguracja udziału sieciowego została zapisana.",
+        password_saved=bool(password) or True,
+    )
+    return response
+
+
+def mount_network_storage_config(storage_config=None):
+    effective_config = normalize_storage_config((storage_config or get_storage_config_snapshot()))
+    response = STORAGE_BACKEND_SERVICE.mount_network_storage(effective_config)
+    update_storage_network_test_state(
+        True,
+        response.get("message") or "Udział sieciowy został zamontowany.",
+        password_saved=bool(effective_config.get("network", {}).get("password_saved")),
+    )
+    return response
+
+
+def unmount_network_storage_config(storage_config=None):
+    effective_config = normalize_storage_config((storage_config or get_storage_config_snapshot()))
+    response = STORAGE_BACKEND_SERVICE.unmount_network_storage(effective_config)
+    update_storage_network_test_state(
+        bool(response.get("is_mount") is False),
+        response.get("message") or "Udział sieciowy został odmontowany.",
+        password_saved=bool(effective_config.get("network", {}).get("password_saved")),
+    )
+    return response
 
 
 def get_config_snapshot():
@@ -1177,6 +1458,13 @@ def get_audio_download_root():
 
 def normalize_storage_kind(value):
     return "audio" if str(value or "").strip().lower() == "audio" else "video"
+
+
+STORAGE_BACKEND_SERVICE = StorageBackendService(
+    helper_path=NETWORK_STORAGE_HELPER,
+    app_service_user=APP_SERVICE_USER,
+    app_service_group=APP_SERVICE_GROUP,
+)
 
 
 STORAGE_SERVICE = ManagedStorageService(
@@ -2523,67 +2811,50 @@ def set_mount_status(online, message):
     LAST_MOUNT_STATUS["checked_at"] = time.time()
 
 
-def run_command(cmd):
+def get_storage_config_snapshot():
+    return normalize_storage_config(get_config_snapshot().get("storage"))
+
+
+def get_storage_backend_label(kind):
+    return "Udział sieciowy" if normalize_storage_backend_kind(kind) == "network" else "Lokalny serwer"
+
+
+def read_storage_runtime_access_state(root_path, *, require_mount=False):
+    candidate = os.path.abspath(str(root_path or "").strip() or ".")
+    result = {
+        "path": candidate,
+        "exists": os.path.isdir(candidate),
+        "is_mount": os.path.ismount(candidate),
+        "read_ok": False,
+        "write_ok": False,
+        "execute_ok": False,
+        "message": "",
+    }
+
+    if require_mount and not result["is_mount"]:
+        result["message"] = "Punkt montowania nie jest aktywny: %s" % candidate
+        return result
+
+    if not result["exists"]:
+        result["message"] = "Katalog danych nie istnieje: %s" % candidate
+        return result
+
+    result["execute_ok"] = os.access(candidate, os.X_OK)
+    result["write_ok"] = os.access(candidate, os.W_OK)
     try:
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=20,
-            check=False,
-        )
-        return result.returncode, (result.stdout or "").strip(), (result.stderr or "").strip()
+        os.listdir(candidate)
+        result["read_ok"] = True
     except Exception as exc:
-        return 999, "", str(exc)
+        result["message"] = "Katalog danych jest niedostępny: %s" % exc
+        return result
 
-
-def mount_share_direct():
-    options = (
-        "credentials=%s,"
-        "iocharset=utf8,"
-        "uid=www-data,"
-        "gid=www-data,"
-        "file_mode=0664,"
-        "dir_mode=0775,"
-        "noperm,"
-        "nofail,"
-        "_netdev,"
-        "vers=3.0,"
-        "prefixpath=WP.to.XXX"
-    ) % SMB_CREDENTIALS_FILE
-
-    commands = [
-        ["/usr/bin/mount", MOUNT_POINT],
-        ["/bin/mount", MOUNT_POINT],
-        ["/usr/bin/mount", "-t", "cifs", SMB_SHARE, MOUNT_POINT, "-o", options],
-        ["/bin/mount", "-t", "cifs", SMB_SHARE, MOUNT_POINT, "-o", options],
-        ["/usr/bin/mount", "-a"],
-        ["/bin/mount", "-a"],
-        ["/usr/bin/sudo", "-n", "/usr/bin/mount", MOUNT_POINT],
-        ["/usr/bin/sudo", "-n", "/bin/mount", MOUNT_POINT],
-        ["/usr/bin/sudo", "-n", "/usr/bin/mount", "-a"],
-        ["/usr/bin/sudo", "-n", "/bin/mount", "-a"],
-    ]
-
-    errors = []
-
-    for cmd in commands:
-        if not os.path.exists(cmd[0]):
-            continue
-
-        code, out, err = run_command(cmd)
-
-        if code == 0 and os.path.ismount(MOUNT_POINT):
-            return True, "Zamontowano udział: %s -> %s" % (SMB_SHARE, MOUNT_POINT)
-
-        text = " ".join(cmd) + " :: " + (err or out or "nieznany błąd")
-        errors.append(text)
-
-        if os.path.ismount(MOUNT_POINT):
-            return True, "Zamontowano udział: %s -> %s" % (SMB_SHARE, MOUNT_POINT)
-
-    return False, "\\n".join(errors[-4:]) if errors else "Nie udało się wykonać polecenia montowania."
+    if not result["execute_ok"]:
+        result["message"] = "Brak prawa wejścia do katalogu danych."
+    elif not result["write_ok"]:
+        result["message"] = "Katalog danych jest tylko do odczytu."
+    else:
+        result["message"] = "Dostęp do katalogu danych jest poprawny."
+    return result
 
 
 def check_download_dir_ready(storage_kind="video", owner_username=None):
@@ -2592,51 +2863,95 @@ def check_download_dir_ready(storage_kind="video", owner_username=None):
 
 def ensure_share_ready(auto_remount=True):
     global LAST_MOUNT_ATTEMPT_TS
+    storage_config = get_storage_config_snapshot()
+    active_backend = storage_config["active_backend"]
+    active_root = get_storage_active_root(storage_config)
 
-    ok, message = check_download_dir_ready("video")
-    if ok:
-        set_mount_status(True, message)
-        return True, message
+    if active_backend == "local":
+        try:
+            os.makedirs(active_root, exist_ok=True)
+        except Exception as exc:
+            message = "Nie udało się przygotować lokalnego katalogu danych: %s" % exc
+            set_mount_status(False, message)
+            return False, message
+
+        ok, message = check_download_dir_ready("video")
+        if ok:
+            ready_message = "Lokalny katalog danych gotowy: %s" % active_root
+            set_mount_status(True, ready_message)
+            return True, ready_message
+        set_mount_status(False, message)
+        return False, message
+
+    network_config = dict(storage_config.get("network") or {})
+    share_path = str(network_config.get("share") or "").strip()
+    if not share_path:
+        message = "Aktywny backend to udział sieciowy, ale nie skonfigurowano adresu udziału."
+        set_mount_status(False, message)
+        return False, message
+
+    if os.path.ismount(active_root):
+        ok, message = check_download_dir_ready("video")
+        if ok:
+            ready_message = "Udział sieciowy gotowy: %s" % active_root
+            set_mount_status(True, ready_message)
+            return True, ready_message
+        set_mount_status(False, message)
+        return False, message
 
     now = time.time()
     if auto_remount and (now - LAST_MOUNT_ATTEMPT_TS >= MOUNT_RETRY_COOLDOWN):
         LAST_MOUNT_ATTEMPT_TS = now
         try:
-            os.makedirs(MOUNT_POINT, exist_ok=True)
-        except Exception:
-            pass
-
-        mounted, mount_message = mount_share_direct()
-        if mounted:
-            ok, message = check_download_dir_ready()
-            if ok:
-                set_mount_status(True, message)
-                return True, message
+            response = STORAGE_BACKEND_SERVICE.mount_network_storage(storage_config)
+            update_storage_network_test_state(
+                True,
+                str(response.get("message") or "Udział sieciowy został zamontowany.").strip(),
+                password_saved=storage_config.get("network", {}).get("password_saved"),
+            )
+        except Exception as exc:
+            detail = str(exc or "").strip() or "Nie udało się zamontować udziału sieciowego."
+            update_storage_network_test_state(
+                False,
+                detail,
+                password_saved=storage_config.get("network", {}).get("password_saved"),
+            )
+            message = "Udział sieciowy offline. Automatyczne ponowne montowanie nie powiodło się.\n%s" % detail
             set_mount_status(False, message)
             return False, message
 
-        set_mount_status(False, "Automatyczne ponowne montowanie nie powiodło się.\\n%s" % mount_message)
-        return False, LAST_MOUNT_STATUS["message"]
+        ok, message = check_download_dir_ready("video")
+        if ok:
+            ready_message = "Udział sieciowy gotowy: %s" % active_root
+            set_mount_status(True, ready_message)
+            return True, ready_message
+        set_mount_status(False, message)
+        return False, message
 
+    message = "Udział sieciowy offline. Punkt montowania nie jest aktywny: %s" % active_root
     set_mount_status(False, message)
     return False, message
 
 
 def get_mount_info(auto_remount=True, viewer_username=None, is_admin=None):
+    storage_config = get_storage_config_snapshot()
+    active_backend = storage_config["active_backend"]
+    active_root = get_storage_active_root(storage_config)
     online, message = ensure_share_ready(auto_remount=auto_remount)
     admin_view = is_admin_authenticated() if is_admin is None else bool(is_admin)
     username = str(viewer_username or get_current_username() or "").strip()
     video_dir = get_daily_download_dir(owner_username=username or DEFAULT_ADMIN_USERNAME)
     audio_dir = get_daily_download_dir(media_kind="audio", owner_username=username or DEFAULT_ADMIN_USERNAME)
+    runtime_access = read_storage_runtime_access_state(active_root, require_mount=(active_backend == "network"))
     public_message = message if admin_view else (
         "Przestrzeń użytkowników jest gotowa."
         if online else
         "Przestrzeń użytkowników jest teraz niedostępna."
     )
-    return {
+    payload = {
         "online": online,
         "message": public_message,
-        "mount_point": MOUNT_POINT,
+        "mount_point": active_root if admin_view else "",
         "download_root": get_download_root() if admin_view else "",
         "audio_download_root": get_audio_download_root() if admin_view else "",
         "download_dir": video_dir if admin_view else "video/%s" % get_daily_folder_name(),
@@ -2644,7 +2959,38 @@ def get_mount_info(auto_remount=True, viewer_username=None, is_admin=None):
         "user_storage_root": get_user_storage_base_root() if admin_view else "",
         "owner_username": username,
         "checked_at": LAST_MOUNT_STATUS["checked_at"],
+        "active_backend": active_backend,
+        "active_backend_label": get_storage_backend_label(active_backend),
+        "read_ok": bool(runtime_access.get("read_ok")),
+        "write_ok": bool(runtime_access.get("write_ok")),
+        "execute_ok": bool(runtime_access.get("execute_ok")),
+        "is_mount": bool(runtime_access.get("is_mount")),
     }
+    if admin_view:
+        payload.update({
+            "active_root": active_root,
+            "local_root": storage_config["local"]["root"],
+            "network_share": storage_config["network"]["share"],
+            "network_subpath": storage_config["network"]["subpath"],
+            "network_mount_dir": storage_config["network"]["mount_dir"],
+            "network_username": storage_config["network"]["username"],
+            "network_domain": storage_config["network"]["domain"],
+            "network_credentials_file": storage_config["network"]["credentials_file"],
+            "network_password_saved": bool(storage_config["network"]["password_saved"]),
+            "network_cifs_version": storage_config["network"]["cifs_version"],
+            "network_iocharset": storage_config["network"]["iocharset"],
+            "network_last_test_ok": bool(storage_config["network"]["last_test_ok"]),
+            "network_last_test_message": storage_config["network"]["last_test_message"],
+            "network_last_test_at": storage_config["network"]["last_test_at"],
+            "network_last_test_at_text": format_ts(storage_config["network"]["last_test_at"]),
+            "network_configured": bool(
+                storage_config["network"]["share"]
+                and storage_config["network"]["username"]
+                and storage_config["network"]["credentials_file"]
+            ),
+            "runtime_access_message": runtime_access.get("message") or "",
+        })
+    return payload
 
 
 def ensure_download_dir_ready(storage_kind="video", owner_username=None):

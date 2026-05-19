@@ -7,6 +7,7 @@
 
     const pollIntervalMs = 1000;
     let pollTimer = null;
+    const dirtyForms = new Set();
 
     function escapeHtml(value) {
         return String(value ?? "")
@@ -95,18 +96,53 @@
         return "queued";
     }
 
-    function setFormBusy(form, busy, busyLabel) {
-        const button = form ? form.querySelector("button") : null;
-        if (!button) {
+    function setFormBusy(form, busy, busyLabel, submitter) {
+        const buttons = form ? Array.from(form.querySelectorAll("button")) : [];
+        if (!buttons.length) {
             return;
         }
 
-        if (!button.dataset.idleLabel) {
-            button.dataset.idleLabel = String(button.textContent || "").trim();
-        }
+        buttons.forEach(function(button) {
+            if (!button.dataset.idleLabel) {
+                button.dataset.idleLabel = String(button.textContent || "").trim();
+            }
+            button.disabled = !!busy;
+            if (!busy) {
+                button.textContent = button.dataset.idleLabel || button.textContent;
+            }
+        });
 
-        button.disabled = !!busy;
-        button.textContent = busy ? String(busyLabel || "Trwa...") : (button.dataset.idleLabel || button.textContent);
+        if (busy) {
+            const targetButton = submitter instanceof HTMLButtonElement ? submitter : buttons[0];
+            targetButton.textContent = String(busyLabel || "Trwa...");
+        }
+    }
+
+    function isProtectedFormDirty(formId) {
+        return dirtyForms.has(String(formId || ""));
+    }
+
+    function markProtectedFormDirty(form) {
+        if (!(form instanceof HTMLFormElement)) {
+            return;
+        }
+        if (form.dataset.protectState !== "true") {
+            return;
+        }
+        if (!form.id) {
+            return;
+        }
+        dirtyForms.add(form.id);
+    }
+
+    function clearProtectedFormDirty(form) {
+        if (!(form instanceof HTMLFormElement)) {
+            return;
+        }
+        if (!form.id) {
+            return;
+        }
+        dirtyForms.delete(form.id);
     }
 
     function updateTaskPanel(prefix, task, runningLabelFallback) {
@@ -183,7 +219,28 @@
         `;
     }
 
-    function applyConfigState(config, todayDownloadDir, todayAudioDownloadDir) {
+    function toggleNetworkFields(activeBackend) {
+        const node = document.getElementById("settingsNetworkFields");
+        if (!node) {
+            return;
+        }
+        node.hidden = String(activeBackend || "local") !== "network";
+    }
+
+    function applyStorageSummary(config, mount) {
+        if (!config || !mount) {
+            return;
+        }
+        const activeBackendLabel = mount.active_backend_label || (String(mount.active_backend || "") === "network" ? "Udział sieciowy" : "Lokalny serwer");
+        const accessLabel = mount.read_ok ? (mount.write_ok ? "OK / OK" : "OK / brak zapisu") : "brak dostępu";
+        setText("settingsActiveBackendValue", activeBackendLabel);
+        setText("settingsActiveStorageRootValue", mount.active_root || config.user_storage_root || "");
+        setText("settingsStorageAccessValue", accessLabel);
+        setText("settingsNetworkLastTestValue", mount.network_last_test_at_text || "-");
+        setText("settingsNetworkLastTestMessageValue", mount.network_last_test_message || "Brak testu udziału sieciowego.");
+    }
+
+    function applyConfigState(config, mount, todayDownloadDir, todayAudioDownloadDir) {
         if (!config) {
             return;
         }
@@ -195,8 +252,42 @@
         setText("settingsTodayAudioDownloadDirValue", todayAudioDownloadDir || "");
         setText("settingsRetentionDaysValue", String(config.job_retention_days || "") + " dni");
 
-        setValue("userStorageRoot", config.user_storage_root || "");
-        setValue("jobRetentionDays", config.job_retention_days || "");
+        applyStorageSummary(config, mount || {});
+
+        const storage = config.storage || {};
+        const local = storage.local || {};
+        const network = storage.network || {};
+        const configFormDirty = isProtectedFormDirty("settingsConfigForm");
+
+        if (!configFormDirty) {
+            setValue("jobRetentionDays", config.job_retention_days || "");
+            setValue("activeStorageBackend", storage.active_backend || "local");
+            setValue("localStorageRoot", local.root || "");
+            setValue("networkShare", network.share || "");
+            setValue("networkSubpath", network.subpath || "");
+            setValue("networkMountDir", network.mount_dir || "");
+            setValue("networkUsername", network.username || "");
+            setValue("networkDomain", network.domain || "");
+            setValue("networkCredentialsFile", network.credentials_file || "");
+            setValue("networkCifsVersion", network.cifs_version || "3.0");
+            setValue("networkIocharset", network.iocharset || "utf8");
+            const keepExistingPassword = document.getElementById("keepExistingNetworkPassword");
+            if (keepExistingPassword) {
+                keepExistingPassword.checked = !!network.password_saved;
+            }
+            const networkPassword = document.getElementById("networkPassword");
+            if (networkPassword) {
+                networkPassword.value = "";
+            }
+        }
+
+        toggleNetworkFields(storage.active_backend || "local");
+        setText("settingsLocalUsersRootHint", (local.root || "") + "/flask_downloader_users/login/video/" + String((todayDownloadDir || "").split("/").pop() || "YYYY-MM-DD") + "/plik.mp4");
+        setText("settingsNetworkUsersRootHint", (network.mount_dir || "") + "/flask_downloader_users/login/video/" + String((todayDownloadDir || "").split("/").pop() || "YYYY-MM-DD") + "/plik.mp4");
+        setText(
+            "settingsKeepPasswordLabel",
+            "Zachowaj zapisane hasło SMB" + (network.password_saved ? " (plik poświadczeń jest już zapisany)" : "")
+        );
     }
 
     function renderUserRows(rows) {
@@ -520,7 +611,7 @@
 
         const tasks = state.maintenance_tasks || state.tasks || {};
         applyMountState(state.mount || null);
-        applyConfigState(state.config || null, state.today_download_dir || "", state.today_audio_download_dir || "");
+        applyConfigState(state.config || null, state.mount || null, state.today_download_dir || "", state.today_audio_download_dir || "");
         if (Object.prototype.hasOwnProperty.call(state, "user_rows")) {
             renderUserRows(state.user_rows || []);
         }
@@ -534,6 +625,9 @@
     }
 
     async function fetchSettingsState() {
+        if (dirtyForms.size > 0) {
+            return;
+        }
         try {
             const response = await fetch("/api/settings/state", {
                 headers: {
@@ -551,12 +645,13 @@
         }
     }
 
-    async function handleAsyncFormSubmit(form) {
+    async function handleAsyncFormSubmit(form, submitter) {
         if (!(form instanceof HTMLFormElement)) {
             return;
         }
 
-        let busyLabel = String(form.dataset.busyLabel || "").trim();
+        const submitAction = String((submitter && submitter.getAttribute("formaction")) || form.action || "");
+        let busyLabel = String((submitter && submitter.dataset.busyLabel) || form.dataset.busyLabel || "").trim();
         if (!busyLabel) {
             busyLabel = "Trwa...";
             if (form.id === "settingsConfigForm") {
@@ -584,10 +679,10 @@
             }
         }
 
-        setFormBusy(form, true, busyLabel);
+        setFormBusy(form, true, busyLabel, submitter || null);
 
         try {
-            const response = await fetch(form.action, {
+            const response = await fetch(submitAction || form.action, {
                 method: "POST",
                 body: new FormData(form),
                 headers: {
@@ -611,6 +706,7 @@
             if (form.dataset.resetAfterSuccess === "true") {
                 form.reset();
             }
+            clearProtectedFormDirty(form);
 
             if (data.message) {
                 showToast(data.message, data.kind || "success");
@@ -621,7 +717,7 @@
             showToast("Nie udało się połączyć z serwerem.", "error");
         } finally {
             if (!form.dataset.maintenanceStart) {
-                setFormBusy(form, false, "");
+                setFormBusy(form, false, "", submitter || null);
             }
         }
     }
@@ -646,10 +742,30 @@
 
         event.preventDefault();
         event.stopPropagation();
-        handleAsyncFormSubmit(form);
+        handleAsyncFormSubmit(form, event.submitter || null);
+    }
+
+    function handleProtectedFormInput(event) {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+            return;
+        }
+        const form = target.closest("form");
+        if (!(form instanceof HTMLFormElement)) {
+            return;
+        }
+        if (!root.contains(form)) {
+            return;
+        }
+        markProtectedFormDirty(form);
+        if (target.id === "activeStorageBackend") {
+            toggleNetworkFields(target.value || "local");
+        }
     }
 
     document.addEventListener("submit", handleSettingsSubmit, true);
+    document.addEventListener("input", handleProtectedFormInput, true);
+    document.addEventListener("change", handleProtectedFormInput, true);
 
     renderUserRows(pageData.userRows || []);
     fetchSettingsState();
@@ -661,6 +777,8 @@
                 clearInterval(pollTimer);
             }
             document.removeEventListener("submit", handleSettingsSubmit, true);
+            document.removeEventListener("input", handleProtectedFormInput, true);
+            document.removeEventListener("change", handleProtectedFormInput, true);
         });
     }
 })();

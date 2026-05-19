@@ -30,6 +30,7 @@ Instalator:
 - pyta o hasło pierwszego konta `admin`,
 - pozwala zostawić domyślne ścieżki, użytkownika usługi i nazwy usług przez zwykłe `Enter`,
 - przy nieudanej instalacji może usunąć pliki i usługi utworzone przez instalator, bez ruszania pakietów systemowych,
+- startuje domyślnie na lokalnym serwerze danych, więc panel działa od razu po instalacji bez udziału sieciowego,
 - tworzy usługę `systemd`,
 - instaluje `yt-dlp`,
 - instaluje zarządzany `ffmpeg`,
@@ -86,6 +87,9 @@ http://IP_SERWERA:9999/
 
 ### Konfiguracja
 - tylko dla administratora,
+- wybór aktywnego miejsca zapisu `lokalnie / udział sieciowy SMB-CIFS`,
+- test połączenia udziału sieciowego z kontrolą odczytu i zapisu,
+- montowanie i odmontowywanie udziału sieciowego z panelu WWW,
 - utrzymanie `yt-dlp`, `ffmpeg`, `DLNA` i backendu radia,
 - zarządzanie użytkownikami.
 

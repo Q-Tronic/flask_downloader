@@ -10,6 +10,11 @@ def register_settings_routes(app, deps):
     SETTINGS_CONTENT_TEMPLATE = deps["SETTINGS_CONTENT_TEMPLATE"]
     get_settings_page_state = deps["get_settings_page_state"]
     save_app_config = deps["save_app_config"]
+    build_updated_storage_config = deps["build_updated_storage_config"]
+    test_network_storage_config = deps["test_network_storage_config"]
+    configure_network_storage_config = deps["configure_network_storage_config"]
+    mount_network_storage_config = deps["mount_network_storage_config"]
+    unmount_network_storage_config = deps["unmount_network_storage_config"]
     ensure_share_ready = deps["ensure_share_ready"]
     sync_dlna_runtime_safe = deps["sync_dlna_runtime_safe"]
     refresh_ffmpeg_update_state = deps["refresh_ffmpeg_update_state"]
@@ -30,6 +35,27 @@ def register_settings_routes(app, deps):
     schedule_flask_service_restart = deps["schedule_flask_service_restart"]
     SYSTEMD_SERVICE_NAME = deps["SYSTEMD_SERVICE_NAME"]
 
+    def build_storage_form_payload(form):
+        field_source = form or request.form
+        network_updates = {
+            "share": field_source.get("network_share"),
+            "subpath": field_source.get("network_subpath"),
+            "mount_dir": field_source.get("network_mount_dir"),
+            "username": field_source.get("network_username"),
+            "domain": field_source.get("network_domain"),
+            "credentials_file": field_source.get("network_credentials_file"),
+            "cifs_version": field_source.get("network_cifs_version"),
+            "iocharset": field_source.get("network_iocharset"),
+        }
+        password = str(field_source.get("network_password") or "").strip()
+        keep_existing_password = parse_boolean_flag(field_source.get("keep_existing_network_password"), default=False)
+        storage_config = build_updated_storage_config(
+            active_backend=field_source.get("active_backend"),
+            local_root=field_source.get("local_storage_root") or field_source.get("user_storage_root"),
+            network_updates=network_updates,
+        )
+        return storage_config, password, keep_existing_password
+
     @app.route("/settings", methods=["GET", "POST"])
     def settings_page():
         if not is_admin_authenticated():
@@ -40,10 +66,35 @@ def register_settings_routes(app, deps):
 
         if request.method == "POST":
             try:
+                storage_config, password, keep_existing_password = build_storage_form_payload(request.form)
+                network_ready_for_save = bool(
+                    storage_config["network"]["share"]
+                    and storage_config["network"]["username"]
+                )
+                if storage_config["active_backend"] == "network" and not network_ready_for_save:
+                    raise ValueError("Aby włączyć zapis do udziału sieciowego, uzupełnij adres udziału i login SMB.")
+
+                if network_ready_for_save:
+                    configure_network_storage_config(
+                        storage_config,
+                        password=password,
+                        keep_existing_password=keep_existing_password,
+                        mount_now=(storage_config["active_backend"] == "network"),
+                    )
+                    storage_config = build_updated_storage_config(
+                        active_backend=storage_config["active_backend"],
+                        local_root=storage_config["local"]["root"],
+                        network_updates={
+                            **storage_config["network"],
+                            "password_saved": True,
+                        },
+                    )
+
                 save_app_config(
-                    download_root=request.form.get("user_storage_root") or request.form.get("download_root"),
-                    audio_download_root=request.form.get("audio_download_root"),
                     job_retention_days=request.form.get("job_retention_days"),
+                    active_backend=storage_config["active_backend"],
+                    local_storage_root=storage_config["local"]["root"],
+                    network_storage=storage_config["network"],
                 )
                 ensure_share_ready(auto_remount=True)
                 sync_dlna_runtime_safe(restart_service_if_active=False)
@@ -74,6 +125,106 @@ def register_settings_routes(app, deps):
             SETTINGS_CONTENT_TEMPLATE,
             **get_settings_page_state(include_user_rows=True)
         )
+
+    @app.route("/settings/storage-test-network", methods=["POST"])
+    def settings_test_network_storage():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby testować udział sieciowy.", "error")
+            return redirect(url_for("index"))
+
+        try:
+            storage_config, password, keep_existing_password = build_storage_form_payload(request.form)
+            response = test_network_storage_config(
+                storage_config,
+                password=password,
+                keep_existing_password=keep_existing_password,
+            )
+            message = str(response.get("message") or "Połączenie z udziałem sieciowym działa poprawnie.").strip()
+            if wants_json_response():
+                return jsonify({
+                    "ok": True,
+                    "message": message,
+                    "kind": "success",
+                    "state": get_settings_page_state(include_user_rows=True),
+                })
+            set_ui_flash(message, "success")
+        except Exception as exc:
+            if wants_json_response():
+                return jsonify({
+                    "ok": False,
+                    "error": str(exc),
+                    "kind": "error",
+                    "state": get_settings_page_state(include_user_rows=True),
+                }), 400
+            set_ui_flash(str(exc), "error")
+
+        return redirect(url_for("settings_page"))
+
+    @app.route("/settings/storage-mount-network", methods=["POST"])
+    def settings_mount_network_storage():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby montować udział sieciowy.", "error")
+            return redirect(url_for("index"))
+
+        try:
+            response = mount_network_storage_config()
+            ensure_share_ready(auto_remount=False)
+            message = str(response.get("message") or "Udział sieciowy został zamontowany.").strip()
+            if wants_json_response():
+                return jsonify({
+                    "ok": True,
+                    "message": message,
+                    "kind": "success",
+                    "state": get_settings_page_state(include_user_rows=True),
+                })
+            set_ui_flash(message, "success")
+        except Exception as exc:
+            if wants_json_response():
+                return jsonify({
+                    "ok": False,
+                    "error": str(exc),
+                    "kind": "error",
+                    "state": get_settings_page_state(include_user_rows=True),
+                }), 400
+            set_ui_flash(str(exc), "error")
+
+        return redirect(url_for("settings_page"))
+
+    @app.route("/settings/storage-unmount-network", methods=["POST"])
+    def settings_unmount_network_storage():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby odmontować udział sieciowy.", "error")
+            return redirect(url_for("index"))
+
+        try:
+            response = unmount_network_storage_config()
+            ensure_share_ready(auto_remount=False)
+            message = str(response.get("message") or "Udział sieciowy został odmontowany.").strip()
+            if wants_json_response():
+                return jsonify({
+                    "ok": True,
+                    "message": message,
+                    "kind": "success",
+                    "state": get_settings_page_state(include_user_rows=True),
+                })
+            set_ui_flash(message, "success")
+        except Exception as exc:
+            if wants_json_response():
+                return jsonify({
+                    "ok": False,
+                    "error": str(exc),
+                    "kind": "error",
+                    "state": get_settings_page_state(include_user_rows=True),
+                }), 400
+            set_ui_flash(str(exc), "error")
+
+        return redirect(url_for("settings_page"))
 
     @app.route("/settings/ffmpeg-check", methods=["POST"])
     def settings_check_ffmpeg():

@@ -15,10 +15,18 @@
         </div>
     </div>
     <p class="muted">
-        Tu ustawisz retencję wpisów z pobrań i główną lokalizację zapisu. Każde pobranie trafia automatycznie do podfolderu z datą w formacie <code>YYYY-MM-DD</code>.
+        Tu wybierzesz aktywny serwer danych, sprawdzisz poprawność udziału sieciowego i ustawisz retencję wpisów z pobrań.
     </p>
 
     <div class="settings-overview-grid">
+        <div class="overview-tile">
+            <span>Aktywny backend</span>
+            <strong id="settingsActiveBackendValue">{{ mount.active_backend_label }}</strong>
+        </div>
+        <div class="overview-tile">
+            <span>Aktywny katalog danych</span>
+            <strong><code id="settingsActiveStorageRootValue">{{ mount.active_root or config.user_storage_root }}</code></strong>
+        </div>
         <div class="overview-tile">
             <span>Katalog bazowy użytkowników</span>
             <strong><code id="settingsUserStorageRootValue">{{ config.user_storage_root }}</code></strong>
@@ -44,6 +52,17 @@
             <strong id="settingsRetentionDaysValue">{{ config.job_retention_days }} dni</strong>
         </div>
         <div class="overview-tile">
+            <span>Odczyt / zapis</span>
+            <strong id="settingsStorageAccessValue">
+                {{ "OK / OK" if mount.read_ok and mount.write_ok else ("OK / brak zapisu" if mount.read_ok else "brak dostępu") }}
+            </strong>
+        </div>
+        <div class="overview-tile">
+            <span>Ostatni test udziału</span>
+            <strong id="settingsNetworkLastTestValue">{{ mount.network_last_test_at_text or "-" }}</strong>
+            <div id="settingsNetworkLastTestMessageValue" class="inline-note">{{ mount.network_last_test_message or "Brak testu udziału sieciowego." }}</div>
+        </div>
+        <div class="overview-tile">
             <span>Minimalny poprawny plik</span>
             <strong>1 MB</strong>
             <div class="inline-note">Mniejsze pliki są usuwane automatycznie, a zadanie dostaje status niepowodzenia.</div>
@@ -57,30 +76,83 @@
     <div class="settings-grid">
         <div class="stack-card">
             <div class="card-heading">
-                <div class="card-title">Ustawienia zapisu</div>
+                <div class="card-title">Serwer danych i miejsce zapisu</div>
                 <div class="card-subtitle">
-                    Zmienisz tutaj retencję wpisów i katalog główny. Każde nowe pobranie dalej trafi do dziennego podfolderu z bieżącą datą.
+                    Administrator decyduje tutaj, czy nowe pliki trafiają lokalnie na serwer czy do udziału sieciowego SMB/CIFS. Każde pobranie nadal wpada do katalogu użytkownika z dziennym podfolderem.
                 </div>
             </div>
 
-            <form id="settingsConfigForm" method="post" action="/settings" class="auth-form" data-settings-async="true">
+            <form id="settingsConfigForm" method="post" action="/settings" class="auth-form" data-settings-async="true" data-protect-state="true">
                 <label class="field-label" for="jobRetentionDays">Usuwanie zakończonych wpisów po ilu dniach</label>
                 <input id="jobRetentionDays" type="text" name="job_retention_days" value="{{ config.job_retention_days }}" inputmode="numeric" required>
 
-                <label class="field-label" for="userStorageRoot">Katalog bazowy użytkowników</label>
-                <input id="userStorageRoot" type="text" name="user_storage_root" value="{{ config.user_storage_root }}" required>
+                <label class="field-label" for="activeStorageBackend">Aktywny backend zapisu</label>
+                <select id="activeStorageBackend" name="active_backend">
+                    <option value="local" {% if config.storage.active_backend == "local" %}selected{% endif %}>Lokalny serwer</option>
+                    <option value="network" {% if config.storage.active_backend == "network" %}selected{% endif %}>Udział sieciowy SMB / CIFS</option>
+                </select>
+
+                <label class="field-label" for="localStorageRoot">Lokalny katalog danych</label>
+                <input id="localStorageRoot" type="text" name="local_storage_root" value="{{ config.storage.local.root }}" required>
 
                 <div class="inline-note">
-                    Każdy użytkownik dostaje własne katalogi w układzie <code>{{ config.user_storage_root }}/login/video/{{ today_download_dir.split('/')[-1] }}/plik.mp4</code>.
-                </div>
-                <div class="inline-note">
-                    Audio zapisuje się analogicznie, np. <code>{{ config.user_storage_root }}/login/audio/{{ today_audio_download_dir.split('/')[-1] }}/utwor.mp3</code>.
-                </div>
-                <div class="inline-note">
-                    Pliki audio są konwertowane przez <code>ffmpeg</code> do <code>mp3</code> z ustawieniem najwyższej jakości VBR (<code>q=0</code>), ale źródłowe <code>m4a</code> z YouTube nadal pozostaje formatem stratnym.
+                    Gdy wybierzesz backend lokalny, pliki będą trafiały do <code id="settingsLocalUsersRootHint">{{ config.storage.local.root }}/flask_downloader_users/login/video/{{ today_download_dir.split('/')[-1] }}/plik.mp4</code>.
                 </div>
 
-                <button type="submit" class="btn">Zapisz konfigurację</button>
+                <div id="settingsNetworkFields" {% if config.storage.active_backend != "network" %}hidden{% endif %}>
+                    <label class="field-label" for="networkShare">Adres udziału SMB / CIFS</label>
+                    <input id="networkShare" type="text" name="network_share" value="{{ config.storage.network.share }}" placeholder="//192.168.29.11/udzial">
+
+                    <label class="field-label" for="networkSubpath">Podfolder udziału (opcjonalnie)</label>
+                    <input id="networkSubpath" type="text" name="network_subpath" value="{{ config.storage.network.subpath }}" placeholder="np. WP.to.XXX">
+
+                    <label class="field-label" for="networkMountDir">Katalog montowania udziału</label>
+                    <input id="networkMountDir" type="text" name="network_mount_dir" value="{{ config.storage.network.mount_dir }}" placeholder="/srv/flask_downloader/share-net">
+
+                    <label class="field-label" for="networkUsername">Login SMB</label>
+                    <input id="networkUsername" type="text" name="network_username" value="{{ config.storage.network.username }}" placeholder="np. wpuser">
+
+                    <label class="field-label" for="networkDomain">Domena SMB (opcjonalnie)</label>
+                    <input id="networkDomain" type="text" name="network_domain" value="{{ config.storage.network.domain }}" placeholder="np. WORKGROUP">
+
+                    <label class="field-label" for="networkCredentialsFile">Plik poświadczeń SMB</label>
+                    <input id="networkCredentialsFile" type="text" name="network_credentials_file" value="{{ config.storage.network.credentials_file }}" placeholder="/etc/flask-downloader/network-share.credentials">
+
+                    <label class="field-label" for="networkCifsVersion">Wersja protokołu CIFS</label>
+                    <select id="networkCifsVersion" name="network_cifs_version">
+                        {% for version in ["3.0", "3.1.1", "2.1", "2.0", "1.0"] %}
+                        <option value="{{ version }}" {% if config.storage.network.cifs_version == version %}selected{% endif %}>{{ version }}</option>
+                        {% endfor %}
+                    </select>
+
+                    <label class="field-label" for="networkIocharset">Kodowanie znaków</label>
+                    <input id="networkIocharset" type="text" name="network_iocharset" value="{{ config.storage.network.iocharset }}" placeholder="utf8">
+
+                    <label class="field-label" for="networkPassword">Hasło SMB</label>
+                    <input id="networkPassword" type="password" name="network_password" value="" placeholder="Zostaw puste, aby nie zmieniać zapisanego hasła">
+
+                    <label class="checkbox-row" for="keepExistingNetworkPassword">
+                        <input id="keepExistingNetworkPassword" type="checkbox" name="keep_existing_network_password" value="1" {% if config.storage.network.password_saved %}checked{% endif %}>
+                        <span id="settingsKeepPasswordLabel">
+                            Zachowaj zapisane hasło SMB{% if config.storage.network.password_saved %} (plik poświadczeń jest już zapisany){% endif %}
+                        </span>
+                    </label>
+
+                    <div class="inline-note">
+                        Test udziału sprawdza połączenie, możliwość odczytu i realny zapis pliku testowego. Aktywny backend sieciowy zapisze nowe pliki do <code id="settingsNetworkUsersRootHint">{{ config.storage.network.mount_dir }}/flask_downloader_users/login/video/{{ today_download_dir.split('/')[-1] }}/plik.mp4</code>.
+                    </div>
+                </div>
+
+                <div class="actions" style="margin-top: 8px;">
+                    <button type="submit" class="btn" data-busy-label="Zapisywanie serwera danych...">Zapisz serwer danych</button>
+                    <button type="submit" class="btn btn-secondary" formaction="/settings/storage-test-network" data-busy-label="Testowanie udziału...">Sprawdź udział sieciowy</button>
+                    <button type="submit" class="btn btn-green" formaction="/settings/storage-mount-network" data-busy-label="Montowanie udziału...">Zamontuj zapisany udział</button>
+                    <button type="submit" class="btn btn-stop" formaction="/settings/storage-unmount-network" data-busy-label="Odmontowywanie udziału...">Odmontuj zapisany udział</button>
+                </div>
+
+                <div class="inline-note">
+                    Pliki audio nadal są konwertowane przez <code>ffmpeg</code> do <code>mp3</code> z ustawieniem najwyższej jakości VBR (<code>q=0</code>), ale źródłowe <code>m4a</code> z YouTube pozostaje formatem stratnym.
+                </div>
             </form>
         </div>
 

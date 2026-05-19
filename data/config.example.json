@@ -1,4 +1,24 @@
 {
+  "storage": {
+    "active_backend": "local",
+    "local": {
+      "root": "/srv/flask_downloader/share"
+    },
+    "network": {
+      "share": "",
+      "subpath": "",
+      "mount_dir": "/srv/flask_downloader/share-net",
+      "username": "",
+      "domain": "",
+      "credentials_file": "/etc/flask-downloader/network-share.credentials",
+      "cifs_version": "3.0",
+      "iocharset": "utf8",
+      "password_saved": false,
+      "last_test_ok": false,
+      "last_test_message": "",
+      "last_test_at": 0.0
+    }
+  },
   "user_storage_root": "/srv/flask_downloader/share/flask_downloader_users",
   "user_storage_layout_version": 2,
   "download_root": "/srv/flask_downloader/share/flask_downloader_users/admin/video",
