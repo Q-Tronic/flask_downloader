@@ -52,6 +52,25 @@ SERVICE_NAME="$SERVICE_NAME_DEFAULT"
 DLNA_SERVICE_NAME="$DLNA_SERVICE_NAME_DEFAULT"
 RADIO_SERVICE_NAME="$RADIO_SERVICE_NAME_DEFAULT"
 RADIO_STATION_TEMPLATE="$RADIO_STATION_TEMPLATE_DEFAULT"
+INTERACTIVE_INPUT_FD=""
+
+ensure_interactive_input_fd() {
+    if [[ -n "$INTERACTIVE_INPUT_FD" ]]; then
+        return 0
+    fi
+
+    if [[ -t 0 ]]; then
+        INTERACTIVE_INPUT_FD="0"
+        return 0
+    fi
+
+    if exec 3<> /dev/tty 2>/dev/null; then
+        INTERACTIVE_INPUT_FD="3"
+        return 0
+    fi
+
+    return 1
+}
 
 render_bar() {
     local percent="$1"
@@ -138,11 +157,12 @@ prompt_default() {
     local prompt="$1"
     local default_value="$2"
     local answer
-    if [[ -r /dev/tty ]]; then
-        read -r -p "${prompt} [${default_value}]: " answer < /dev/tty || true
-    else
-        read -r -p "${prompt} [${default_value}]: " answer || true
+    if ! ensure_interactive_input_fd; then
+        log_fail "Brak dostępu do terminala dla interaktywnych pytań. Użyj --non-interactive albo uruchom instalator przez: bash -c \"\$(curl -fsSL .../install.sh)\""
+        exit 1
     fi
+    printf "%s [%s]: " "$prompt" "$default_value" > /dev/tty
+    IFS= read -r -u "$INTERACTIVE_INPUT_FD" answer || true
     printf "%s" "${answer:-$default_value}"
 }
 
@@ -151,30 +171,33 @@ prompt_timeout_default() {
     local default_value="$2"
     local timeout_seconds="$3"
     local answer=""
-    if [[ -r /dev/tty ]]; then
-        read -r -t "$timeout_seconds" -p "${prompt} [${default_value}] (timeout ${timeout_seconds}s): " answer < /dev/tty || true
-    else
-        read -r -t "$timeout_seconds" -p "${prompt} [${default_value}] (timeout ${timeout_seconds}s): " answer || true
+    if ! ensure_interactive_input_fd; then
+        log_fail "Brak dostępu do terminala dla interaktywnych pytań. Użyj --non-interactive albo uruchom instalator przez: bash -c \"\$(curl -fsSL .../install.sh)\""
+        exit 1
     fi
+    printf "%s [%s] (timeout %ss): " "$prompt" "$default_value" "$timeout_seconds" > /dev/tty
+    IFS= read -r -t "$timeout_seconds" -u "$INTERACTIVE_INPUT_FD" answer || true
     printf "%s" "${answer:-$default_value}"
 }
 
 prompt_admin_password() {
     local first=""
     local second=""
+    if ! ensure_interactive_input_fd; then
+        log_fail "Brak dostępu do terminala dla hasła administratora. Użyj FLASK_DOWNLOADER_ADMIN_PASSWORD albo --admin-password."
+        exit 1
+    fi
     while true; do
-        if [[ -r /dev/tty ]]; then
-            read -r -s -p "Hasło dla pierwszego użytkownika admin: " first < /dev/tty
-        else
-            read -r -s -p "Hasło dla pierwszego użytkownika admin: " first
-        fi
-        printf "\n"
-        if [[ -r /dev/tty ]]; then
-            read -r -s -p "Powtórz hasło admina: " second < /dev/tty
-        else
-            read -r -s -p "Powtórz hasło admina: " second
-        fi
-        printf "\n"
+        printf "%s" "Hasło dla pierwszego użytkownika admin: " > /dev/tty
+        stty -echo < /dev/tty
+        IFS= read -r -u "$INTERACTIVE_INPUT_FD" first || true
+        stty echo < /dev/tty
+        printf "\n" > /dev/tty
+        printf "%s" "Powtórz hasło admina: " > /dev/tty
+        stty -echo < /dev/tty
+        IFS= read -r -u "$INTERACTIVE_INPUT_FD" second || true
+        stty echo < /dev/tty
+        printf "\n" > /dev/tty
         if [[ -z "$first" || "${#first}" -lt 4 ]]; then
             log_warn "Hasło musi mieć co najmniej 4 znaki."
             continue

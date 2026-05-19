@@ -17,12 +17,12 @@ Interfejs i komunikaty są po polsku.
 ## Instalacja jednym poleceniem
 Jeśli jesteś zalogowany jako `root`:
 ```bash
-apt-get update && apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh | bash
+apt-get update && apt-get install -y curl ca-certificates && bash -c "$(curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh)"
 ```
 
 Jeśli używasz zwykłego konta z `sudo`:
 ```bash
-sudo apt-get update && sudo apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh | sudo bash
+sudo apt-get update && sudo apt-get install -y curl ca-certificates && sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh)"
 ```
 
 Instalator:
