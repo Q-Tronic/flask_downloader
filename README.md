@@ -15,8 +15,14 @@ Interfejs i komunikaty są po polsku.
 - połączenie z internetem podczas instalacji
 
 ## Instalacja jednym poleceniem
+Jeśli jesteś zalogowany jako `root`:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh | sudo bash
+apt-get update && apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh | bash
+```
+
+Jeśli używasz zwykłego konta z `sudo`:
+```bash
+sudo apt-get update && sudo apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh | sudo bash
 ```
 
 Instalator:
@@ -30,9 +36,10 @@ Instalator:
 - przygotowuje pliki konfiguracyjne aplikacji.
 
 ## Instalacja nieinteraktywna
+Jako `root`:
 ```bash
 export FLASK_DOWNLOADER_ADMIN_PASSWORD='TwojeHasloAdmina'
-curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh | sudo bash -s -- --non-interactive
+apt-get update && apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh | bash -s -- --non-interactive
 ```
 
 ## Po instalacji
