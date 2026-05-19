@@ -5347,8 +5347,30 @@ WantedBy=multi-user.target
         systemd_quote_arg(DLNA_RESTART_GUARD_SCRIPT_FILE),
         systemd_quote_arg(DLNA_RESTART_GUARD_SCRIPT_FILE),
     )
+    try:
+        if os.path.isfile(DLNA_SERVICE_UNIT_FILE):
+            with open(DLNA_SERVICE_UNIT_FILE, "r", encoding="utf-8", errors="replace") as fh:
+                existing_content = str(fh.read() or "")
+            if existing_content == unit_content:
+                return
+    except Exception:
+        pass
     with open(DLNA_SERVICE_UNIT_FILE, "w", encoding="utf-8") as fh:
         fh.write(unit_content)
+
+
+def build_systemctl_command_args(*args):
+    systemctl_binary = shutil.which("systemctl") or "/bin/systemctl"
+    command = [systemctl_binary, *args]
+    if os.name != "nt":
+        try:
+            if os.geteuid() != 0:
+                sudo_binary = shutil.which("sudo")
+                if sudo_binary:
+                    command = [sudo_binary, "-n", systemctl_binary, *args]
+        except Exception:
+            pass
+    return command
 
 
 def run_systemctl_command(*args, timeout=60):
@@ -5364,7 +5386,7 @@ def run_systemctl_command_result(*args, timeout=60):
 
     try:
         completed_process = subprocess.run(
-            ["systemctl", *args],
+            build_systemctl_command_args(*args),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -5375,6 +5397,21 @@ def run_systemctl_command_result(*args, timeout=60):
         detail = (completed_process.stderr or completed_process.stdout or "").strip()
         if not detail:
             detail = "Polecenie systemctl zakończyło się błędem." if completed_process.returncode != 0 else ""
+        if completed_process.returncode != 0 and any(
+            marker in detail.lower()
+            for marker in (
+                "access denied",
+                "interactive authentication required",
+                "authentication is required",
+                "a password is required",
+                "sudo:",
+            )
+        ):
+            detail = (
+                "Brakuje uprawnień do sterowania usługami systemd z poziomu panelu. "
+                "Uruchom ponownie instalator jako root, aby odtworzył reguły sudoers dla usera usługi Flask. "
+                "Szczegóły: %s"
+            ) % detail
     except subprocess.TimeoutExpired as exc:
         completed_process = None
         timed_out = True

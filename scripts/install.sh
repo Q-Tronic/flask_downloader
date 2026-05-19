@@ -69,6 +69,8 @@ DLNA_EXPORT_ROOT_EXISTED_BEFORE=0
 GERBERA_REPO_KEY_EXISTED_BEFORE=0
 GERBERA_REPO_LIST_EXISTED_BEFORE=0
 CLEANUP_STATE_RECORDED=0
+SUDOERS_RULE_FILE=""
+SUDOERS_RULE_FILE_EXISTED_BEFORE=0
 
 trim_text() {
     local text="$1"
@@ -375,6 +377,7 @@ run_logged_streamed() {
 }
 
 record_preinstall_state() {
+    SUDOERS_RULE_FILE="$(build_sudoers_rule_file_path)"
     [[ -e "$APP_DIR" ]] && APP_DIR_EXISTED_BEFORE=1
     [[ -e "$STORAGE_ROOT" ]] && STORAGE_ROOT_EXISTED_BEFORE=1
     [[ -d "$STORAGE_ROOT/flask_downloader" ]] && STORAGE_DOWNLOAD_DIR_EXISTED_BEFORE=1
@@ -389,6 +392,7 @@ record_preinstall_state() {
     [[ -e "/dlna" ]] && DLNA_EXPORT_ROOT_EXISTED_BEFORE=1
     [[ -f "/usr/share/keyrings/gerbera-keyring.gpg" ]] && GERBERA_REPO_KEY_EXISTED_BEFORE=1
     [[ -f "/etc/apt/sources.list.d/gerbera.list" ]] && GERBERA_REPO_LIST_EXISTED_BEFORE=1
+    [[ -n "$SUDOERS_RULE_FILE" && -f "$SUDOERS_RULE_FILE" ]] && SUDOERS_RULE_FILE_EXISTED_BEFORE=1
     CLEANUP_STATE_RECORDED=1
 }
 
@@ -426,6 +430,9 @@ cleanup_candidates_exist() {
     if (( DLNA_EXPORT_ROOT_EXISTED_BEFORE == 0 )) && [[ -e "/dlna" ]]; then
         return 0
     fi
+    if (( SUDOERS_RULE_FILE_EXISTED_BEFORE == 0 )) && [[ -n "$SUDOERS_RULE_FILE" && -f "$SUDOERS_RULE_FILE" ]]; then
+        return 0
+    fi
     if (( GERBERA_REPO_KEY_EXISTED_BEFORE == 0 )) && [[ -f "/usr/share/keyrings/gerbera-keyring.gpg" ]]; then
         return 0
     fi
@@ -459,6 +466,9 @@ perform_install_cleanup() {
     fi
     if (( RADIO_STATION_TEMPLATE_FILE_EXISTED_BEFORE == 0 )); then
         rm -f "/etc/systemd/system/${RADIO_STATION_TEMPLATE}.service"
+    fi
+    if (( SUDOERS_RULE_FILE_EXISTED_BEFORE == 0 )) && [[ -n "$SUDOERS_RULE_FILE" ]]; then
+        rm -f "$SUDOERS_RULE_FILE"
     fi
     systemctl daemon-reload >/dev/null 2>&1 || true
 
@@ -529,6 +539,17 @@ offer_cleanup_after_failure() {
 abort_install() {
     offer_cleanup_after_failure
     exit 1
+}
+
+build_sudoers_rule_file_path() {
+    local base_name
+    base_name="$(printf '%s' "${SERVICE_NAME:-flask-downloader}" | tr -cs 'a-zA-Z0-9._-' '-')"
+    base_name="${base_name#-}"
+    base_name="${base_name%-}"
+    if [[ -z "$base_name" ]]; then
+        base_name="flask-downloader"
+    fi
+    printf "/etc/sudoers.d/%s-panel" "$base_name"
 }
 
 begin_step() {
@@ -700,6 +721,24 @@ ensure_group_and_user() {
     fi
     if ! id -u "$APP_USER" >/dev/null 2>&1; then
         useradd --system --create-home --home-dir "/home/$APP_USER" --gid "$APP_GROUP" --shell /usr/sbin/nologin "$APP_USER"
+    fi
+}
+
+install_privileged_sudoers_rules() {
+    local sudoers_file
+    sudoers_file="$(build_sudoers_rule_file_path)"
+    SUDOERS_RULE_FILE="$sudoers_file"
+
+    cat > "$sudoers_file" <<EOF
+Defaults:${APP_USER} !requiretty
+${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl, /usr/bin/systemctl, /bin/mount, /usr/bin/mount
+EOF
+    chmod 440 "$sudoers_file"
+    if command -v visudo >/dev/null 2>&1; then
+        visudo -cf "$sudoers_file" >>"$INSTALL_LOG" 2>&1 || {
+            log_fail "Wygenerowana reguła sudoers dla ${APP_USER} jest nieprawidłowa."
+            abort_install
+        }
     fi
 }
 
@@ -1141,11 +1180,12 @@ record_preinstall_state
 begin_step "Instalacja pakietów systemowych"
 export DEBIAN_FRONTEND=noninteractive
 run_logged "Odświeżam listę pakietów apt" apt-get update -y
-run_logged "Instaluję pakiety systemowe" apt-get install -y git ca-certificates curl gnupg python3 python3-venv python3-pip cifs-utils iproute2 ffmpegthumbnailer
+run_logged "Instaluję pakiety systemowe" apt-get install -y git sudo ca-certificates curl gnupg python3 python3-venv python3-pip cifs-utils iproute2 ffmpegthumbnailer
 log_ok "Pakiety systemowe są gotowe."
 
 begin_step "Tworzenie użytkownika i uprawnień"
 ensure_group_and_user
+run_logged "Konfiguruję uprawnienia sudoers dla usera usługi" install_privileged_sudoers_rules
 mkdir -p "$APP_DIR" "$APP_DIR/backups" "$STORAGE_ROOT"
 mkdir -p "$STORAGE_ROOT/flask_downloader" "$STORAGE_ROOT/flask_downloader_audio" "$STORAGE_ROOT/flask_downloader_users/admin/video" "$STORAGE_ROOT/flask_downloader_users/admin/audio"
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" "$STORAGE_ROOT"

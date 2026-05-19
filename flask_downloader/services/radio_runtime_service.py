@@ -1271,6 +1271,14 @@ WantedBy=multi-user.target
             workdir=self._runtime_root,
             command=self._systemd_quote_arg(command),
         )
+        try:
+            if os.path.isfile(self._backend_unit_file):
+                with open(self._backend_unit_file, "r", encoding="utf-8", errors="replace") as fh:
+                    existing_text = str(fh.read() or "")
+                if existing_text == unit_text:
+                    return
+        except Exception:
+            pass
         with open(self._backend_unit_file, "w", encoding="utf-8") as fh:
             fh.write(unit_text)
 
@@ -1311,6 +1319,14 @@ WantedBy=multi-user.target
             workdir=self._app_root,
             command=self._systemd_quote_arg(command),
         )
+        try:
+            if os.path.isfile(self._station_unit_template_file):
+                with open(self._station_unit_template_file, "r", encoding="utf-8", errors="replace") as fh:
+                    existing_text = str(fh.read() or "")
+                if existing_text == unit_text:
+                    return
+        except Exception:
+            pass
         with open(self._station_unit_template_file, "w", encoding="utf-8") as fh:
             fh.write(unit_text)
 
