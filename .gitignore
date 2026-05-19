@@ -5,6 +5,8 @@ __pycache__/
 .env
 .env.*
 !.env.example
+AGENTS.md
+REFACTOR_INSTALL_CHECKLIST.md
 
 data/*.json
 !data/.gitkeep
