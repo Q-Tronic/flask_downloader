@@ -469,6 +469,55 @@ if not os.path.isfile(radios_path):
 PY
 }
 
+ensure_random_radio_runtime_secrets() {
+    APP_DIR="$APP_DIR" "$APP_DIR/.venv/bin/python" - <<'PY'
+import json
+import os
+import secrets
+import sys
+
+app_dir = os.environ["APP_DIR"]
+sys.path.insert(0, app_dir)
+radios_path = os.path.join(app_dir, "data", "radios.json")
+
+if not os.path.isfile(radios_path):
+    raise SystemExit(0)
+
+
+def generate_runtime_secret(min_length=24):
+    raw = secrets.token_urlsafe(max(18, int(min_length or 24)))
+    text = str(raw or "").strip()
+    if len(text) < min_length:
+        text = (text + secrets.token_urlsafe(min_length))[:min_length]
+    return text[: max(min_length, 24)]
+
+
+with open(radios_path, "r", encoding="utf-8") as fh:
+    store = json.load(fh)
+
+if not isinstance(store, dict):
+    raise SystemExit(0)
+
+global_payload = store.get("global")
+if not isinstance(global_payload, dict):
+    raise SystemExit(0)
+
+changed = False
+for key, placeholder in (
+    ("source_password", "radio-source"),
+    ("admin_password", "radio-admin"),
+):
+    current_value = str(global_payload.get(key) or "").strip()
+    if not current_value or current_value == placeholder:
+        global_payload[key] = generate_runtime_secret(32)
+        changed = True
+
+if changed:
+    with open(radios_path, "w", encoding="utf-8") as fh:
+        json.dump(store, fh, ensure_ascii=False, indent=2)
+PY
+}
+
 install_systemd_service() {
     local service_file="/etc/systemd/system/${SERVICE_NAME}.service"
     local template_file="$APP_DIR/deploy/flask-downloader.service.template"
@@ -678,6 +727,7 @@ log_ok "Plik .env jest gotowy."
 
 begin_step "Inicjalizacja danych aplikacji"
 run_logged "Tworzę początkowe pliki danych aplikacji" initialize_data_files
+run_logged "Pilnuję losowych sekretów backendu radia w data/radios.json" ensure_random_radio_runtime_secrets
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/data"
 log_ok "Pliki data/config.json, data/jobs.json, data/users.json i data/radios.json są gotowe."
 
@@ -697,6 +747,7 @@ log_ok "Backend DLNA jest gotowy."
 
 begin_step "Instalacja backendu radia"
 run_logged "Instaluję backend Icecast + Liquidsoap" run_app_bootstrap_task radio
+run_logged "Weryfikuję końcowe sekrety backendu radia po bootstrapie pakietów" ensure_random_radio_runtime_secrets
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/data" "$APP_DIR/tools" 2>/dev/null || true
 log_ok "Backend radia jest gotowy."
 
