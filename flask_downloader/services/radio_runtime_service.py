@@ -1279,8 +1279,7 @@ WantedBy=multi-user.target
                     return
         except Exception:
             pass
-        with open(self._backend_unit_file, "w", encoding="utf-8") as fh:
-            fh.write(unit_text)
+        self._write_text_file_maybe_privileged(self._backend_unit_file, unit_text)
 
     def _write_station_unit_template(self):
         if not self._is_linux_runtime():
@@ -1327,8 +1326,59 @@ WantedBy=multi-user.target
                     return
         except Exception:
             pass
-        with open(self._station_unit_template_file, "w", encoding="utf-8") as fh:
-            fh.write(unit_text)
+        self._write_text_file_maybe_privileged(self._station_unit_template_file, unit_text)
+
+    def _write_text_file_maybe_privileged(self, path, text, *, encoding="utf-8", timeout=60):
+        normalized_path = os.path.abspath(str(path or "").strip())
+        if not normalized_path:
+            raise RuntimeError("Brak ścieżki docelowej do zapisu pliku systemowego.")
+
+        if self._is_linux_runtime():
+            try:
+                if os.geteuid() != 0:
+                    sudo_binary = shutil.which("sudo")
+                    tee_binary = shutil.which("tee") or "/usr/bin/tee"
+                    if sudo_binary:
+                        completed_process = subprocess.run(
+                            [sudo_binary, "-n", tee_binary, normalized_path],
+                            input=str(text or ""),
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            timeout=timeout,
+                            check=False,
+                        )
+                        if completed_process.returncode == 0:
+                            return
+                        detail = (completed_process.stderr or "").strip()
+                        if any(
+                            marker in detail.lower()
+                            for marker in (
+                                "access denied",
+                                "interactive authentication required",
+                                "authentication is required",
+                                "a password is required",
+                                "sudo:",
+                                "permission denied",
+                            )
+                        ):
+                            raise RuntimeError(
+                                "Brakuje uprawnień do zapisu pliku systemowego %s. "
+                                "Uruchom ponownie instalator albo sprawdź regułę sudoers dla użytkownika usługi."
+                                % normalized_path
+                            )
+                        raise RuntimeError(
+                            detail or "Nie udało się zapisać pliku systemowego %s." % normalized_path
+                        )
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                raise RuntimeError(
+                    "Nie udało się zapisać pliku systemowego %s: %s" % (normalized_path, exc)
+                ) from exc
+
+        with open(normalized_path, "w", encoding=encoding) as fh:
+            fh.write(str(text or ""))
 
     def _reload_systemd(self):
         if not self._is_linux_runtime():

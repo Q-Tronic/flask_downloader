@@ -742,6 +742,21 @@ EOF
     fi
 }
 
+verify_privileged_sudoers_rules() {
+    local systemctl_binary
+    systemctl_binary="$(command -v systemctl || printf '/bin/systemctl')"
+
+    if [[ -z "$SUDOERS_RULE_FILE" || ! -f "$SUDOERS_RULE_FILE" ]]; then
+        log_fail "Nie utworzono pliku sudoers dla użytkownika usługi: ${APP_USER}."
+        abort_install
+    fi
+
+    su -s /bin/sh -c "sudo -n '$systemctl_binary' show --property=Version systemd >/dev/null" "$APP_USER" >>"$INSTALL_LOG" 2>&1 || {
+        log_fail "Użytkownik usługi ${APP_USER} nie dostał działających uprawnień sudo do systemctl."
+        abort_install
+    }
+}
+
 ensure_git_safe_directory() {
     git config --global --add safe.directory "$APP_DIR" >/dev/null 2>&1 || true
 }
@@ -1186,6 +1201,7 @@ log_ok "Pakiety systemowe są gotowe."
 begin_step "Tworzenie użytkownika i uprawnień"
 ensure_group_and_user
 run_logged "Konfiguruję uprawnienia sudoers dla usera usługi" install_privileged_sudoers_rules
+run_logged "Weryfikuję uprawnienia sudo dla usera usługi" verify_privileged_sudoers_rules
 mkdir -p "$APP_DIR" "$APP_DIR/backups" "$STORAGE_ROOT"
 mkdir -p "$STORAGE_ROOT/flask_downloader" "$STORAGE_ROOT/flask_downloader_audio" "$STORAGE_ROOT/flask_downloader_users/admin/video" "$STORAGE_ROOT/flask_downloader_users/admin/audio"
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" "$STORAGE_ROOT"
