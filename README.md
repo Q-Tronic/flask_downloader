@@ -28,6 +28,7 @@ sudo apt-get update && sudo apt-get install -y curl ca-certificates && sudo bash
 Instalator:
 - pyta o port aplikacji,
 - pyta o hasło pierwszego konta `admin`,
+- pozwala zostawić domyślne ścieżki, użytkownika usługi i nazwy usług przez zwykłe `Enter`,
 - tworzy usługę `systemd`,
 - instaluje `yt-dlp`,
 - instaluje zarządzany `ffmpeg`,

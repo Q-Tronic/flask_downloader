@@ -53,6 +53,14 @@ DLNA_SERVICE_NAME="$DLNA_SERVICE_NAME_DEFAULT"
 RADIO_SERVICE_NAME="$RADIO_SERVICE_NAME_DEFAULT"
 RADIO_STATION_TEMPLATE="$RADIO_STATION_TEMPLATE_DEFAULT"
 INTERACTIVE_INPUT_FD=""
+STATUS_LINE_VISIBLE=0
+
+trim_text() {
+    local text="$1"
+    text="${text#"${text%%[![:space:]]*}"}"
+    text="${text%"${text##*[![:space:]]}"}"
+    printf "%s" "$text"
+}
 
 ensure_interactive_input_fd() {
     if [[ -n "$INTERACTIVE_INPUT_FD" ]]; then
@@ -72,7 +80,7 @@ ensure_interactive_input_fd() {
     return 1
 }
 
-render_bar() {
+render_bar_text() {
     local percent="$1"
     local total_slots=28
     local filled=$(( percent * total_slots / 100 ))
@@ -83,33 +91,215 @@ render_bar() {
     printf "[%s] %3s%%" "$bar" "$percent"
 }
 
+render_bar() {
+    render_bar_text "$1"
+}
+
+clear_screen_if_interactive() {
+    if [[ -t 1 && -n "${TERM:-}" && "${TERM}" != "dumb" ]] && command -v clear >/dev/null 2>&1; then
+        clear >/dev/null 2>&1 || true
+    fi
+}
+
+format_elapsed() {
+    local seconds="${1:-0}"
+    if ! [[ "$seconds" =~ ^[0-9]+$ ]]; then
+        seconds=0
+    fi
+    printf "%02d:%02d" $(( seconds / 60 )) $(( seconds % 60 ))
+}
+
+step_percent_from_local() {
+    local local_percent="${1:-0}"
+    local start_percent=$(( (CURRENT_STEP - 1) * 100 / TOTAL_STEPS ))
+    local end_percent=$(( CURRENT_STEP * 100 / TOTAL_STEPS ))
+    local step_span=$(( end_percent - start_percent ))
+
+    if ! [[ "$local_percent" =~ ^[0-9]+$ ]]; then
+        local_percent=0
+    fi
+    if (( local_percent < 0 )); then
+        local_percent=0
+    elif (( local_percent > 100 )); then
+        local_percent=100
+    fi
+
+    printf "%d" $(( start_percent + (step_span * local_percent / 100) ))
+}
+
+show_live_status() {
+    if [[ ! -t 1 ]]; then
+        return 0
+    fi
+
+    local local_percent="${1:-0}"
+    local activity_label="$2"
+    local activity_detail="${3:-}"
+    local elapsed_seconds="${4:-0}"
+    local overall_percent
+    local line
+
+    overall_percent="$(step_percent_from_local "$local_percent")"
+    line="${C_MUTED}$(render_bar_text "$overall_percent")${C_RESET} ${activity_label}"
+    if [[ -n "$activity_detail" ]]; then
+        line="${line} ${C_MUTED}|${C_RESET} ${activity_detail}"
+    fi
+    line="${line} ${C_MUTED}|${C_RESET} ${C_BLUE}trwa $(format_elapsed "$elapsed_seconds")${C_RESET}"
+    printf "\r\033[2K%b" "$line"
+    STATUS_LINE_VISIBLE=1
+}
+
+clear_live_status() {
+    if [[ "${STATUS_LINE_VISIBLE:-0}" -eq 1 ]]; then
+        printf "\r\033[2K"
+        STATUS_LINE_VISIBLE=0
+    fi
+}
+
+parse_bootstrap_progress_line() {
+    local line="$1"
+    BOOTSTRAP_PROGRESS_PERCENT=""
+    BOOTSTRAP_PROGRESS_STATUS=""
+    BOOTSTRAP_PROGRESS_DETAIL=""
+
+    if [[ "$line" =~ ^\[[^]]+\][[:space:]]+([0-9]+)(\.[0-9]+)?%[[:space:]]+([^|]+?)([[:space:]]+\|[[:space:]]+(.*))?$ ]]; then
+        BOOTSTRAP_PROGRESS_PERCENT="${BASH_REMATCH[1]}"
+        BOOTSTRAP_PROGRESS_STATUS="$(trim_text "${BASH_REMATCH[3]}")"
+        BOOTSTRAP_PROGRESS_DETAIL="$(trim_text "${BASH_REMATCH[5]:-}")"
+        return 0
+    fi
+
+    return 1
+}
+
+stream_bootstrap_log_updates() {
+    local task_log="$1"
+    local processed_lines="$2"
+    local description="$3"
+    local start_ts="$4"
+    local total_lines=0
+    local line=""
+    local elapsed=0
+
+    if [[ -f "$task_log" ]]; then
+        total_lines="$(wc -l < "$task_log" 2>/dev/null || printf '0')"
+    fi
+
+    if ! [[ "$total_lines" =~ ^[0-9]+$ ]]; then
+        total_lines=0
+    fi
+
+    if (( total_lines <= processed_lines )); then
+        printf "%s" "$processed_lines"
+        return 0
+    fi
+
+    while IFS= read -r line; do
+        printf "%s\n" "$line" >>"$INSTALL_LOG"
+        elapsed=$(( $(date +%s) - start_ts ))
+        if parse_bootstrap_progress_line "$line"; then
+            show_live_status "${BOOTSTRAP_PROGRESS_PERCENT:-0}" "${BOOTSTRAP_PROGRESS_STATUS:-$description}" "${BOOTSTRAP_PROGRESS_DETAIL:-$description}" "$elapsed"
+        elif [[ -n "$line" ]]; then
+            show_live_status 0 "$description" "$line" "$elapsed"
+        fi
+    done < <(sed -n "$((processed_lines + 1)),${total_lines}p" "$task_log")
+
+    printf "%s" "$total_lines"
+}
+
 print_banner() {
+    clear_screen_if_interactive
     printf "\n${C_BLUE}${C_BOLD}VLC Stream Extractor${C_RESET} ${C_MUTED}instalator Debiana${C_RESET}\n"
     printf "${C_MUTED}Automatyczna instalacja aplikacji, .env, usług i pierwszego administratora.${C_RESET}\n\n"
 }
 
 log_info() {
+    clear_live_status
     printf "${C_CYAN}INFO${C_RESET} %s\n" "$1"
 }
 
 log_ok() {
+    clear_live_status
     printf "${C_GREEN}OK${C_RESET}   %s\n" "$1"
 }
 
 log_warn() {
+    clear_live_status
     printf "${C_YELLOW}WARN${C_RESET} %s\n" "$1"
 }
 
 log_fail() {
+    clear_live_status
     printf "${C_RED}ERR${C_RESET}  %s\n" "$1" >&2
 }
 
 run_logged() {
     local description="$1"
     shift
+    local cmd_pid=0
+    local command_ok=0
+    local spinner_frames='|/-\'
+    local spinner_index=0
+    local start_ts
+    local elapsed=0
+    local spinner_frame=""
 
     log_info "$description"
-    if "$@" >>"$INSTALL_LOG" 2>&1; then
+    start_ts="$(date +%s)"
+    set +e
+    "$@" >>"$INSTALL_LOG" 2>&1 &
+    cmd_pid=$!
+    while kill -0 "$cmd_pid" 2>/dev/null; do
+        elapsed=$(( $(date +%s) - start_ts ))
+        spinner_frame="${spinner_frames:spinner_index:1}"
+        show_live_status 0 "$description" "pracuję ${spinner_frame}" "$elapsed"
+        spinner_index=$(( (spinner_index + 1) % 4 ))
+        sleep 1
+    done
+    wait "$cmd_pid"
+    command_ok=$?
+    set -e
+    clear_live_status
+
+    if [[ "$command_ok" -eq 0 ]]; then
+        return 0
+    fi
+
+    log_fail "${description}. Szczegóły: ${INSTALL_LOG}"
+    tail -n 40 "$INSTALL_LOG" >&2 || true
+    exit 1
+}
+
+run_logged_streamed() {
+    local description="$1"
+    shift
+    local task_log=""
+    local processed_lines=0
+    local cmd_pid=0
+    local command_ok=0
+    local start_ts
+
+    log_info "$description"
+    task_log="$(mktemp)"
+    start_ts="$(date +%s)"
+    set +e
+    "$@" >"$task_log" 2>&1 &
+    cmd_pid=$!
+    while kill -0 "$cmd_pid" 2>/dev/null; do
+        processed_lines="$(stream_bootstrap_log_updates "$task_log" "$processed_lines" "$description" "$start_ts")"
+        if [[ "$processed_lines" == "0" ]]; then
+            show_live_status 0 "$description" "uruchamiam zadanie" $(( $(date +%s) - start_ts ))
+        fi
+        sleep 1
+    done
+    wait "$cmd_pid"
+    command_ok=$?
+    processed_lines="$(stream_bootstrap_log_updates "$task_log" "$processed_lines" "$description" "$start_ts")"
+    set -e
+    clear_live_status
+    rm -f "$task_log"
+
+    if [[ "$command_ok" -eq 0 ]]; then
         return 0
     fi
 
@@ -672,6 +862,8 @@ detect_debian
 log_ok "Wykryto Debian ${DEBIAN_MAJOR}."
 
 begin_step "Pobranie ustawień instalacji"
+log_info "Wciśnij Enter, aby zostawić wartość domyślną pokazaną w nawiasie kwadratowym."
+log_info "Jeśli nic nie wpiszesz przy porcie, po 30 sekundach zostanie użyte ustawienie domyślne."
 APP_DIR="$(resolve_install_value "$APP_DIR" "$APP_DIR_FROM_ARG" 'Katalog aplikacji' "$APP_DIR_DEFAULT")"
 STORAGE_ROOT="$(resolve_install_value "$STORAGE_ROOT" "$STORAGE_ROOT_FROM_ARG" 'Katalog bazowy danych użytkowników' "$STORAGE_ROOT_DEFAULT")"
 APP_USER="$(resolve_install_value "$APP_USER" "$APP_USER_FROM_ARG" 'Użytkownik Linux dla usługi' "$APP_USER_DEFAULT")"
@@ -725,7 +917,7 @@ log_ok "Zebrano ustawienia instalacyjne."
 begin_step "Instalacja pakietów systemowych"
 export DEBIAN_FRONTEND=noninteractive
 run_logged "Odświeżam listę pakietów apt" apt-get update -y
-run_logged "Instaluję pakiety systemowe" apt-get install -y git ca-certificates curl python3 python3-venv python3-pip cifs-utils iproute2 ffmpegthumbnailer
+run_logged "Instaluję pakiety systemowe" apt-get install -y git ca-certificates curl gnupg python3 python3-venv python3-pip cifs-utils iproute2 ffmpegthumbnailer
 log_ok "Pakiety systemowe są gotowe."
 
 begin_step "Tworzenie użytkownika i uprawnień"
@@ -771,21 +963,21 @@ chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/data"
 log_ok "Pliki data/config.json, data/jobs.json, data/users.json i data/radios.json są gotowe."
 
 begin_step "Aktualizacja yt-dlp"
-run_logged "Aktualizuję yt-dlp w środowisku aplikacji" run_app_bootstrap_task yt_dlp
+run_logged_streamed "Aktualizuję yt-dlp w środowisku aplikacji" run_app_bootstrap_task yt_dlp
 log_ok "yt-dlp jest gotowy."
 
 begin_step "Instalacja ffmpeg"
-run_logged "Instaluję zarządzany ffmpeg dla aplikacji" run_app_bootstrap_task ffmpeg
+run_logged_streamed "Instaluję zarządzany ffmpeg dla aplikacji" run_app_bootstrap_task ffmpeg
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/tools" 2>/dev/null || true
 log_ok "ffmpeg jest gotowy."
 
 begin_step "Instalacja DLNA"
-run_logged "Instaluję backend Gerbera i przygotowuję runtime DLNA" run_app_bootstrap_task dlna
+run_logged_streamed "Instaluję backend Gerbera i przygotowuję runtime DLNA" run_app_bootstrap_task dlna
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/tools" 2>/dev/null || true
 log_ok "Backend DLNA jest gotowy."
 
 begin_step "Instalacja backendu radia"
-run_logged "Instaluję backend Icecast + Liquidsoap" run_app_bootstrap_task radio
+run_logged_streamed "Instaluję backend Icecast + Liquidsoap" run_app_bootstrap_task radio
 run_logged "Weryfikuję końcowe sekrety backendu radia po bootstrapie pakietów" ensure_random_radio_runtime_secrets
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/data" "$APP_DIR/tools" 2>/dev/null || true
 log_ok "Backend radia jest gotowy."
