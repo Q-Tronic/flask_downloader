@@ -361,13 +361,17 @@ initialize_data_files() {
 import json
 import os
 import secrets
+import sys
 import time
 from werkzeug.security import generate_password_hash
-from flask_downloader.stores.radios_store import default_radio_store
 
 app_dir = os.environ["APP_DIR"]
 admin_password = os.environ["ADMIN_PASSWORD"]
 storage_root = os.environ["STORAGE_ROOT"]
+sys.path.insert(0, app_dir)
+
+from flask_downloader.stores.radios_store import default_radio_store
+
 data_dir = os.path.join(app_dir, "data")
 os.makedirs(data_dir, exist_ok=True)
 
