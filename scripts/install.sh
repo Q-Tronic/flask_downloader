@@ -138,7 +138,11 @@ prompt_default() {
     local prompt="$1"
     local default_value="$2"
     local answer
-    read -r -p "${prompt} [${default_value}]: " answer || true
+    if [[ -r /dev/tty ]]; then
+        read -r -p "${prompt} [${default_value}]: " answer < /dev/tty || true
+    else
+        read -r -p "${prompt} [${default_value}]: " answer || true
+    fi
     printf "%s" "${answer:-$default_value}"
 }
 
@@ -147,7 +151,11 @@ prompt_timeout_default() {
     local default_value="$2"
     local timeout_seconds="$3"
     local answer=""
-    read -r -t "$timeout_seconds" -p "${prompt} [${default_value}] (timeout ${timeout_seconds}s): " answer || true
+    if [[ -r /dev/tty ]]; then
+        read -r -t "$timeout_seconds" -p "${prompt} [${default_value}] (timeout ${timeout_seconds}s): " answer < /dev/tty || true
+    else
+        read -r -t "$timeout_seconds" -p "${prompt} [${default_value}] (timeout ${timeout_seconds}s): " answer || true
+    fi
     printf "%s" "${answer:-$default_value}"
 }
 
@@ -155,9 +163,17 @@ prompt_admin_password() {
     local first=""
     local second=""
     while true; do
-        read -r -s -p "Hasło dla pierwszego użytkownika admin: " first
+        if [[ -r /dev/tty ]]; then
+            read -r -s -p "Hasło dla pierwszego użytkownika admin: " first < /dev/tty
+        else
+            read -r -s -p "Hasło dla pierwszego użytkownika admin: " first
+        fi
         printf "\n"
-        read -r -s -p "Powtórz hasło admina: " second
+        if [[ -r /dev/tty ]]; then
+            read -r -s -p "Powtórz hasło admina: " second < /dev/tty
+        else
+            read -r -s -p "Powtórz hasło admina: " second
+        fi
         printf "\n"
         if [[ -z "$first" || "${#first}" -lt 4 ]]; then
             log_warn "Hasło musi mieć co najmniej 4 znaki."
