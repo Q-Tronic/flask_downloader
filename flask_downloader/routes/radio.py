@@ -5,6 +5,7 @@ def register_radio_routes(app, deps):
     require_authenticated_page = deps["require_authenticated_page"]
     require_authenticated_json = deps["require_authenticated_json"]
     is_admin_authenticated = deps["is_admin_authenticated"]
+    create_sse_json_response = deps["create_sse_json_response"]
     render_page = deps["render_page"]
     start_maintenance_task = deps["start_maintenance_task"]
     resolve_view_scope_username = deps["resolve_view_scope_username"]
@@ -69,6 +70,24 @@ def register_radio_routes(app, deps):
 
         scope_username = resolve_radio_scope(request.args.get("user"))
         return radio_state_response(owner_username=scope_username)
+
+    @app.route("/api/radio/stream", methods=["GET"])
+    def api_radio_stream():
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        scope_username = resolve_radio_scope(request.args.get("user"))
+        return create_sse_json_response(
+            lambda: {
+                "ok": True,
+                "message": "",
+                "kind": "success",
+                "radio_state": get_radio_page_state(owner_username=scope_username),
+            },
+            interval_seconds=2.0,
+            retry_ms=2500,
+        )
 
     @app.route("/logs-radio-backend", methods=["GET"])
     def radio_backend_logs_page():

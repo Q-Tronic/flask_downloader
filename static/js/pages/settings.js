@@ -6,7 +6,7 @@
     }
 
     const pollIntervalMs = 1000;
-    let pollTimer = null;
+    let liveSubscription = null;
     const dirtyForms = new Set();
 
     function escapeHtml(value) {
@@ -624,9 +624,16 @@
         applyRadioServiceState(state.radio_backend_service_state || null);
     }
 
-    async function fetchSettingsState() {
+    function applyLiveSettingsPayload(data) {
         if (dirtyForms.size > 0) {
             return;
+        }
+        applyStateEnvelope(data);
+    }
+
+    async function fetchSettingsState() {
+        if (dirtyForms.size > 0) {
+            return null;
         }
         try {
             const response = await fetch("/api/settings/state", {
@@ -636,12 +643,14 @@
                 }
             });
             if (!response.ok) {
-                return;
+                return null;
             }
             const data = await response.json();
             applyStateEnvelope(data);
+            return data;
         } catch (err) {
             // Stan ustawień jest odświeżany w tle. W razie chwilowego błędu po prostu próbujemy ponownie później.
+            return null;
         }
     }
 
@@ -712,7 +721,11 @@
                 showToast(data.message, data.kind || "success");
             }
 
-            fetchSettingsState();
+            if (liveSubscription && typeof liveSubscription.refreshNow === "function") {
+                liveSubscription.refreshNow();
+            } else {
+                fetchSettingsState();
+            }
         } catch (err) {
             showToast("Nie udało się połączyć z serwerem.", "error");
         } finally {
@@ -768,13 +781,29 @@
     document.addEventListener("change", handleProtectedFormInput, true);
 
     renderUserRows(pageData.userRows || []);
-    fetchSettingsState();
-    pollTimer = setInterval(fetchSettingsState, pollIntervalMs);
+    if (window.appLive && typeof window.appLive.createSubscription === "function") {
+        liveSubscription = window.appLive.createSubscription({
+            url: "/api/settings/stream",
+            fallbackIntervalMs: pollIntervalMs,
+            fetchFallback: fetchSettingsState,
+            onData: applyLiveSettingsPayload,
+        });
+        liveSubscription.start();
+    } else {
+        fetchSettingsState();
+        const settingsRefreshTimer = setInterval(fetchSettingsState, pollIntervalMs);
+        liveSubscription = {
+            stop: function() {
+                clearInterval(settingsRefreshTimer);
+            },
+            refreshNow: fetchSettingsState,
+        };
+    }
 
     if (typeof window.registerPageCleanup === "function") {
         window.registerPageCleanup(function() {
-            if (pollTimer) {
-                clearInterval(pollTimer);
+            if (liveSubscription && typeof liveSubscription.stop === "function") {
+                liveSubscription.stop();
             }
             document.removeEventListener("submit", handleSettingsSubmit, true);
             document.removeEventListener("input", handleProtectedFormInput, true);

@@ -11,6 +11,7 @@
 </head>
 <body>
 <script src="{{ url_for('static', filename='js/page-bootstrap.js') }}?v={{ asset_version }}"></script>
+<script src="{{ url_for('static', filename='js/live-updates.js') }}?v={{ asset_version }}"></script>
 {% include 'partials/_toast.html' %}
 <div class="app-shell">
     {% include 'partials/_sidebar.html' %}

@@ -8,7 +8,7 @@
     let currentState = pageData.initialState || {};
     let currentLibraryResults = {items: [], total_items: 0, shown_items: 0, collection_id: "", collection_name: "", mode: "files"};
     let searchTimer = null;
-    let pollTimer = null;
+    let liveSubscription = null;
     let activeTab = "serwer";
     let activeCollectionId = "";
     let libraryMode = "files";
@@ -725,9 +725,18 @@
         try {
             const data = await fetchJson("/api/dlna/state");
             applyState(data.state, !!rerenderAll);
+            return data;
         } catch (err) {
             // Tło tylko odświeża stan. Przy chwilowym błędzie po prostu próbujemy ponownie później.
+            return null;
         }
+    }
+
+    function applyLiveDlnaPayload(data) {
+        if (!data || !data.state) {
+            return;
+        }
+        applyState(data.state, false);
     }
 
     async function refreshLibraryResults() {
@@ -1142,14 +1151,36 @@
     document.addEventListener("submit", handleRootSubmit, true);
     document.getElementById("dlnaLibraryQuery").addEventListener("input", handleSearchInput);
 
-    pollTimer = setInterval(function() {
-        refreshState(false);
-    }, 1500);
+    if (window.appLive && typeof window.appLive.createSubscription === "function") {
+        liveSubscription = window.appLive.createSubscription({
+            url: "/api/dlna/stream",
+            fallbackIntervalMs: 1500,
+            fetchFallback: function() {
+                return refreshState(false);
+            },
+            onData: applyLiveDlnaPayload,
+        });
+        liveSubscription.start();
+    } else {
+        const dlnaRefreshTimer = setInterval(function() {
+            refreshState(false);
+        }, 1500);
+        liveSubscription = {
+            stop: function() {
+                clearInterval(dlnaRefreshTimer);
+            },
+            refreshNow: function() {
+                return refreshState(false);
+            },
+        };
+    }
 
     if (typeof window.registerPageCleanup === "function") {
         window.registerPageCleanup(function() {
             clearTimeout(searchTimer);
-            clearInterval(pollTimer);
+            if (liveSubscription && typeof liveSubscription.stop === "function") {
+                liveSubscription.stop();
+            }
             document.removeEventListener("click", handleRootClick);
             document.removeEventListener("change", handleRootChange, true);
             document.removeEventListener("submit", handleRootSubmit, true);

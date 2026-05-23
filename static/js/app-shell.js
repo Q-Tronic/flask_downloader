@@ -1,5 +1,7 @@
 (function() {
     window.appUi = window.appUi || {};
+    var appUi = window.appUi;
+    var downloadToastLiveSubscription = null;
 
     function hideFlashToast() {
         var toast = document.getElementById("uiToast");
@@ -207,25 +209,76 @@
     }
 
     async function refreshDownloadToasts() {
+        if (!isAuthenticatedShell()) {
+            renderDownloadToasts([]);
+            return null;
+        }
         try {
             var response = await fetch("/api/jobs", {headers: {"Accept": "application/json"}});
             if (!response.ok) {
-                return;
+                return null;
             }
             var data = await response.json();
-            renderDownloadToasts(data.jobs || []);
+            applyDownloadToastPayload(data);
+            return data;
         } catch (err) {
             // Toasty postępu są dodatkiem do UI, więc w razie błędu po prostu je pomijamy.
+            return null;
         }
     }
 
-    window.appUi.showToast = showUiToast;
-    window.appUi.hideFlashToast = hideFlashToast;
-    window.appUi.refreshDownloadToasts = refreshDownloadToasts;
+    function isAuthenticatedShell() {
+        return !!document.querySelector('form[action="/admin/logout"]');
+    }
+
+    function applyDownloadToastPayload(data) {
+        renderDownloadToasts((data && data.jobs) || []);
+    }
+
+    function stopDownloadToastLive() {
+        if (downloadToastLiveSubscription && typeof downloadToastLiveSubscription.stop === "function") {
+            downloadToastLiveSubscription.stop();
+        }
+        downloadToastLiveSubscription = null;
+    }
+
+    function ensureDownloadToastLive() {
+        stopDownloadToastLive();
+
+        if (!isAuthenticatedShell()) {
+            renderDownloadToasts([]);
+            return;
+        }
+
+        if (window.appLive && typeof window.appLive.createSubscription === "function") {
+            downloadToastLiveSubscription = window.appLive.createSubscription({
+                url: "/api/jobs/stream",
+                fallbackIntervalMs: 2000,
+                fetchFallback: refreshDownloadToasts,
+                onData: applyDownloadToastPayload,
+            });
+            downloadToastLiveSubscription.start();
+            return;
+        }
+
+        refreshDownloadToasts();
+        var toastRefreshTimer = setInterval(refreshDownloadToasts, 2000);
+        downloadToastLiveSubscription = {
+            stop: function() {
+                clearInterval(toastRefreshTimer);
+            },
+            refreshNow: refreshDownloadToasts,
+        };
+    }
+
+    appUi.showToast = showUiToast;
+    appUi.hideFlashToast = hideFlashToast;
+    appUi.refreshDownloadToasts = refreshDownloadToasts;
+    appUi.ensureDownloadToastLive = ensureDownloadToastLive;
+    appUi.stopDownloadToastLive = stopDownloadToastLive;
 
     hideFlashToast();
-    refreshDownloadToasts();
-    setInterval(refreshDownloadToasts, 2000);
+    ensureDownloadToastLive();
 })();
 
 (function() {
@@ -314,6 +367,9 @@
         syncFlashToast(nextDocument);
         activateScripts(currentShell);
         updateHistory(options && options.url, (options && options.historyMode) || "replace");
+        if (appUi.ensureDownloadToastLive) {
+            appUi.ensureDownloadToastLive();
+        }
 
         var restoreTop = options && options.scrollToTop;
         var scrollY = options && typeof options.scrollY === "number" ? options.scrollY : null;

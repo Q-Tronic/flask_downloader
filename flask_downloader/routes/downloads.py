@@ -6,6 +6,7 @@ from flask import Response, jsonify, request, send_from_directory
 
 def register_download_routes(app, deps):
     require_authenticated_json = deps["require_authenticated_json"]
+    create_sse_json_response = deps["create_sse_json_response"]
     resolve_view_scope_username = deps["resolve_view_scope_username"]
     get_users_snapshot = deps["get_users_snapshot"]
     is_admin_authenticated = deps["is_admin_authenticated"]
@@ -60,6 +61,30 @@ def register_download_routes(app, deps):
             raise ValueError("Nie masz dostępu do wybranego bukietu DLNA.")
         return collection_id
 
+    def build_files_payload(scope_username):
+        available_users = [item["username"] for item in get_users_snapshot()] if is_admin_authenticated() else []
+        return {
+            "logged_in": True,
+            "current_user": get_current_username(),
+            "admin_logged_in": is_admin_authenticated(),
+            "available_users": available_users,
+            "scope_username": scope_username,
+            "mount": get_mount_info(auto_remount=True, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
+            "files": get_server_files(scope_username=scope_username),
+        }
+
+    def build_jobs_payload(scope_username):
+        available_users = [item["username"] for item in get_users_snapshot()] if is_admin_authenticated() else []
+        return {
+            "logged_in": True,
+            "current_user": get_current_username(),
+            "admin_logged_in": is_admin_authenticated(),
+            "available_users": available_users,
+            "scope_username": scope_username,
+            "mount": get_mount_info(auto_remount=True, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
+            "jobs": filter_jobs_for_viewer(get_jobs_snapshot(), scope_username=scope_username),
+        }
+
     def enqueue_download_job(*, page_url, result, fmt, owner_username, overwrite_existing=False, auto_dlna_collection_id=""):
         duplicate_state = get_source_download_match_state(result, fmt.get("format_id"), owner_username=owner_username)
         storage_kind = normalize_storage_kind(fmt.get("media_kind") or "video")
@@ -89,16 +114,20 @@ def register_download_routes(app, deps):
             return auth_error
 
         scope_username = resolve_view_scope_username(request.args.get("user"), "files_view_scope")
-        available_users = [item["username"] for item in get_users_snapshot()] if is_admin_authenticated() else []
-        return jsonify({
-            "logged_in": True,
-            "current_user": get_current_username(),
-            "admin_logged_in": is_admin_authenticated(),
-            "available_users": available_users,
-            "scope_username": scope_username,
-            "mount": get_mount_info(auto_remount=True, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
-            "files": get_server_files(scope_username=scope_username),
-        })
+        return jsonify(build_files_payload(scope_username))
+
+    @app.route("/api/files/stream", methods=["GET"])
+    def api_files_stream():
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        scope_username = resolve_view_scope_username(request.args.get("user"), "files_view_scope")
+        return create_sse_json_response(
+            lambda: build_files_payload(scope_username),
+            interval_seconds=3.0,
+            retry_ms=3000,
+        )
 
     @app.route("/api/jobs", methods=["GET"])
     def api_jobs():
@@ -107,16 +136,20 @@ def register_download_routes(app, deps):
             return auth_error
 
         scope_username = resolve_view_scope_username(request.args.get("user"), "jobs_view_scope")
-        available_users = [item["username"] for item in get_users_snapshot()] if is_admin_authenticated() else []
-        return jsonify({
-            "logged_in": True,
-            "current_user": get_current_username(),
-            "admin_logged_in": is_admin_authenticated(),
-            "available_users": available_users,
-            "scope_username": scope_username,
-            "mount": get_mount_info(auto_remount=True, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
-            "jobs": filter_jobs_for_viewer(get_jobs_snapshot(), scope_username=scope_username),
-        })
+        return jsonify(build_jobs_payload(scope_username))
+
+    @app.route("/api/jobs/stream", methods=["GET"])
+    def api_jobs_stream():
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        scope_username = resolve_view_scope_username(request.args.get("user"), "jobs_view_scope")
+        return create_sse_json_response(
+            lambda: build_jobs_payload(scope_username),
+            interval_seconds=2.0,
+            retry_ms=3000,
+        )
 
     @app.route("/api/source-detail", methods=["GET"])
     def api_source_detail():

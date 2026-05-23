@@ -25,7 +25,7 @@
     const PROTECTED_FORM_IDS = new Set(["radioGlobalForm", "radioStationForm", "radioErdsForm", "radioLibraryForm"]);
 
     let currentState = pageData.initialState || {};
-    let pollTimer = null;
+    let liveSubscription = null;
     let libraryFilter = "";
     let libraryMode = "manual";
     let libraryDraftRows = [];
@@ -1055,14 +1055,23 @@
 
     async function refreshState() {
         if (hasProtectedFormActivity()) {
-            return;
+            return null;
         }
         try {
             const data = await fetchJson("/api/radio/state" + buildScopeQuery());
             applyState(data.radio_state || {}, { preserveLibraryDraft: true });
+            return data;
         } catch (err) {
             // Tło tylko odświeża stan.
+            return null;
         }
+    }
+
+    function applyLiveRadioPayload(data) {
+        if (hasProtectedFormActivity()) {
+            return;
+        }
+        applyState((data && data.radio_state) || {}, { preserveLibraryDraft: true });
     }
 
     function setLibraryMode(mode, includeEverything) {
@@ -1500,6 +1509,9 @@
                         forceLibraryReset: true,
                         resetDirtyForms: ["global", "station", "erds"],
                     });
+                    if (liveSubscription && typeof liveSubscription.restart === "function") {
+                        liveSubscription.restart();
+                    }
                 })
                 .catch(function(err) {
                     showToast(String(err), "error");
@@ -1549,13 +1561,35 @@
     root.addEventListener("input", handleRootInput, true);
     root.addEventListener("change", handleRootChange, true);
 
-    pollTimer = window.setInterval(function() {
+    if (window.appLive && typeof window.appLive.createSubscription === "function") {
+        liveSubscription = window.appLive.createSubscription({
+            buildUrl: function() {
+                return "/api/radio/stream" + buildScopeQuery();
+            },
+            fallbackIntervalMs: 4000,
+            fetchFallback: refreshState,
+            onData: applyLiveRadioPayload,
+        });
+        liveSubscription.start();
+    } else {
         refreshState();
-    }, 4000);
+        const radioRefreshTimer = window.setInterval(function() {
+            refreshState();
+        }, 4000);
+        liveSubscription = {
+            stop: function() {
+                window.clearInterval(radioRefreshTimer);
+            },
+            restart: refreshState,
+            refreshNow: refreshState,
+        };
+    }
 
     if (typeof window.registerPageCleanup === "function") {
         window.registerPageCleanup(function() {
-            window.clearInterval(pollTimer);
+            if (liveSubscription && typeof liveSubscription.stop === "function") {
+                liveSubscription.stop();
+            }
             if (uploadHideTimer) {
                 window.clearTimeout(uploadHideTimer);
                 uploadHideTimer = null;

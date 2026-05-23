@@ -41,6 +41,7 @@ def register_application_routes(app, context):
 
     register_download_routes(app, {
         "require_authenticated_json": context["require_authenticated_json"],
+        "create_sse_json_response": context["create_sse_json_response"],
         "resolve_view_scope_username": context["resolve_view_scope_username"],
         "get_users_snapshot": context["get_users_snapshot"],
         "is_admin_authenticated": context["is_admin_authenticated"],
@@ -99,6 +100,7 @@ def register_application_routes(app, context):
         "is_admin_authenticated": context["is_admin_authenticated"],
         "wants_json_response": context["wants_json_response"],
         "require_admin_json": context["require_admin_json"],
+        "create_sse_json_response": context["create_sse_json_response"],
         "set_ui_flash": context["set_ui_flash"],
         "render_page": context["render_page"],
         "SETTINGS_CONTENT_TEMPLATE": context["SETTINGS_CONTENT_TEMPLATE"],
@@ -134,6 +136,7 @@ def register_application_routes(app, context):
         "is_admin_authenticated": context["is_admin_authenticated"],
         "wants_json_response": context["wants_json_response"],
         "require_admin_json": context["require_admin_json"],
+        "create_sse_json_response": context["create_sse_json_response"],
         "set_ui_flash": context["set_ui_flash"],
         "render_page": context["render_page"],
         "DLNA_CONTENT_TEMPLATE": context["DLNA_CONTENT_TEMPLATE"],
@@ -170,6 +173,7 @@ def register_application_routes(app, context):
         "require_authenticated_page": context["require_authenticated_page"],
         "require_authenticated_json": context["require_authenticated_json"],
         "is_admin_authenticated": context["is_admin_authenticated"],
+        "create_sse_json_response": context["create_sse_json_response"],
         "render_page": context["render_page"],
         "set_ui_flash": context["set_ui_flash"],
         "resolve_view_scope_username": context["resolve_view_scope_username"],

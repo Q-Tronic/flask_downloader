@@ -5,6 +5,7 @@ def register_dlna_routes(app, deps):
     is_admin_authenticated = deps["is_admin_authenticated"]
     wants_json_response = deps["wants_json_response"]
     require_admin_json = deps["require_admin_json"]
+    create_sse_json_response = deps["create_sse_json_response"]
     set_ui_flash = deps["set_ui_flash"]
     render_page = deps["render_page"]
     DLNA_CONTENT_TEMPLATE = deps["DLNA_CONTENT_TEMPLATE"]
@@ -76,6 +77,21 @@ def register_dlna_routes(app, deps):
             "ok": True,
             "state": get_dlna_page_state(),
         })
+
+    @app.route("/api/dlna/stream", methods=["GET"])
+    def api_dlna_stream():
+        auth_error = require_admin_json()
+        if auth_error:
+            return auth_error
+
+        return create_sse_json_response(
+            lambda: {
+                "ok": True,
+                "state": get_dlna_page_state(),
+            },
+            interval_seconds=1.5,
+            retry_ms=2500,
+        )
 
     @app.route("/api/dlna/library", methods=["GET"])
     def api_dlna_library():

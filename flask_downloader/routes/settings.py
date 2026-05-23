@@ -5,6 +5,7 @@ def register_settings_routes(app, deps):
     is_admin_authenticated = deps["is_admin_authenticated"]
     wants_json_response = deps["wants_json_response"]
     require_admin_json = deps["require_admin_json"]
+    create_sse_json_response = deps["create_sse_json_response"]
     set_ui_flash = deps["set_ui_flash"]
     render_page = deps["render_page"]
     SETTINGS_CONTENT_TEMPLATE = deps["SETTINGS_CONTENT_TEMPLATE"]
@@ -590,6 +591,21 @@ def register_settings_routes(app, deps):
             "ok": True,
             "state": get_settings_page_state(include_user_rows=True),
         })
+
+    @app.route("/api/settings/stream", methods=["GET"])
+    def api_settings_stream():
+        auth_error = require_admin_json()
+        if auth_error:
+            return auth_error
+
+        return create_sse_json_response(
+            lambda: {
+                "ok": True,
+                "state": get_settings_page_state(include_user_rows=True),
+            },
+            interval_seconds=1.0,
+            retry_ms=2500,
+        )
 
     @app.route("/settings/restart-service", methods=["POST"])
     def settings_restart_service():

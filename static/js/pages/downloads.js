@@ -31,6 +31,8 @@ function showToast(message, kind) {
     }
 }
 
+let liveSubscription = null;
+
 async function deleteServerFile(filename, storageKind, ownerUsername) {
     if (!confirm("Usunąć plik z serwera?")) {
         return;
@@ -176,10 +178,20 @@ function renderMount(mount) {
     }
 }
 
+function applyFilesPayload(data) {
+    renderMount(data.mount);
+    renderScope(Boolean(data.admin_logged_in), data.available_users || [], data.scope_username || "", data.current_user || "");
+    renderFiles(data.files || [], Boolean(data.admin_logged_in));
+}
+
 async function handleDownloadsClick(event) {
     const scopeSelect = event.target.closest("#filesScopeSelect");
     if (scopeSelect) {
-        refreshData();
+        if (liveSubscription && typeof liveSubscription.restart === "function") {
+            liveSubscription.restart();
+        } else {
+            refreshData();
+        }
         return;
     }
 
@@ -213,24 +225,47 @@ async function refreshData() {
         const query = scopeValue ? ("?user=" + encodeURIComponent(scopeValue)) : "";
         const response = await fetch("/api/files" + query);
         const data = await response.json();
-        renderMount(data.mount);
-        renderScope(Boolean(data.admin_logged_in), data.available_users || [], data.scope_username || "", data.current_user || "");
-        renderFiles(data.files || [], Boolean(data.admin_logged_in));
+        applyFilesPayload(data);
+        return data;
     } catch (err) {
         document.getElementById("files").innerHTML =
             '<div class="empty">Błąd odczytu plików: ' + escapeHtml(err) + '</div>';
+        return null;
     }
 }
 
-refreshData();
+function buildStreamUrl() {
+    const scopeSelect = document.getElementById("filesScopeSelect");
+    const scopeValue = scopeSelect && scopeSelect.value ? scopeSelect.value : "";
+    return "/api/files/stream" + (scopeValue ? ("?user=" + encodeURIComponent(scopeValue)) : "");
+}
+
 document.addEventListener("click", handleDownloadsClick);
 document.addEventListener("change", handleDownloadsClick);
 
-const downloadsRefreshTimer = setInterval(refreshData, 3000);
+if (window.appLive && typeof window.appLive.createSubscription === "function") {
+    liveSubscription = window.appLive.createSubscription({
+        buildUrl: buildStreamUrl,
+        fallbackIntervalMs: 3000,
+        fetchFallback: refreshData,
+        onData: applyFilesPayload,
+    });
+    liveSubscription.start();
+} else {
+    refreshData();
+    liveSubscription = {
+        stop: function() {
+            clearInterval(downloadsRefreshTimer);
+        },
+    };
+    var downloadsRefreshTimer = setInterval(refreshData, 3000);
+}
 
 if (typeof window.registerPageCleanup === "function") {
     window.registerPageCleanup(function() {
-        clearInterval(downloadsRefreshTimer);
+        if (liveSubscription && typeof liveSubscription.stop === "function") {
+            liveSubscription.stop();
+        }
         document.removeEventListener("click", handleDownloadsClick);
         document.removeEventListener("change", handleDownloadsClick);
     });

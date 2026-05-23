@@ -28,6 +28,8 @@ function formatPercent(job) {
     return job.progress_percent.toFixed(1) + "%";
 }
 
+let liveSubscription = null;
+
 async function deleteJob(jobId) {
     if (!confirm("Usunąć to zadanie z listy?")) {
         return;
@@ -186,10 +188,20 @@ function renderMount(mount) {
     }
 }
 
+function applyJobsPayload(data) {
+    renderMount(data.mount);
+    renderScope(Boolean(data.admin_logged_in), data.available_users || [], data.scope_username || "", data.current_user || "");
+    renderJobs(data.jobs || [], Boolean(data.admin_logged_in));
+}
+
 async function handleJobsClick(event) {
     const scopeSelect = event.target.closest("#jobsScopeSelect");
     if (scopeSelect) {
-        refreshData();
+        if (liveSubscription && typeof liveSubscription.restart === "function") {
+            liveSubscription.restart();
+        } else {
+            refreshData();
+        }
         return;
     }
 
@@ -220,24 +232,47 @@ async function refreshData() {
         const query = scopeValue ? ("?user=" + encodeURIComponent(scopeValue)) : "";
         const response = await fetch("/api/jobs" + query);
         const data = await response.json();
-        renderMount(data.mount);
-        renderScope(Boolean(data.admin_logged_in), data.available_users || [], data.scope_username || "", data.current_user || "");
-        renderJobs(data.jobs || [], Boolean(data.admin_logged_in));
+        applyJobsPayload(data);
+        return data;
     } catch (err) {
         document.getElementById("jobs").innerHTML =
             '<div class="empty">Błąd odczytu statusów: ' + escapeHtml(err) + '</div>';
+        return null;
     }
 }
 
-refreshData();
+function buildStreamUrl() {
+    const scopeSelect = document.getElementById("jobsScopeSelect");
+    const scopeValue = scopeSelect && scopeSelect.value ? scopeSelect.value : "";
+    return "/api/jobs/stream" + (scopeValue ? ("?user=" + encodeURIComponent(scopeValue)) : "");
+}
+
 document.addEventListener("click", handleJobsClick);
 document.addEventListener("change", handleJobsClick);
 
-const jobsRefreshTimer = setInterval(refreshData, 2000);
+if (window.appLive && typeof window.appLive.createSubscription === "function") {
+    liveSubscription = window.appLive.createSubscription({
+        buildUrl: buildStreamUrl,
+        fallbackIntervalMs: 2000,
+        fetchFallback: refreshData,
+        onData: applyJobsPayload,
+    });
+    liveSubscription.start();
+} else {
+    refreshData();
+    liveSubscription = {
+        stop: function() {
+            clearInterval(jobsRefreshTimer);
+        },
+    };
+    var jobsRefreshTimer = setInterval(refreshData, 2000);
+}
 
 if (typeof window.registerPageCleanup === "function") {
     window.registerPageCleanup(function() {
-        clearInterval(jobsRefreshTimer);
+        if (liveSubscription && typeof liveSubscription.stop === "function") {
+            liveSubscription.stop();
+        }
         document.removeEventListener("click", handleJobsClick);
         document.removeEventListener("change", handleJobsClick);
     });
