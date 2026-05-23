@@ -143,7 +143,7 @@
                 emitStatus("open");
             };
 
-            eventSource.onmessage = function(event) {
+            function handleEventMessage(event) {
                 stopPolling();
                 clearReconnectTimer();
                 if (!event || !event.data) {
@@ -154,7 +154,10 @@
                 } catch (err) {
                     // Wadliwa pojedyncza wiadomość nie powinna zrywać całego streamu.
                 }
-            };
+            }
+
+            eventSource.onmessage = handleEventMessage;
+            eventSource.addEventListener("state", handleEventMessage);
 
             eventSource.onerror = function() {
                 emitStatus("error");
