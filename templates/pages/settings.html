@@ -70,10 +70,24 @@
     </div>
 </section>
 
-<section id="settingsMaintenancePage" class="page-card">
-    <h2 class="section-title">Panel utrzymania</h2>
-    <p class="muted">Najważniejsze ustawienia, aktualizacja <code>yt-dlp</code>, instalacja <code>ffmpeg</code> oraz kontrola usługi Flask są zebrane w jednym miejscu.</p>
-    <div class="settings-grid">
+<section id="settingsMaintenancePage" class="page-card settings-workspace-card">
+    <div class="settings-workspace-head">
+        <div>
+            <h2 class="section-title">Panel konfiguracji</h2>
+            <p id="settingsWorkspaceNote" class="muted">
+                Pięć zwartych zakładek porządkuje dane, użytkowników, narzędzia pobierania, serwisy multimedialne i backup.
+            </p>
+        </div>
+        <div id="settingsTabStrip" class="settings-tab-strip">
+            <button type="button" class="settings-tab-button" data-settings-tab="storage">Dane</button>
+            <button type="button" class="settings-tab-button" data-settings-tab="users">Użytkownicy</button>
+            <button type="button" class="settings-tab-button" data-settings-tab="downloads">Pobieranie</button>
+            <button type="button" class="settings-tab-button" data-settings-tab="media">Media</button>
+            <button type="button" class="settings-tab-button" data-settings-tab="system">System</button>
+        </div>
+    </div>
+
+    <section class="settings-panel" data-settings-panel="storage">
         <div class="stack-card">
             <div class="card-heading">
                 <div class="card-title">Serwer danych i miejsce zapisu</div>
@@ -155,7 +169,9 @@
                 </div>
             </form>
         </div>
+    </section>
 
+    <section class="settings-panel" data-settings-panel="users" hidden>
         <div class="stack-card">
             <div class="card-heading">
                 <div class="card-title">Użytkownicy i role</div>
@@ -256,8 +272,10 @@
                 {% endfor %}
             </div>
         </div>
+    </section>
 
-        <div class="settings-side-stack">
+    <section class="settings-panel" data-settings-panel="downloads" hidden>
+        <div class="settings-panel-stack">
             <div class="stack-card update-card">
                 <div class="card-heading">
                     <div class="card-title">Aktualizacja yt-dlp</div>
@@ -423,7 +441,11 @@
                     <div id="ffmpegTaskDetail" class="maintenance-task-detail">{{ maintenance_tasks.ffmpeg_install.detail or "Po uruchomieniu instalacji zobaczysz tutaj kolejne etapy pracy." }}</div>
                 </div>
             </div>
+        </div>
+    </section>
 
+    <section class="settings-panel" data-settings-panel="media" hidden>
+        <div class="settings-panel-stack">
             <div class="stack-card service-card">
                 <div class="card-heading">
                     <div class="card-title">Serwer DLNA</div>
@@ -620,6 +642,70 @@
                     <a class="btn btn-secondary" href="/logs-radio-backend" target="_blank" rel="noopener">Log backendu radia</a>
                 </div>
             </div>
+        </div>
+    </section>
+
+    <section class="settings-panel" data-settings-panel="system" hidden>
+        <div class="settings-panel-stack">
+            <div class="stack-card service-card">
+                <div class="card-heading">
+                    <div class="card-title">Eksport konfiguracji</div>
+                    <div class="card-subtitle">
+                        Pobierzesz archiwum <code>ZIP</code> z bieżącymi store'ami aplikacji i jednocześnie zapiszesz jego kopię w katalogu <code>backups/</code> na serwerze.
+                    </div>
+                </div>
+
+                <div class="settings-overview-grid">
+                    <div class="overview-tile">
+                        <span>Zawartość eksportu</span>
+                        <strong><code>config / jobs / users / radios</code></strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Sekrety .env</span>
+                        <strong>Pomijane</strong>
+                    </div>
+                </div>
+
+                <div class="inline-note">
+                    To jest szybki snapshot konfiguracji panelu. Plik <code>.env</code> i systemowe poświadczenia montowania udziału sieciowego nie są dołączane automatycznie.
+                </div>
+
+                <div class="actions" style="margin-top: 4px;">
+                    <a class="btn btn-secondary" href="/settings/export-config">Pobierz ZIP konfiguracji</a>
+                </div>
+            </div>
+
+            <div class="stack-card service-card">
+                <div class="card-heading">
+                    <div class="card-title">Przywracanie konfiguracji</div>
+                    <div class="card-subtitle">
+                        Wgrasz wcześniej pobrany eksport <code>ZIP</code>. Przed nadpisaniem store'ów panel automatycznie zapisze backup bieżącego stanu w katalogu <code>backups/</code>.
+                    </div>
+                </div>
+
+                <div class="settings-overview-grid">
+                    <div class="overview-tile">
+                        <span>Obsługiwane pliki</span>
+                        <strong><code>config / jobs / users / radios</code></strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Aktywne pobrania</span>
+                        <strong>Muszą być zatrzymane</strong>
+                    </div>
+                </div>
+
+                <div class="inline-note">
+                    Import nie przywraca automatycznie <code>.env</code> ani systemowych poświadczeń montowania SMB. ZIP powinien pochodzić z tego panelu lub zachowywać ten sam układ plików.
+                </div>
+
+                <form id="settingsImportConfigForm" method="post" action="/settings/import-config" enctype="multipart/form-data" class="auth-form" data-settings-async="true" data-reset-after-success="true" data-busy-label="Przywracanie konfiguracji..." data-confirm-message="Przywrócić konfigurację z wybranego archiwum ZIP?">
+                    <div class="field-group">
+                        <label class="field-label" for="settingsImportConfigFile">Archiwum ZIP</label>
+                        <input id="settingsImportConfigFile" type="file" name="config_bundle" accept=".zip,application/zip" required>
+                    </div>
+                    <button type="submit" class="btn btn-secondary full-width">Przywróć ZIP konfiguracji</button>
+                </form>
+            </div>
 
             <div class="stack-card service-card">
                 <div class="card-heading">
@@ -672,7 +758,7 @@
                 </form>
             </div>
         </div>
-    </div>
+    </section>
 </section>
 
 <script>

@@ -44,6 +44,9 @@ ALLOWED_UPLOAD_EXTENSIONS = {
 
 
 class RadioService:
+    PLAYBACK_HISTORY_MAX_ITEMS = 10
+    MANUAL_QUEUE_MAX_ITEMS = 25
+
     def __init__(
         self,
         *,
@@ -68,6 +71,7 @@ class RadioService:
         get_daily_download_dir,
         ensure_share_ready,
         format_ts,
+        build_calendar_placeholder_values=None,
     ):
         self._radios_store = radios_store
         self._radios_lock = radios_lock
@@ -90,6 +94,7 @@ class RadioService:
         self._get_daily_download_dir = get_daily_download_dir
         self._ensure_share_ready = ensure_share_ready
         self._format_ts = format_ts
+        self._build_calendar_placeholder_values = build_calendar_placeholder_values
 
     @staticmethod
     def format_bytes(size):
@@ -170,6 +175,32 @@ class RadioService:
             excluded_paths.append(relative_path)
         if excluded_paths != list(((station or {}).get("library") or {}).get("excluded_relative_paths") or []):
             station.setdefault("library", {})["excluded_relative_paths"] = excluded_paths
+            changed = True
+        manual_queue = dict((station or {}).get("manual_queue") or {})
+        for queue_key in ("play_now", "queue_next"):
+            cleaned_queue = []
+            for item in manual_queue.get(queue_key) or []:
+                relative_path = self._safe_relative_download_path(item.get("relative_path") or "")
+                path = self._resolve_download_path(relative_path, "audio", owner_username=owner_username)
+                if not relative_path or not path or not os.path.isfile(path):
+                    changed = True
+                    continue
+                cleaned_queue.append(item)
+            if cleaned_queue != list(manual_queue.get(queue_key) or []):
+                station.setdefault("manual_queue", {})[queue_key] = cleaned_queue
+                changed = True
+        history_items = []
+        for item in (((station or {}).get("history") or {}).get("items")) or []:
+            next_item = dict(item or {})
+            relative_path = self._safe_relative_download_path(next_item.get("relative_path") or "")
+            if relative_path:
+                path = self._resolve_download_path(relative_path, "audio", owner_username=owner_username)
+                if not path or not os.path.isfile(path):
+                    next_item["relative_path"] = ""
+                    changed = True
+            history_items.append(next_item)
+        if history_items != list((((station or {}).get("history") or {}).get("items")) or []):
+            station.setdefault("history", {})["items"] = history_items
             changed = True
         return changed
 
@@ -336,6 +367,11 @@ class RadioService:
             "rekord_sluchaczy": str(listener_record),
             "rekord_sluchaczy_odmiana": self.format_listener_word(listener_record),
         }
+        if callable(self._build_calendar_placeholder_values):
+            try:
+                replacements.update(dict(self._build_calendar_placeholder_values(now_ts=now_ts) or {}))
+            except Exception:
+                pass
 
         def render_template(template_text):
             rendered = str(template_text or "")
@@ -397,6 +433,14 @@ class RadioService:
     def _get_library_mode_label(mode):
         return "Cała biblioteka użytkownika" if str(mode or "") == "all_user_audio" else "Ręczny wybór"
 
+    @staticmethod
+    def _get_manual_queue_mode_label(mode):
+        return "Teraz" if str(mode or "") == "play_now" else "Następny"
+
+    @staticmethod
+    def _get_history_source_mode_label(mode):
+        return "Live DJ" if str(mode or "") == "live" else "AutoDJ"
+
     def _get_station_library_mode(self, station):
         return self._normalize_library_mode_value((((station or {}).get("library") or {}).get("mode") or "manual"))
 
@@ -416,6 +460,23 @@ class RadioService:
                 continue
             item_map[normalized_path.lower()] = dict(item or {})
         return item_map
+
+    def _get_station_manual_queue(self, station):
+        manual_queue = dict((station or {}).get("manual_queue") or {})
+        return {
+            "play_now": list(manual_queue.get("play_now") or []),
+            "queue_next": list(manual_queue.get("queue_next") or []),
+        }
+
+    @staticmethod
+    def _find_catalog_item_by_relative_path(catalog_rows, relative_path):
+        normalized_path = str(relative_path or "").strip().lower()
+        if not normalized_path:
+            return None
+        for item in catalog_rows or []:
+            if str(item.get("relative_path") or "").strip().lower() == normalized_path:
+                return item
+        return None
 
     def _build_audio_catalog_rows(self, owner_username):
         owner = self._normalize_owner(owner_username)
@@ -526,6 +587,69 @@ class RadioService:
             })
         return rows
 
+    def build_manual_queue_rows(self, owner_username, station):
+        owner = self._normalize_owner(owner_username)
+        catalog_rows = self._build_audio_catalog_rows(owner)
+        queue_rows = []
+        manual_queue = self._get_station_manual_queue(station)
+        for queue_mode in ("play_now", "queue_next"):
+            for index, item in enumerate(manual_queue.get(queue_mode) or []):
+                relative_path = self._safe_relative_download_path(item.get("relative_path") or "")
+                catalog_item = self._find_catalog_item_by_relative_path(catalog_rows, relative_path) or {}
+                display_title = normalize_text(item.get("display_title"), max_len=180) or str(catalog_item.get("default_display_title") or os.path.splitext(os.path.basename(relative_path))[0])
+                requested_at_text = ""
+                try:
+                    requested_at_value = float(item.get("requested_at") or 0.0)
+                except Exception:
+                    requested_at_value = 0.0
+                if requested_at_value > 0:
+                    requested_at_text = self._format_ts(requested_at_value)
+                queue_rows.append({
+                    "id": str(item.get("id") or ""),
+                    "relative_path": relative_path,
+                    "display_title": display_title,
+                    "display_path": str(catalog_item.get("display_path") or relative_path),
+                    "user_relative_path": str(catalog_item.get("user_relative_path") or ""),
+                    "queue_mode": queue_mode,
+                    "queue_mode_label": self._get_manual_queue_mode_label(queue_mode),
+                    "requested_at_text": requested_at_text,
+                    "url": str(catalog_item.get("url") or ""),
+                })
+                if len(queue_rows) >= self.MANUAL_QUEUE_MAX_ITEMS:
+                    return queue_rows
+        return queue_rows
+
+    def build_history_rows(self, owner_username, station):
+        owner = self._normalize_owner(owner_username)
+        catalog_rows = self._build_audio_catalog_rows(owner)
+        history_rows = []
+        history_items = list((((station or {}).get("history") or {}).get("items")) or [])
+        for item in history_items[: self.PLAYBACK_HISTORY_MAX_ITEMS]:
+            relative_path = self._safe_relative_download_path(item.get("relative_path") or "")
+            catalog_item = self._find_catalog_item_by_relative_path(catalog_rows, relative_path) or {}
+            played_at_text = ""
+            try:
+                played_at_value = float(item.get("played_at") or 0.0)
+            except Exception:
+                played_at_value = 0.0
+            if played_at_value > 0:
+                played_at_text = self._format_ts(played_at_value)
+            history_rows.append({
+                "id": str(item.get("id") or ""),
+                "display_title": normalize_text(item.get("display_title"), max_len=180),
+                "relative_path": relative_path,
+                "display_path": str(catalog_item.get("display_path") or relative_path),
+                "source_mode": str(item.get("source_mode") or "autodj"),
+                "source_mode_label": self._get_history_source_mode_label(item.get("source_mode")),
+                "queue_mode": str(item.get("queue_mode") or ""),
+                "queue_mode_label": self._get_manual_queue_mode_label(item.get("queue_mode")) if item.get("queue_mode") else "",
+                "program_name": normalize_text(item.get("program_name"), max_len=180),
+                "dj_name": normalize_text(item.get("dj_name"), max_len=120),
+                "played_at_text": played_at_text,
+                "url": str(catalog_item.get("url") or ""),
+            })
+        return history_rows
+
     def get_page_state(self, owner_username=""):
         target_owner = self._normalize_owner(owner_username or self._get_current_username() or "")
         self.cleanup_missing_library_items(target_owner)
@@ -535,6 +659,8 @@ class RadioService:
         library_rows = self.build_station_library_rows(target_owner, station) if station else []
         library_table_rows = self.build_library_table_rows(target_owner, station) if station else self._build_audio_catalog_rows(target_owner)
         available_audio_rows = self.build_available_audio_rows(target_owner, station)
+        manual_queue_rows = self.build_manual_queue_rows(target_owner, station) if station else []
+        history_rows = self.build_history_rows(target_owner, station) if station else []
         erds_preview = self.build_erds_preview_lines(
             station,
             listener_count=0,
@@ -570,6 +696,8 @@ class RadioService:
             "available_audio_rows": available_audio_rows,
             "library_rows": library_rows,
             "library_table_rows": library_table_rows,
+            "manual_queue_rows": manual_queue_rows,
+            "history_rows": history_rows,
             "library_mode": library_mode,
             "library_mode_label": self._get_library_mode_label(library_mode),
             "erds_preview_lines": erds_preview,
@@ -580,10 +708,16 @@ class RadioService:
                 {"name": "{godzina}", "description": "Bieżąca godzina, np. 14:11"},
                 {"name": "{dzientygodnia}", "description": "Nazwa dnia małą literą, np. niedziela"},
                 {"name": "{Dzientygodnia}", "description": "Nazwa dnia wielką literą, np. Niedziela"},
+                {"name": "{imieniny}", "description": "Imieniny dnia w mianowniku, np. Jan, Piotr, Paweł."},
+                {"name": "{imieniny_odmiana}", "description": "Imieniny dnia w odmienionej formie, np. Jana, Piotra, Pawła."},
                 {"name": "{nazwa_stacji}", "description": "Nazwa bieżącej stacji radiowej"},
                 {"name": "{audycja}", "description": "Nazwa audycji ustawiona w panelu stacji."},
                 {"name": "{dj}", "description": "Nazwa DJ-a / AutoDJ ustawiona w panelu stacji."},
                 {"name": "{utwor}", "description": "Aktualnie grany utwór z AutoDJ. Przy wejściu live taki tekst nie jest wysyłany na serwer."},
+                {"name": "{swieta}", "description": "Najbliższe święto ustawowe w Polsce."},
+                {"name": "{dni_do_swiat}", "description": "Za ile dni wypada najbliższe święto ustawowe w Polsce."},
+                {"name": "{swieta_nietypowe}", "description": "Najbliższe święto nietypowe z lokalnej bazy kalendarza."},
+                {"name": "{dni_do_swiat_nietypowych}", "description": "Za ile dni wypada najbliższe święto nietypowe."},
                 {"name": "{max_sluchaczy}", "description": "Limit słuchaczy z konfiguracji serwera radia."},
                 {"name": "{rekord_sluchaczy}", "description": "Najwyższa zapisana liczba słuchaczy jednocześnie dla tego radia."},
                 {"name": "{rekord_sluchaczy_odmiana}", "description": "Odmiana rekordu słuchaczy: osoba / osoby / osób."},
@@ -596,9 +730,63 @@ class RadioService:
                 "download_count": download_count,
                 "available_audio_count": len(library_table_rows),
                 "erds_preview_count": len(erds_preview),
+                "manual_queue_count": len(manual_queue_rows),
+                "history_count": len(history_rows),
                 "library_mode": library_mode,
                 "library_mode_label": self._get_library_mode_label(library_mode),
             },
+        }
+
+    def enqueue_manual_track(self, owner_username, relative_path, *, queue_mode="queue_next"):
+        owner = self._normalize_owner(owner_username)
+        normalized_relative_path = self._safe_relative_download_path(relative_path)
+        if not normalized_relative_path:
+            raise ValueError("Nie wybrano poprawnego pliku audio do kolejki ręcznej.")
+
+        ok, message = self._ensure_share_ready(auto_remount=True)
+        if not ok:
+            raise ValueError("Udział sieciowy offline. %s" % message)
+
+        normalized_queue_mode = "play_now" if str(queue_mode or "").strip().lower() == "play_now" else "queue_next"
+        catalog_item = self._find_catalog_item_by_relative_path(self._build_audio_catalog_rows(owner), normalized_relative_path)
+        if not catalog_item:
+            raise ValueError("Wybrany plik audio nie istnieje już w bibliotece użytkownika.")
+
+        display_title = str(catalog_item.get("default_display_title") or catalog_item.get("name") or os.path.splitext(os.path.basename(normalized_relative_path))[0]).strip()
+        queue_item = {
+            "id": "queue_" + uuid.uuid4().hex[:12],
+            "relative_path": normalized_relative_path,
+            "display_title": display_title,
+            "queue_mode": normalized_queue_mode,
+            "requested_at": time.time(),
+        }
+
+        with self._radios_lock:
+            station = (self._radios_store.get("stations") or {}).get(owner)
+            if not isinstance(station, dict):
+                raise ValueError("Najpierw utwórz radio dla tego użytkownika.")
+            manual_queue = station.setdefault("manual_queue", {})
+            play_now_items = [
+                item for item in list(manual_queue.get("play_now") or [])
+                if str(item.get("relative_path") or "").strip().lower() != normalized_relative_path.lower()
+            ]
+            next_items = [
+                item for item in list(manual_queue.get("queue_next") or [])
+                if str(item.get("relative_path") or "").strip().lower() != normalized_relative_path.lower()
+            ]
+            if normalized_queue_mode == "play_now":
+                play_now_items.insert(0, queue_item)
+            else:
+                next_items.append(queue_item)
+            manual_queue["play_now"] = play_now_items[: self.MANUAL_QUEUE_MAX_ITEMS]
+            manual_queue["queue_next"] = next_items[: self.MANUAL_QUEUE_MAX_ITEMS]
+            self._write_radio_store_locked()
+
+        return {
+            "queue_mode": normalized_queue_mode,
+            "queue_mode_label": self._get_manual_queue_mode_label(normalized_queue_mode),
+            "display_title": display_title,
+            "relative_path": normalized_relative_path,
         }
 
     def add_library_paths(self, owner_username, relative_paths, source_type="download"):
@@ -877,6 +1065,25 @@ class RadioService:
                     item for item in items
                     if str(item.get("relative_path") or "").strip() != safe_relative_path
                 ]
+                manual_queue = dict((station or {}).get("manual_queue") or {})
+                play_now_items = [
+                    item for item in list(manual_queue.get("play_now") or [])
+                    if str(item.get("relative_path") or "").strip() != safe_relative_path
+                ]
+                next_queue_items = [
+                    item for item in list(manual_queue.get("queue_next") or [])
+                    if str(item.get("relative_path") or "").strip() != safe_relative_path
+                ]
+                history_items = []
+                history_changed = False
+                for item in list((((station or {}).get("history") or {}).get("items")) or []):
+                    if str(item.get("relative_path") or "").strip() == safe_relative_path:
+                        history_changed = True
+                        next_item = dict(item or {})
+                        next_item["relative_path"] = ""
+                        history_items.append(next_item)
+                        continue
+                    history_items.append(item)
                 excluded_paths = [
                     path_value for path_value in list(((station or {}).get("library") or {}).get("excluded_relative_paths") or [])
                     if str(path_value or "").strip() != safe_relative_path
@@ -884,8 +1091,17 @@ class RadioService:
                 if len(next_items) != len(items):
                     station.setdefault("library", {})["items"] = next_items
                     changed = True
+                if play_now_items != list(manual_queue.get("play_now") or []):
+                    station.setdefault("manual_queue", {})["play_now"] = play_now_items
+                    changed = True
+                if next_queue_items != list(manual_queue.get("queue_next") or []):
+                    station.setdefault("manual_queue", {})["queue_next"] = next_queue_items
+                    changed = True
                 if excluded_paths != list(((station or {}).get("library") or {}).get("excluded_relative_paths") or []):
                     station.setdefault("library", {})["excluded_relative_paths"] = excluded_paths
+                    changed = True
+                if history_changed:
+                    station.setdefault("history", {})["items"] = history_items
                     changed = True
             if changed:
                 self._write_radio_store_locked()
@@ -927,8 +1143,47 @@ class RadioService:
                     changed = True
                 elif raw_path:
                     next_excluded_paths.append(raw_path)
+            next_play_now = []
+            for item in ((station or {}).get("manual_queue") or {}).get("play_now") or []:
+                next_item = dict(item or {})
+                parsed = self._parse_managed_relative_path(next_item.get("relative_path") or "")
+                if parsed and parsed.get("owner_username") == previous_owner:
+                    next_item["relative_path"] = self._build_managed_relative_path(
+                        next_owner,
+                        parsed.get("storage_kind") or "audio",
+                        parsed.get("user_relative_path") or "",
+                    )
+                    changed = True
+                next_play_now.append(next_item)
+            next_queue_next = []
+            for item in ((station or {}).get("manual_queue") or {}).get("queue_next") or []:
+                next_item = dict(item or {})
+                parsed = self._parse_managed_relative_path(next_item.get("relative_path") or "")
+                if parsed and parsed.get("owner_username") == previous_owner:
+                    next_item["relative_path"] = self._build_managed_relative_path(
+                        next_owner,
+                        parsed.get("storage_kind") or "audio",
+                        parsed.get("user_relative_path") or "",
+                    )
+                    changed = True
+                next_queue_next.append(next_item)
+            next_history_items = []
+            for item in ((station or {}).get("history") or {}).get("items") or []:
+                next_item = dict(item or {})
+                parsed = self._parse_managed_relative_path(next_item.get("relative_path") or "")
+                if parsed and parsed.get("owner_username") == previous_owner:
+                    next_item["relative_path"] = self._build_managed_relative_path(
+                        next_owner,
+                        parsed.get("storage_kind") or "audio",
+                        parsed.get("user_relative_path") or "",
+                    )
+                    changed = True
+                next_history_items.append(next_item)
             station.setdefault("library", {})["items"] = next_items
             station.setdefault("library", {})["excluded_relative_paths"] = next_excluded_paths
+            station.setdefault("manual_queue", {})["play_now"] = next_play_now
+            station.setdefault("manual_queue", {})["queue_next"] = next_queue_next
+            station.setdefault("history", {})["items"] = next_history_items
             stations[next_owner] = normalize_station_entry(
                 station,
                 owner_username=next_owner,

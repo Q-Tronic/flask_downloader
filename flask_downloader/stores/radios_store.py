@@ -7,15 +7,19 @@ import time
 import uuid
 
 
-RADIO_SCHEMA_VERSION = 3
+RADIO_SCHEMA_VERSION = 4
 VALID_STREAM_FORMATS = ("mp3", "aac")
 VALID_PLAY_MODES = ("random", "sequential")
 VALID_ERDS_MODES = ("titles", "fixed", "rotation")
 VALID_LIBRARY_ITEM_ROLES = ("music", "jingle", "promo")
 VALID_LIBRARY_SOURCE_TYPES = ("download", "upload")
 VALID_LIBRARY_MODES = ("manual", "all_user_audio")
+VALID_MANUAL_QUEUE_MODES = ("play_now", "queue_next")
+VALID_HISTORY_SOURCE_MODES = ("autodj", "live")
 AAC_MIN_BITRATE_KBPS = 160
 AAC_DEFAULT_BITRATE_KBPS = 192
+RADIO_PLAYBACK_HISTORY_MAX_ITEMS = 40
+RADIO_MANUAL_QUEUE_MAX_ITEMS = 25
 
 
 def slugify_text(value, default="radio"):
@@ -134,6 +138,14 @@ def default_station_entry(owner_username):
             "mode": "manual",
             "excluded_relative_paths": [],
             "items": [],
+        },
+        "manual_queue": {
+            "play_now": [],
+            "queue_next": [],
+        },
+        "history": {
+            "items": [],
+            "last_signature": "",
         },
         "stats": {
             "listener_record": 0,
@@ -269,6 +281,20 @@ def normalize_station_stats(raw, defaults):
     return payload
 
 
+def normalize_manual_queue_mode(value, default="queue_next"):
+    mode = normalize_text(value, max_len=20).lower() or default
+    if mode not in VALID_MANUAL_QUEUE_MODES:
+        return default
+    return mode
+
+
+def normalize_history_source_mode(value, default="autodj"):
+    mode = normalize_text(value, max_len=20).lower() or default
+    if mode not in VALID_HISTORY_SOURCE_MODES:
+        return default
+    return mode
+
+
 def normalize_autopilot_config(raw, defaults):
     payload = dict(defaults or {})
     if isinstance(raw, dict):
@@ -374,6 +400,123 @@ def normalize_library_item(raw, *, owner_username, parse_managed_relative_path):
     }
 
 
+def normalize_manual_queue_item(raw, *, owner_username, parse_managed_relative_path):
+    if not isinstance(raw, dict):
+        return None
+
+    relative_path = normalize_text(raw.get("relative_path"), max_len=600).replace("\\", "/").strip("/")
+    if not relative_path:
+        return None
+
+    parsed = parse_managed_relative_path(relative_path)
+    if not parsed:
+        return None
+    if str(parsed.get("owner_username") or "").strip() != str(owner_username or "").strip():
+        return None
+    if str(parsed.get("storage_kind") or "").strip() != "audio":
+        return None
+
+    queue_item_id = normalize_text(raw.get("id"), max_len=64) or ("q_" + uuid.uuid4().hex[:12])
+    display_title = normalize_text(raw.get("display_title"), max_len=180)
+    queue_mode = normalize_manual_queue_mode(raw.get("queue_mode"), default="queue_next")
+    try:
+        requested_at = float(raw.get("requested_at") or 0.0)
+    except Exception:
+        requested_at = 0.0
+
+    return {
+        "id": queue_item_id,
+        "relative_path": relative_path,
+        "display_title": display_title,
+        "queue_mode": queue_mode,
+        "requested_at": requested_at or time.time(),
+    }
+
+
+def normalize_manual_queue(raw, *, owner_username, parse_managed_relative_path):
+    payload = {
+        "play_now": [],
+        "queue_next": [],
+    }
+    if not isinstance(raw, dict):
+        return payload
+
+    for queue_mode in VALID_MANUAL_QUEUE_MODES:
+        seen_paths = set()
+        next_items = []
+        for raw_item in raw.get(queue_mode) or []:
+            normalized_item = normalize_manual_queue_item(
+                raw_item,
+                owner_username=owner_username,
+                parse_managed_relative_path=parse_managed_relative_path,
+            )
+            if not normalized_item:
+                continue
+            lowered = normalized_item["relative_path"].lower()
+            if lowered in seen_paths:
+                continue
+            seen_paths.add(lowered)
+            normalized_item["queue_mode"] = queue_mode
+            next_items.append(normalized_item)
+            if len(next_items) >= RADIO_MANUAL_QUEUE_MAX_ITEMS:
+                break
+        payload[queue_mode] = next_items
+    return payload
+
+
+def normalize_history_item(raw):
+    if not isinstance(raw, dict):
+        return None
+
+    history_item_id = normalize_text(raw.get("id"), max_len=64) or ("hist_" + uuid.uuid4().hex[:12])
+    display_title = normalize_text(raw.get("display_title"), max_len=180)
+    if not display_title:
+        return None
+    relative_path = normalize_text(raw.get("relative_path"), max_len=600).replace("\\", "/").strip("/")
+    try:
+        played_at = float(raw.get("played_at") or 0.0)
+    except Exception:
+        played_at = 0.0
+
+    return {
+        "id": history_item_id,
+        "display_title": display_title,
+        "relative_path": relative_path,
+        "source_mode": normalize_history_source_mode(raw.get("source_mode"), default="autodj"),
+        "queue_mode": normalize_manual_queue_mode(raw.get("queue_mode"), default="queue_next") if raw.get("queue_mode") else "",
+        "program_name": normalize_text(raw.get("program_name"), max_len=180),
+        "dj_name": normalize_text(raw.get("dj_name"), max_len=120),
+        "played_at": played_at or time.time(),
+    }
+
+
+def normalize_history(raw):
+    payload = {
+        "items": [],
+        "last_signature": "",
+    }
+    if not isinstance(raw, dict):
+        return payload
+
+    payload["last_signature"] = normalize_text(raw.get("last_signature"), max_len=240)
+    seen_ids = set()
+    items = []
+    for raw_item in raw.get("items") or []:
+        normalized_item = normalize_history_item(raw_item)
+        if not normalized_item:
+            continue
+        item_id = str(normalized_item.get("id") or "").strip()
+        if item_id and item_id in seen_ids:
+            continue
+        if item_id:
+            seen_ids.add(item_id)
+        items.append(normalized_item)
+        if len(items) >= RADIO_PLAYBACK_HISTORY_MAX_ITEMS:
+            break
+    payload["items"] = items
+    return payload
+
+
 def normalize_station_entry(raw, *, owner_username, parse_managed_relative_path):
     owner = str(owner_username or "").strip()
     defaults = default_station_entry(owner)
@@ -433,6 +576,13 @@ def normalize_station_entry(raw, *, owner_username, parse_managed_relative_path)
         seen_excluded.add(lowered)
         excluded_relative_paths.append(normalized_path)
 
+    manual_queue = normalize_manual_queue(
+        (raw.get("manual_queue") or {}) if isinstance(raw, dict) else {},
+        owner_username=owner,
+        parse_managed_relative_path=parse_managed_relative_path,
+    )
+    history = normalize_history((raw.get("history") or {}) if isinstance(raw, dict) else {})
+
     return {
         "owner_username": owner,
         "enabled": bool(raw.get("enabled", defaults["enabled"])),
@@ -452,6 +602,8 @@ def normalize_station_entry(raw, *, owner_username, parse_managed_relative_path)
             "excluded_relative_paths": excluded_relative_paths,
             "items": items,
         },
+        "manual_queue": manual_queue,
+        "history": history,
         "stats": stats,
     }
 

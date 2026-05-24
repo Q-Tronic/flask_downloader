@@ -1,4 +1,4 @@
-from flask import jsonify, redirect, request, url_for
+from flask import Response, jsonify, redirect, request, url_for
 
 
 def register_settings_routes(app, deps):
@@ -34,6 +34,12 @@ def register_settings_routes(app, deps):
     set_radio_backend_enabled = deps["set_radio_backend_enabled"]
     restart_radio_backend_now = deps["restart_radio_backend_now"]
     schedule_flask_service_restart = deps["schedule_flask_service_restart"]
+    build_config_export_bundle = deps["build_config_export_bundle"]
+    restore_config_bundle = deps["restore_config_bundle"]
+    get_current_username = deps["get_current_username"]
+    get_user_by_username = deps["get_user_by_username"]
+    clear_session_user = deps["clear_session_user"]
+    set_session_user = deps["set_session_user"]
     SYSTEMD_SERVICE_NAME = deps["SYSTEMD_SERVICE_NAME"]
 
     def build_storage_form_payload(form):
@@ -606,6 +612,92 @@ def register_settings_routes(app, deps):
             interval_seconds=1.0,
             retry_ms=2500,
         )
+
+    @app.route("/settings/export-config", methods=["GET"])
+    def settings_export_config():
+        if not is_admin_authenticated():
+            auth_error = require_admin_json() if request.headers.get("X-Requested-With") == "fetch" else None
+            if auth_error:
+                return auth_error
+            set_ui_flash("Zaloguj się jako administrator, aby pobrać eksport konfiguracji.", "error")
+            return redirect(url_for("index"))
+
+        bundle = build_config_export_bundle()
+        response = Response(bundle.get("content") or b"", mimetype="application/zip")
+        response.headers["Content-Disposition"] = 'attachment; filename="%s"' % str(bundle.get("filename") or "flask-downloader-config.zip")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.route("/settings/import-config", methods=["POST"])
+    def settings_import_config():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby przywrócić konfigurację z ZIP-a.", "error")
+            return redirect(url_for("index"))
+
+        uploaded_file = request.files.get("config_bundle")
+        if uploaded_file is None or not str(getattr(uploaded_file, "filename", "") or "").strip():
+            if wants_json_response():
+                return jsonify({
+                    "ok": False,
+                    "error": "Wybierz archiwum ZIP z eksportem konfiguracji.",
+                    "kind": "error",
+                    "state": get_settings_page_state(include_user_rows=True),
+                }), 400
+            set_ui_flash("Wybierz archiwum ZIP z eksportem konfiguracji.", "error")
+            return redirect(url_for("settings_page"))
+
+        try:
+            restore_result = restore_config_bundle(uploaded_file.read())
+            warnings = [str(item).strip() for item in list(restore_result.get("warnings") or []) if str(item or "").strip()]
+            summary_message = (
+                "Przywrócono konfigurację z ZIP-a: %d zadań, %d użytkowników i %d stacji radiowych. "
+                "Backup poprzedniego stanu zapisano w %s."
+            ) % (
+                int(restore_result.get("job_count") or 0),
+                int(restore_result.get("user_count") or 0),
+                int(restore_result.get("station_count") or 0),
+                str((restore_result.get("backup_bundle") or {}).get("saved_path") or "backups/"),
+            )
+            if warnings:
+                summary_message += " Ostrzeżenia: " + " | ".join(warnings)
+
+            current_username = str(get_current_username() or "").strip()
+            refreshed_user = get_user_by_username(current_username) if current_username else None
+            if refreshed_user and refreshed_user.get("role") == "admin" and refreshed_user.get("enabled", True):
+                set_session_user(refreshed_user)
+                if wants_json_response():
+                    return jsonify({
+                        "ok": True,
+                        "message": summary_message,
+                        "kind": "success",
+                        "state": get_settings_page_state(include_user_rows=True),
+                    })
+                set_ui_flash(summary_message, "success")
+                return redirect(url_for("settings_page"))
+
+            clear_session_user()
+            relogin_message = summary_message + " Bieżąca sesja administratora została odświeżona przez import, więc zaloguj się ponownie."
+            if wants_json_response():
+                return jsonify({
+                    "ok": True,
+                    "message": relogin_message,
+                    "kind": "success",
+                    "redirect_url": url_for("index"),
+                })
+            set_ui_flash(relogin_message, "success")
+            return redirect(url_for("index"))
+        except Exception as exc:
+            if wants_json_response():
+                return jsonify({
+                    "ok": False,
+                    "error": str(exc),
+                    "kind": "error",
+                    "state": get_settings_page_state(include_user_rows=True),
+                }), 400
+            set_ui_flash(str(exc), "error")
+            return redirect(url_for("settings_page"))
 
     @app.route("/settings/restart-service", methods=["POST"])
     def settings_restart_service():

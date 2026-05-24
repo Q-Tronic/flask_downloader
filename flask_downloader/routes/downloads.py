@@ -29,6 +29,8 @@ def register_download_routes(app, deps):
     create_job = deps["create_job"]
     build_download_filename = deps["build_download_filename"]
     mark_job_cancel_requested = deps["mark_job_cancel_requested"]
+    mark_job_pause_requested = deps["mark_job_pause_requested"]
+    resume_job_download = deps["resume_job_download"]
     delete_job = deps["delete_job"]
     delete_managed_file = deps["delete_managed_file"]
     build_m3u = deps["build_m3u"]
@@ -63,6 +65,7 @@ def register_download_routes(app, deps):
 
     def build_files_payload(scope_username):
         available_users = [item["username"] for item in get_users_snapshot()] if is_admin_authenticated() else []
+        filtered_jobs = filter_jobs_for_viewer(get_jobs_snapshot(), scope_username=scope_username)
         return {
             "logged_in": True,
             "current_user": get_current_username(),
@@ -71,6 +74,7 @@ def register_download_routes(app, deps):
             "scope_username": scope_username,
             "mount": get_mount_info(auto_remount=True, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
             "files": get_server_files(scope_username=scope_username),
+            "jobs": filtered_jobs,
         }
 
     def build_jobs_payload(scope_username):
@@ -88,6 +92,7 @@ def register_download_routes(app, deps):
     def enqueue_download_job(*, page_url, result, fmt, owner_username, overwrite_existing=False, auto_dlna_collection_id=""):
         duplicate_state = get_source_download_match_state(result, fmt.get("format_id"), owner_username=owner_username)
         storage_kind = normalize_storage_kind(fmt.get("media_kind") or "video")
+        is_live_capture = bool(result.get("is_live_stream") and result.get("supports_live_from_start"))
         if duplicate_state["same_quality_count"] and not overwrite_existing:
             return None, duplicate_state
 
@@ -104,6 +109,8 @@ def register_download_routes(app, deps):
             overwrite_existing=overwrite_existing,
             replace_paths=[entry["path"] for entry in duplicate_state["same_quality"]],
             auto_dlna_collection_id=auto_dlna_collection_id,
+            is_live_capture=is_live_capture,
+            live_status=str(result.get("live_status") or ""),
         )
         return job, duplicate_state
 
@@ -267,6 +274,7 @@ def register_download_routes(app, deps):
             "ok": True,
             "job_id": job["job_id"],
             "status": job["status"],
+            "is_live_capture": bool(job.get("is_live_capture")),
         }), 202
 
     @app.route("/api/quick-downloads", methods=["POST"])
@@ -353,6 +361,7 @@ def register_download_routes(app, deps):
                     "url": page_url,
                     "title": job.get("title") or "",
                     "label": job.get("label") or "",
+                    "is_live_capture": bool(job.get("is_live_capture")),
                 })
             except Exception as exc:
                 failed_items.append({
@@ -363,6 +372,7 @@ def register_download_routes(app, deps):
         return jsonify({
             "ok": bool(queued_jobs),
             "queued_count": len(queued_jobs),
+            "live_queued_count": sum(1 for item in queued_jobs if item.get("is_live_capture")),
             "failed_count": len(failed_items),
             "queued_jobs": queued_jobs,
             "failed_items": failed_items,
@@ -377,6 +387,32 @@ def register_download_routes(app, deps):
             return auth_error
 
         ok, message = mark_job_cancel_requested(job_id)
+        if not ok:
+            status_code = 404 if "Nie znaleziono zadania" in message else 403 if "Nie masz dostępu" in message else 409
+            return jsonify({"ok": False, "error": message}), status_code
+
+        return jsonify({"ok": True, "message": message})
+
+    @app.route("/api/jobs/<job_id>/pause", methods=["POST"])
+    def api_pause_job(job_id):
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        ok, message = mark_job_pause_requested(job_id)
+        if not ok:
+            status_code = 404 if "Nie znaleziono zadania" in message else 403 if "Nie masz dostępu" in message else 409
+            return jsonify({"ok": False, "error": message}), status_code
+
+        return jsonify({"ok": True, "message": message})
+
+    @app.route("/api/jobs/<job_id>/resume", methods=["POST"])
+    def api_resume_job(job_id):
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        ok, message = resume_job_download(job_id)
         if not ok:
             status_code = 404 if "Nie znaleziono zadania" in message else 403 if "Nie masz dostępu" in message else 409
             return jsonify({"ok": False, "error": message}), status_code

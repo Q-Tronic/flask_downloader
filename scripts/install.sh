@@ -14,15 +14,15 @@ C_RED="\033[38;5;203m"
 C_CYAN="\033[38;5;117m"
 C_MUTED="\033[38;5;245m"
 
-APP_DIR_DEFAULT="/opt/flask_downloader"
-STORAGE_ROOT_DEFAULT="/srv/flask_downloader/share"
-NETWORK_STORAGE_ROOT_DEFAULT="/srv/flask_downloader/share-net"
+APP_DIR_DEFAULT="${FLASK_DOWNLOADER_APP_DIR:-/opt/flask_downloader}"
+STORAGE_ROOT_DEFAULT="${FLASK_DOWNLOADER_STORAGE_ROOT:-/srv/flask_downloader/share}"
+NETWORK_STORAGE_ROOT_DEFAULT="${FLASK_DOWNLOADER_NETWORK_STORAGE_ROOT:-/srv/flask_downloader/share-net}"
 REPO_URL_DEFAULT="${FLASK_DOWNLOADER_REPO_URL:-https://github.com/Q-Tronic/flask_downloader.git}"
 BRANCH_DEFAULT="${FLASK_DOWNLOADER_BRANCH:-main}"
-APP_USER_DEFAULT="flaskdl"
-APP_GROUP_DEFAULT="flaskdl"
-APP_PORT_DEFAULT="9999"
-APP_HOST_DEFAULT="0.0.0.0"
+APP_USER_DEFAULT="${FLASK_DOWNLOADER_SERVICE_USER:-flaskdl}"
+APP_GROUP_DEFAULT="${FLASK_DOWNLOADER_SERVICE_GROUP:-$APP_USER_DEFAULT}"
+APP_PORT_DEFAULT="${FLASK_DOWNLOADER_PORT:-9999}"
+APP_HOST_DEFAULT="${FLASK_DOWNLOADER_HOST:-0.0.0.0}"
 MAX_PARALLEL_DOWNLOADS_PER_USER_DEFAULT="3"
 SERVICE_NAME_DEFAULT="${FLASK_DOWNLOADER_SERVICE_NAME:-flask-downloader}"
 DLNA_SERVICE_NAME_DEFAULT="${FLASK_DOWNLOADER_DLNA_SERVICE_NAME:-}"
@@ -56,6 +56,8 @@ RADIO_SERVICE_NAME="$RADIO_SERVICE_NAME_DEFAULT"
 RADIO_STATION_TEMPLATE="$RADIO_STATION_TEMPLATE_DEFAULT"
 INTERACTIVE_INPUT_FD=""
 STATUS_LINE_VISIBLE=0
+EXISTING_INSTALL=0
+USERS_STORE_PRESENT=0
 APP_DIR_EXISTED_BEFORE=0
 STORAGE_ROOT_EXISTED_BEFORE=0
 NETWORK_STORAGE_ROOT_EXISTED_BEFORE=0
@@ -299,7 +301,7 @@ stream_bootstrap_log_updates() {
 print_banner() {
     clear_screen_if_interactive
     printf "\n${C_BLUE}${C_BOLD}VLC Stream Extractor${C_RESET} ${C_MUTED}instalator Debiana${C_RESET}\n"
-    printf "${C_MUTED}Automatyczna instalacja aplikacji, .env, usług i pierwszego administratora.${C_RESET}\n\n"
+    printf "${C_MUTED}Automatyczna instalacja lub bezpieczna aktualizacja aplikacji, .env i usług.${C_RESET}\n\n"
 }
 
 log_info() {
@@ -801,6 +803,149 @@ current_install_uses_port() {
     [[ -n "$configured_port" && "$configured_port" == "$port" ]]
 }
 
+read_env_value() {
+    local env_file="$1"
+    local key="$2"
+    if [[ ! -f "$env_file" ]]; then
+        return 1
+    fi
+    python3 - "$env_file" "$key" <<'PY'
+import sys
+
+env_path = sys.argv[1]
+key = sys.argv[2]
+try:
+    with open(env_path, "r", encoding="utf-8") as fh:
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, value = line.split("=", 1)
+            if name.strip() != key:
+                continue
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            print(value)
+            raise SystemExit(0)
+except FileNotFoundError:
+    pass
+raise SystemExit(1)
+PY
+}
+
+detect_existing_installation() {
+    EXISTING_INSTALL=0
+    USERS_STORE_PRESENT=0
+    if [[ -f "$APP_DIR/.env" && -f "$APP_DIR/requirements.txt" && -d "$APP_DIR/flask_downloader" ]]; then
+        EXISTING_INSTALL=1
+        [[ -f "$APP_DIR/data/users.json" ]] && USERS_STORE_PRESENT=1
+    fi
+}
+
+load_existing_install_defaults() {
+    local env_file="$APP_DIR/.env"
+    local value=""
+    if (( EXISTING_INSTALL == 0 )) || [[ ! -f "$env_file" ]]; then
+        return 0
+    fi
+
+    if [[ "$STORAGE_ROOT_FROM_ARG" -eq 0 ]]; then
+        value="$(read_env_value "$env_file" "FLASK_DOWNLOADER_LOCAL_STORAGE_ROOT" || true)"
+        if [[ -n "$value" ]]; then
+            STORAGE_ROOT="$value"
+            STORAGE_ROOT_DEFAULT="$value"
+        fi
+    fi
+
+    if [[ "$APP_USER_FROM_ARG" -eq 0 ]]; then
+        value="$(read_env_value "$env_file" "FLASK_DOWNLOADER_SERVICE_USER" || true)"
+        if [[ -n "$value" ]]; then
+            APP_USER="$value"
+            APP_USER_DEFAULT="$value"
+        fi
+    fi
+
+    if [[ "$APP_GROUP_FROM_ARG" -eq 0 ]]; then
+        value="$(read_env_value "$env_file" "FLASK_DOWNLOADER_SERVICE_GROUP" || true)"
+        if [[ -n "$value" ]]; then
+            APP_GROUP="$value"
+            APP_GROUP_DEFAULT="$value"
+        fi
+    fi
+
+    if [[ "$APP_PORT_FROM_ARG" -eq 0 ]]; then
+        value="$(read_env_value "$env_file" "FLASK_DOWNLOADER_PORT" || true)"
+        if [[ -n "$value" ]]; then
+            APP_PORT="$value"
+            APP_PORT_DEFAULT="$value"
+        fi
+    fi
+
+    if [[ "$SERVICE_NAME_FROM_ARG" -eq 0 ]]; then
+        value="$(read_env_value "$env_file" "FLASK_DOWNLOADER_SERVICE_NAME" || true)"
+        if [[ -n "$value" ]]; then
+            SERVICE_NAME="$value"
+            SERVICE_NAME_DEFAULT="$value"
+        fi
+    fi
+
+    if [[ "$DLNA_SERVICE_NAME_FROM_ARG" -eq 0 ]]; then
+        value="$(read_env_value "$env_file" "FLASK_DOWNLOADER_DLNA_SERVICE_NAME" || true)"
+        if [[ -n "$value" ]]; then
+            DLNA_SERVICE_NAME="$value"
+            DLNA_SERVICE_NAME_DEFAULT="$value"
+        fi
+    fi
+
+    if [[ "$RADIO_SERVICE_NAME_FROM_ARG" -eq 0 ]]; then
+        value="$(read_env_value "$env_file" "FLASK_DOWNLOADER_RADIO_SERVICE_NAME" || true)"
+        if [[ -n "$value" ]]; then
+            RADIO_SERVICE_NAME="$value"
+            RADIO_SERVICE_NAME_DEFAULT="$value"
+        fi
+    fi
+
+    if [[ "$RADIO_STATION_TEMPLATE_FROM_ARG" -eq 0 ]]; then
+        value="$(read_env_value "$env_file" "FLASK_DOWNLOADER_RADIO_STATION_SERVICE_TEMPLATE" || true)"
+        if [[ -n "$value" ]]; then
+            RADIO_STATION_TEMPLATE="$value"
+            RADIO_STATION_TEMPLATE_DEFAULT="$value"
+        fi
+    fi
+
+    value="$(read_env_value "$env_file" "FLASK_DOWNLOADER_NETWORK_STORAGE_MOUNT_DIR" || true)"
+    if [[ -n "$value" ]]; then
+        NETWORK_STORAGE_ROOT="$value"
+        NETWORK_STORAGE_ROOT_DEFAULT="$value"
+    fi
+}
+
+build_repo_archive_url() {
+    if [[ "$REPO_URL" =~ ^https://github.com/([^/]+)/([^/]+?)(\.git)?/?$ ]]; then
+        local owner="${BASH_REMATCH[1]}"
+        local repo="${BASH_REMATCH[2]}"
+        printf "https://codeload.github.com/%s/%s/tar.gz/refs/heads/%s" "$owner" "$repo" "$BRANCH"
+        return 0
+    fi
+    log_fail "Bezpieczna aktualizacja bez Git wymaga repozytorium GitHub w formacie https://github.com/owner/repo(.git)."
+    abort_install
+}
+
+download_file() {
+    local url="$1"
+    local out_file="$2"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$out_file"
+        return 0
+    fi
+    if command -v wget >/dev/null 2>&1; then
+        wget -qO "$out_file" "$url"
+        return 0
+    fi
+    return 1
+}
+
 ensure_group_and_user() {
     if ! getent group "$APP_GROUP" >/dev/null 2>&1; then
         groupadd --system "$APP_GROUP"
@@ -883,6 +1028,69 @@ verify_storage_control_helper() {
 
 ensure_git_safe_directory() {
     git config --global --add safe.directory "$APP_DIR" >/dev/null 2>&1 || true
+}
+
+safe_update_app_code() {
+    local archive_url
+    local tmp_dir
+    local archive_file
+    local extract_dir
+    local source_dir
+    local payload_archive
+    local timestamp
+
+    archive_url="$(build_repo_archive_url)"
+    tmp_dir="$(mktemp -d)"
+    archive_file="${tmp_dir}/repo.tar.gz"
+    extract_dir="${tmp_dir}/extract"
+    payload_archive="${tmp_dir}/payload.tgz"
+    timestamp="$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$extract_dir" "$APP_DIR/backups"
+
+    download_file "$archive_url" "$archive_file" || {
+        rm -rf "$tmp_dir"
+        return 1
+    }
+
+    tar -xzf "$archive_file" -C "$extract_dir"
+    source_dir="$(find "$extract_dir" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+    if [[ -z "$source_dir" || ! -d "$source_dir" ]]; then
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    tar \
+        --exclude='.venv' \
+        --exclude='data' \
+        --exclude='.env' \
+        --exclude='tools/dlna/runtime' \
+        --exclude='tools/ffmpeg' \
+        --exclude='backups' \
+        -czf "$APP_DIR/backups/code-update-${timestamp}.tgz" \
+        -C "$APP_DIR" .
+
+    tar \
+        --exclude='.git' \
+        --exclude='.venv' \
+        --exclude='.github' \
+        --exclude='data/config.json' \
+        --exclude='data/jobs.json' \
+        --exclude='data/users.json' \
+        --exclude='data/radios.json' \
+        --exclude='data/calendar_cache.json' \
+        --exclude='data/name_days_pl.json' \
+        --exclude='data/unusual_holidays_pl.json' \
+        --exclude='data/runtime' \
+        --exclude='.env' \
+        --exclude='backups' \
+        --exclude='tools/dlna/runtime' \
+        --exclude='tools/ffmpeg' \
+        --exclude='dlna' \
+        -czf "$payload_archive" \
+        -C "$source_dir" .
+
+    tar -xzf "$payload_archive" -C "$APP_DIR"
+    rm -rf "$tmp_dir"
 }
 
 generate_secret_key() {
@@ -1223,7 +1431,11 @@ show_summary() {
     primary_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
     primary_ip="${primary_ip:-127.0.0.1}"
 
-    printf "\n${C_GREEN}${C_BOLD}Instalacja zakończona.${C_RESET}\n"
+    if (( EXISTING_INSTALL == 1 )); then
+        printf "\n${C_GREEN}${C_BOLD}Aktualizacja zakończona.${C_RESET}\n"
+    else
+        printf "\n${C_GREEN}${C_BOLD}Instalacja zakończona.${C_RESET}\n"
+    fi
     printf "${C_MUTED}Adres aplikacji:${C_RESET} http://%s:%s/\n" "$primary_ip" "$APP_PORT"
     printf "${C_MUTED}Katalog aplikacji:${C_RESET} %s\n" "$APP_DIR"
     printf "${C_MUTED}Użytkownik usługi:${C_RESET} %s:%s\n" "$APP_USER" "$APP_GROUP"
@@ -1318,6 +1530,11 @@ begin_step "Pobranie ustawień instalacji"
 log_info "Wciśnij Enter, aby zostawić wartość domyślną pokazaną w nawiasie kwadratowym."
 log_info "Jeśli nic nie wpiszesz przy porcie, po 30 sekundach zostanie użyte ustawienie domyślne."
 APP_DIR="$(resolve_install_value "$APP_DIR" "$APP_DIR_FROM_ARG" 'Katalog aplikacji' "$APP_DIR_DEFAULT")"
+detect_existing_installation
+load_existing_install_defaults
+if (( EXISTING_INSTALL == 1 )); then
+    log_info "Wykryto istniejącą instalację w ${APP_DIR}. Instalator przejdzie w tryb bezpiecznej aktualizacji."
+fi
 STORAGE_ROOT="$(resolve_install_value "$STORAGE_ROOT" "$STORAGE_ROOT_FROM_ARG" 'Katalog bazowy danych użytkowników' "$STORAGE_ROOT_DEFAULT")"
 APP_USER="$(resolve_install_value "$APP_USER" "$APP_USER_FROM_ARG" 'Użytkownik Linux dla usługi' "$APP_USER_DEFAULT")"
 APP_GROUP="$(resolve_install_value "$APP_GROUP" "$APP_GROUP_FROM_ARG" 'Grupa Linux dla usługi' "$APP_GROUP_DEFAULT")"
@@ -1354,7 +1571,10 @@ while ! port_is_available "$APP_PORT"; do
     log_warn "Port ${APP_PORT} jest już zajęty."
     APP_PORT="$(prompt_default 'Port aplikacji' "$APP_PORT_DEFAULT")"
 done
-if [[ -n "$ADMIN_PASSWORD" ]]; then
+if (( EXISTING_INSTALL == 1 )) && (( USERS_STORE_PRESENT == 1 )) && [[ -z "$ADMIN_PASSWORD" ]]; then
+    ADMIN_PASSWORD="__preserve_existing_admin__"
+    log_info "Istniejący użytkownicy zostaną zachowani, więc pytanie o hasło admina zostało pominięte."
+elif [[ -n "$ADMIN_PASSWORD" ]]; then
     if [[ "${#ADMIN_PASSWORD}" -lt 4 ]]; then
         log_fail "Hasło admina musi mieć co najmniej 4 znaki."
         abort_install
@@ -1385,19 +1605,23 @@ chown -R "$APP_USER:$APP_GROUP" "$APP_DIR" "$STORAGE_ROOT" "$NETWORK_STORAGE_ROO
 log_ok "Użytkownik i katalogi systemowe są gotowe."
 
 begin_step "Pobranie kodu aplikacji"
-if [[ -d "$APP_DIR/.git" ]]; then
-    ensure_git_safe_directory
-    run_logged "Odświeżam lokalne repozytorium aplikacji" git -C "$APP_DIR" fetch --all --prune
-    run_logged "Przełączam repozytorium na gałąź ${BRANCH}" git -C "$APP_DIR" checkout "$BRANCH"
-    run_logged "Pobieram najnowszy kod z origin/${BRANCH}" git -C "$APP_DIR" pull --ff-only origin "$BRANCH"
+if (( EXISTING_INSTALL == 1 )); then
+    run_logged "Pobieram i bezpiecznie aktualizuję kod aplikacji" safe_update_app_code
 else
-    if [[ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name backups 2>/dev/null)" ]]; then
-        log_fail "Katalog aplikacji nie jest pusty i nie wygląda na repo Git: $APP_DIR"
-        abort_install
+    if [[ -d "$APP_DIR/.git" ]]; then
+        ensure_git_safe_directory
+        run_logged "Odświeżam lokalne repozytorium aplikacji" git -C "$APP_DIR" fetch --all --prune
+        run_logged "Przełączam repozytorium na gałąź ${BRANCH}" git -C "$APP_DIR" checkout "$BRANCH"
+        run_logged "Pobieram najnowszy kod z origin/${BRANCH}" git -C "$APP_DIR" pull --ff-only origin "$BRANCH"
+    else
+        if [[ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -name backups 2>/dev/null)" ]]; then
+            log_fail "Katalog aplikacji nie jest pusty i nie wygląda na repo Git: $APP_DIR"
+            abort_install
+        fi
+        rm -rf "$APP_DIR"
+        run_logged "Klonuję kod aplikacji" git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
+        ensure_git_safe_directory
     fi
-    rm -rf "$APP_DIR"
-    run_logged "Klonuję kod aplikacji" git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
-    ensure_git_safe_directory
 fi
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR"
 run_logged "Instaluję helper do montowania udziału sieciowego" install_storage_control_helper

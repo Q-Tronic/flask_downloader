@@ -14,7 +14,7 @@ Interfejs i komunikaty są po polsku.
 - dostęp `root` lub `sudo`
 - połączenie z internetem podczas instalacji
 
-## Instalacja jednym poleceniem
+## Instalacja lub aktualizacja jednym poleceniem
 Jeśli jesteś zalogowany jako `root`:
 ```bash
 apt-get update && apt-get install -y curl ca-certificates && bash -c "$(curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh)"
@@ -38,11 +38,28 @@ Instalator:
 - instaluje backend radia oparty o `Icecast` i `Liquidsoap`,
 - przygotowuje pliki konfiguracyjne aplikacji.
 
+Jeśli w wybranym katalogu aplikacji wykryje istniejącą instancję, przechodzi automatycznie w tryb bezpiecznej aktualizacji:
+- zachowuje `.env`,
+- zachowuje `data/` i runtime usług,
+- tworzy backup poprzedniego kodu w `backups/`,
+- pobiera najnowszy kod z GitHuba,
+- aktualizuje zależności Pythona,
+- restartuje usługę Flask.
+
 ## Instalacja nieinteraktywna
 Jako `root`:
 ```bash
 export FLASK_DOWNLOADER_ADMIN_PASSWORD='TwojeHasloAdmina'
 apt-get update && apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh | bash -s -- --non-interactive
+```
+
+Jeśli to już istniejąca instalacja i `data/users.json` nadal istnieje, tryb nieinteraktywny nie wymaga ponownego podawania hasła administratora.
+
+## Instalacja lub aktualizacja w niestandardowym katalogu
+Jeśli aplikacja działa poza domyślnym `/opt/flask_downloader`, możesz wskazać katalog przed uruchomieniem:
+```bash
+export FLASK_DOWNLOADER_APP_DIR='/twoj/katalog/aplikacji'
+apt-get update && apt-get install -y curl ca-certificates && bash -c "$(curl -fsSL https://raw.githubusercontent.com/Q-Tronic/flask_downloader/main/scripts/install.sh)"
 ```
 
 ## Po instalacji

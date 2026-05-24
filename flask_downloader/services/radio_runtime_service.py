@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from xml.etree import ElementTree as ET
 
 
@@ -882,6 +883,28 @@ class RadioRuntimeService:
             fh.write("\n")
 
     @staticmethod
+    def _normalize_track_compare_value(value):
+        return str(value or "").strip().casefold()
+
+    def _build_station_manual_queue_entries(self, owner_username, station, queue_mode):
+        queue_key = "play_now" if str(queue_mode or "").strip().lower() == "play_now" else "queue_next"
+        entries = []
+        manual_queue = dict((station or {}).get("manual_queue") or {})
+        for item in manual_queue.get(queue_key) or []:
+            relative_path = str(item.get("relative_path") or "").strip()
+            if not relative_path:
+                continue
+            path = self._resolve_download_path(relative_path, "audio", owner_username=owner_username)
+            if not path or not os.path.isfile(path):
+                continue
+            display_title = str(item.get("display_title") or "").strip() or os.path.splitext(os.path.basename(path))[0]
+            entries.append({
+                "path": path,
+                "display_title": display_title,
+            })
+        return entries
+
+    @staticmethod
     def _entry_identity(entry):
         return str((entry or {}).get("path") or "").strip()
 
@@ -958,6 +981,8 @@ class RadioRuntimeService:
         return {
             "music": os.path.join(self._playlists_dir, "%s_music.m3u" % owner),
             "inserts": os.path.join(self._playlists_dir, "%s_inserts.m3u" % owner),
+            "manual_now": os.path.join(self._playlists_dir, "%s_manual_now.m3u" % owner),
+            "manual_next": os.path.join(self._playlists_dir, "%s_manual_next.m3u" % owner),
         }
 
     def _station_script_path(self, owner_username):
@@ -971,6 +996,116 @@ class RadioRuntimeService:
     def _station_track_title_file(self, owner_username):
         owner = self._normalize_username(owner_username)
         return os.path.join(self._logs_dir, "%s.track.txt" % owner)
+
+    def _sync_station_queue_files(self, owner_username):
+        owner = self._normalize_username(owner_username)
+        snapshot = self._get_radio_store_snapshot()
+        station = copy.deepcopy((snapshot.get("stations") or {}).get(owner))
+        if not station:
+            return False
+        playlists = self._station_playlist_paths(owner)
+        self._write_playlist_file(playlists["manual_now"], self._build_station_manual_queue_entries(owner, station, "play_now"))
+        self._write_playlist_file(playlists["manual_next"], self._build_station_manual_queue_entries(owner, station, "queue_next"))
+        return True
+
+    def _resolve_relative_path_for_title(self, owner_username, station, display_title):
+        normalized_title = self._normalize_track_compare_value(display_title)
+        if not normalized_title:
+            return ""
+        try:
+            effective_rows = list(self._build_library_table_rows(owner_username, station) or [])
+        except Exception:
+            effective_rows = []
+        for item in effective_rows:
+            if not bool(item.get("included")):
+                continue
+            row_title = str(item.get("display_title") or item.get("default_display_title") or item.get("name") or "").strip()
+            if self._normalize_track_compare_value(row_title) == normalized_title:
+                return str(item.get("relative_path") or "").strip()
+        return ""
+
+    def _track_station_playback_history(self, owner_username, station_state, station):
+        owner = self._normalize_username(owner_username)
+        if not station:
+            return False
+
+        live_connected = bool((station_state or {}).get("live_connected"))
+        current_program_name = str((station_state or {}).get("current_program_name") or "").strip()
+        current_dj_name = str((station_state or {}).get("current_dj_name") or "").strip()
+        current_track_title = str((station_state or {}).get("current_track_title") or "").strip()
+
+        if live_connected:
+            display_title = current_program_name or current_dj_name or "Wejście live"
+            source_mode = "live"
+            queue_mode = ""
+            relative_path = ""
+        else:
+            display_title = current_track_title
+            source_mode = "autodj"
+            queue_mode = ""
+            relative_path = ""
+
+        normalized_display_title = self._normalize_track_compare_value(display_title)
+        if not normalized_display_title:
+            return False
+
+        signature = "|".join((
+            source_mode,
+            normalized_display_title,
+            self._normalize_track_compare_value(current_program_name),
+            self._normalize_track_compare_value(current_dj_name),
+        ))
+
+        queue_changed = False
+        with self._radios_lock:
+            live_station = (self._radios_store.get("stations") or {}).get(owner)
+            if not isinstance(live_station, dict):
+                return False
+
+            history_payload = live_station.setdefault("history", {})
+            previous_signature = str(history_payload.get("last_signature") or "").strip()
+            if previous_signature == signature:
+                return False
+
+            if not live_connected:
+                manual_queue = live_station.setdefault("manual_queue", {})
+                for queue_key in ("play_now", "queue_next"):
+                    queue_items = list(manual_queue.get(queue_key) or [])
+                    if not queue_items:
+                        continue
+                    first_item = dict(queue_items[0] or {})
+                    first_title = self._normalize_track_compare_value(first_item.get("display_title"))
+                    if first_title and first_title == normalized_display_title:
+                        queue_mode = queue_key
+                        relative_path = str(first_item.get("relative_path") or "").strip()
+                        manual_queue[queue_key] = queue_items[1:]
+                        queue_changed = True
+                        break
+
+            if not relative_path and not live_connected:
+                relative_path = self._resolve_relative_path_for_title(owner, live_station, display_title)
+
+            history_items = list(history_payload.get("items") or [])
+            history_entry = {
+                "id": "hist_" + uuid.uuid4().hex[:12],
+                "display_title": display_title,
+                "relative_path": relative_path,
+                "source_mode": source_mode,
+                "queue_mode": queue_mode,
+                "program_name": current_program_name,
+                "dj_name": current_dj_name,
+                "played_at": time.time(),
+            }
+            history_payload["items"] = [history_entry] + history_items[:39]
+            history_payload["last_signature"] = signature
+            self._write_radio_store_locked()
+
+        if queue_changed:
+            try:
+                self._sync_station_queue_files(owner)
+            except Exception:
+                return True
+        return True
 
     def _iter_known_radio_log_files(self):
         log_files = {
@@ -1161,6 +1296,8 @@ class RadioRuntimeService:
             'set("server.telnet.port",%s)' % control_port,
             'set("server.telnet.revdns",false)',
             '',
+            'manual_now = playlist(mode="normal",reload_mode="watch","%s")' % playlists["manual_now"].replace("\\", "/"),
+            'manual_next = playlist(mode="normal",reload_mode="watch","%s")' % playlists["manual_next"].replace("\\", "/"),
             'music = %s' % music_source_expr,
         ]
         if music_count:
@@ -1199,19 +1336,19 @@ class RadioRuntimeService:
                     self._escape_playlist_metadata(source_auth["password"]),
                 ),
                 'server.register(namespace="radio",description="Live takeover status","live_status",(fun (_) -> if source.is_up(live) then "online" else "offline" end))',
-                'program = fallback(track_sensitive=false,[live,autodj])',
+                'program = fallback(track_sensitive=false,[live,manual_now,manual_next,autodj])',
             ])
         else:
             lines.extend([
                 'server.register(namespace="radio",description="Live takeover status","live_status",(fun (_) -> "disabled"))',
-                'program = autodj',
+                'program = fallback(track_sensitive=false,[manual_now,manual_next,autodj])',
             ])
 
         lines.append('program = fallback(track_sensitive=false,[program,blank()])')
         if suppress_track_titles:
             lines.append('program = map_metadata(update=false,strip=true,(fun (_) -> []),program)')
 
-        lines.append('server.register(namespace="radio",description="Skip current track","skip",(fun (_) -> begin source.skip(autodj); "OK" end))')
+        lines.append('server.register(namespace="radio",description="Skip current track","skip",(fun (_) -> begin source.skip(program); "OK" end))')
 
         lines.extend([
             '',
@@ -1418,6 +1555,8 @@ WantedBy=multi-user.target
                 )
             self._write_playlist_file(playlists["music"], effective_music_entries)
             self._write_playlist_file(playlists["inserts"], insert_entries)
+            self._write_playlist_file(playlists["manual_now"], self._build_station_manual_queue_entries(owner_username, station, "play_now"))
+            self._write_playlist_file(playlists["manual_next"], self._build_station_manual_queue_entries(owner_username, station, "queue_next"))
             with open(self._station_script_path(owner_username), "w", encoding="utf-8") as fh:
                 fh.write(self._build_liquidsoap_script_text(owner_username, station, global_config, playlists))
 
@@ -1736,6 +1875,10 @@ WantedBy=multi-user.target
 
         station_state["current_program_name"] = self._resolve_live_program_name(station_state, station)
         station_state["current_dj_name"] = self._resolve_current_dj_name(station_state, station)
+        try:
+            self._track_station_playback_history(owner, station_state, station)
+        except Exception:
+            pass
         station_state["current_erds_text"] = self._compute_runtime_erds_text(
             station,
             listener_count=station_state["listeners"],
@@ -1932,6 +2075,8 @@ WantedBy=multi-user.target
             station_state = self.get_station_runtime_state(owner)
             if not station_state.get("service_active"):
                 raise ValueError("Autopilot stacji nie działa. Najpierw go uruchom.")
+            if station_state.get("live_connected"):
+                raise ValueError("Na antenie działa wejście live DJ. Przeskakiwanie AutoDJ jest chwilowo zablokowane.")
             try:
                 self._send_station_server_command(owner, "radio.skip", timeout=5)
             except Exception as exc:
@@ -1939,6 +2084,23 @@ WantedBy=multi-user.target
             time.sleep(0.4)
         else:
             raise ValueError("Nieobsługiwana akcja stacji radiowej.")
+        return self.get_station_runtime_state(owner)
+
+    def refresh_station_queue_files(self, owner_username):
+        return self._sync_station_queue_files(owner_username)
+
+    def skip_station_track(self, owner_username):
+        owner = self._normalize_username(owner_username)
+        station_state = self.get_station_runtime_state(owner)
+        if not station_state.get("service_active"):
+            raise ValueError("Autopilot stacji nie działa. Najpierw go uruchom.")
+        if station_state.get("live_connected"):
+            raise ValueError("Na antenie działa wejście live DJ. Ręczna ingerencja w AutoDJ jest chwilowo zablokowana.")
+        try:
+            self._send_station_server_command(owner, "radio.skip", timeout=5)
+        except Exception as exc:
+            raise RuntimeError("Nie udało się przełączyć aktualnego utworu: %s" % exc)
+        time.sleep(0.4)
         return self.get_station_runtime_state(owner)
 
     def stop_and_disable_station(self, owner_username):

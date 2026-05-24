@@ -32,6 +32,7 @@ function showToast(message, kind) {
 }
 
 let liveSubscription = null;
+let latestFilesPayload = null;
 
 async function deleteServerFile(filename, storageKind, ownerUsername) {
     if (!confirm("Usunąć plik z serwera?")) {
@@ -131,18 +132,45 @@ function renderScope(adminLoggedIn, availableUsers, scopeUsername, currentUser) 
     select.value = scopeUsername || "all";
 }
 
-function renderFiles(files, adminLoggedIn) {
+function getFilesTypeFilterValue() {
+    const select = document.getElementById("filesTypeFilterSelect");
+    return select && select.value ? String(select.value) : "all";
+}
+
+function renderFiles(files, adminLoggedIn, jobs) {
     const container = document.getElementById("files");
-    if (!files.length) {
+    const liveKeys = new Set((jobs || []).filter(function(job) {
+        return !!job && !!job.is_live_capture && !!job.relative_path;
+    }).map(function(job) {
+        return [String(job.owner_username || ""), String(job.storage_kind || "video"), String(job.relative_path || "")].join("|");
+    }));
+    const activeFilter = getFilesTypeFilterValue();
+    const filteredFiles = (files || []).map(function(file) {
+        const liveKey = [String(file.owner_username || ""), String(file.storage_kind || "video"), String(file.relative_path || "")].join("|");
+        return Object.assign({}, file, {
+            is_live_capture: liveKeys.has(liveKey),
+        });
+    }).filter(function(file) {
+        if (activeFilter === "live") {
+            return !!file.is_live_capture;
+        }
+        if (activeFilter === "standard") {
+            return !file.is_live_capture;
+        }
+        return true;
+    });
+
+    if (!filteredFiles.length) {
         container.innerHTML = '<div class="empty">Brak plików w katalogu docelowym.</div>';
         return;
     }
 
-    container.innerHTML = files.map(file => {
+    container.innerHTML = filteredFiles.map(file => {
         const relativePath = escapeHtml(file.relative_path || file.name || "");
         const displayPath = escapeHtml(file.display_path || file.relative_path || file.name || "");
         const storageKind = escapeHtml(file.storage_kind || "video");
         const ownerUsername = escapeHtml(file.owner_username || "");
+        const liveBadge = file.is_live_capture ? '<span class="badge" style="margin-left:8px;">LIVE</span>' : "";
         const ownerHtml = adminLoggedIn
             ? '<div class="small">Właściciel: ' + ownerUsername + '</div>'
             : "";
@@ -153,7 +181,7 @@ function renderFiles(files, adminLoggedIn) {
 
         return `
             <div class="file-item">
-                <div><a class="file-link" href="${escapeHtml(file.url)}" target="_blank" rel="noopener">${displayPath}</a></div>
+                <div><a class="file-link" href="${escapeHtml(file.url)}" target="_blank" rel="noopener">${displayPath}</a>${liveBadge}</div>
                 <div class="small">Rozmiar: ${formatBytes(file.size)} | Zmiana: ${escapeHtml(file.mtime_text)}</div>
                 ${ownerHtml}
                 ${actionsHtml}
@@ -179,9 +207,10 @@ function renderMount(mount) {
 }
 
 function applyFilesPayload(data) {
+    latestFilesPayload = data || null;
     renderMount(data.mount);
     renderScope(Boolean(data.admin_logged_in), data.available_users || [], data.scope_username || "", data.current_user || "");
-    renderFiles(data.files || [], Boolean(data.admin_logged_in));
+    renderFiles(data.files || [], Boolean(data.admin_logged_in), data.jobs || []);
 }
 
 async function handleDownloadsClick(event) {
@@ -191,6 +220,14 @@ async function handleDownloadsClick(event) {
             liveSubscription.restart();
         } else {
             refreshData();
+        }
+        return;
+    }
+
+    const typeSelect = event.target.closest("#filesTypeFilterSelect");
+    if (typeSelect) {
+        if (latestFilesPayload) {
+            applyFilesPayload(latestFilesPayload);
         }
         return;
     }

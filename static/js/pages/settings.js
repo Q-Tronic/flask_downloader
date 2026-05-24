@@ -5,9 +5,29 @@
         return;
     }
 
+    const ACTIVE_TAB_STORAGE_KEY = "flask-downloader-settings-active-tab";
     const pollIntervalMs = 1000;
     let liveSubscription = null;
     const dirtyForms = new Set();
+    let activeTab = readStoredActiveTab() || "storage";
+
+    function readStoredActiveTab() {
+        try {
+            return window.localStorage ? String(window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY) || "").trim() : "";
+        } catch (err) {
+            return "";
+        }
+    }
+
+    function storeActiveTab(value) {
+        try {
+            if (window.localStorage) {
+                window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, value);
+            }
+        } catch (err) {
+            // Pomijam błąd storage.
+        }
+    }
 
     function escapeHtml(value) {
         return String(value ?? "")
@@ -49,6 +69,31 @@
         }
         node.className = "service-status-pill " + String(kind || "muted");
         node.textContent = String(label || "");
+    }
+
+    function getVisibleTabs() {
+        return ["storage", "users", "downloads", "media", "system"];
+    }
+
+    function renderTabs() {
+        const visibleTabs = getVisibleTabs();
+        if (!visibleTabs.includes(activeTab)) {
+            activeTab = visibleTabs[0];
+        }
+        storeActiveTab(activeTab);
+
+        root.querySelectorAll(".settings-tab-button").forEach(function(button) {
+            const tabName = String(button.dataset.settingsTab || "");
+            const isVisible = visibleTabs.includes(tabName);
+            button.hidden = !isVisible;
+            button.classList.toggle("is-active", isVisible && tabName === activeTab);
+            button.setAttribute("aria-pressed", isVisible && tabName === activeTab ? "true" : "false");
+        });
+
+        root.querySelectorAll(".settings-panel").forEach(function(panel) {
+            const panelName = String(panel.dataset.settingsPanel || "");
+            panel.hidden = panelName !== activeTab;
+        });
     }
 
     function showToast(message, kind) {
@@ -685,6 +730,8 @@
                 busyLabel = "Restartowanie...";
             } else if (form.id === "settingsRadioCheckForm") {
                 busyLabel = "Sprawdzanie...";
+            } else if (form.id === "settingsImportConfigForm") {
+                busyLabel = "Przywracanie konfiguracji...";
             }
         }
 
@@ -719,6 +766,13 @@
 
             if (data.message) {
                 showToast(data.message, data.kind || "success");
+            }
+
+            if (data.redirect_url) {
+                setTimeout(function() {
+                    window.location.assign(String(data.redirect_url));
+                }, 900);
+                return;
             }
 
             if (liveSubscription && typeof liveSubscription.refreshNow === "function") {
@@ -776,11 +830,23 @@
         }
     }
 
+    function handleRootClick(event) {
+        const tabButton = event.target.closest(".settings-tab-button");
+        if (!tabButton || !root.contains(tabButton)) {
+            return;
+        }
+        event.preventDefault();
+        activeTab = String(tabButton.dataset.settingsTab || "storage");
+        renderTabs();
+    }
+
     document.addEventListener("submit", handleSettingsSubmit, true);
     document.addEventListener("input", handleProtectedFormInput, true);
     document.addEventListener("change", handleProtectedFormInput, true);
+    root.addEventListener("click", handleRootClick);
 
     renderUserRows(pageData.userRows || []);
+    renderTabs();
     if (window.appLive && typeof window.appLive.createSubscription === "function") {
         liveSubscription = window.appLive.createSubscription({
             url: "/api/settings/stream",
@@ -808,6 +874,7 @@
             document.removeEventListener("submit", handleSettingsSubmit, true);
             document.removeEventListener("input", handleProtectedFormInput, true);
             document.removeEventListener("change", handleProtectedFormInput, true);
+            root.removeEventListener("click", handleRootClick);
         });
     }
 })();

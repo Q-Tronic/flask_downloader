@@ -70,11 +70,17 @@ async function runQuickDownload(mediaKind, triggerButton) {
         }
 
         const queuedCount = Number(data.queued_count || 0);
+        const liveQueuedCount = Number(data.live_queued_count || 0);
         const failedCount = Number(data.failed_count || 0);
         const noun = mediaKind === "audio" ? "audio" : "wideo";
         let toastMessage = queuedCount === 1
             ? "Dodano 1 pobieranie " + noun + " do kolejki."
             : "Dodano " + queuedCount + " pobrań " + noun + " do kolejki.";
+
+        if (liveQueuedCount > 0) {
+            const liveNoun = liveQueuedCount === 1 ? "1 nagranie LIVE" : (liveQueuedCount >= 2 && liveQueuedCount <= 4 ? liveQueuedCount + " nagrania LIVE" : liveQueuedCount + " nagrań LIVE");
+            toastMessage += " W tym " + liveNoun + " od początku streama.";
+        }
 
         if (failedCount > 0) {
             toastMessage += " " + failedCount + " link" + (failedCount === 1 ? "" : (failedCount >= 2 && failedCount <= 4 ? "i" : "ów")) + " pominięto.";
@@ -190,7 +196,10 @@ async function startServerDownload(pageUrl, formatId, overwriteExisting) {
             return;
         }
 
-        showUiToastMessage("Dodano pobieranie do kolejki. Status możesz śledzić w zadaniach bez odświeżania strony.", "success");
+        const successMessage = data.is_live_capture
+            ? "Uruchomiono nagrywanie LIVE od początku streama. To zadanie nie liczy się do limitu kolejki."
+            : "Dodano pobieranie do kolejki. Status możesz śledzić w zadaniach bez odświeżania strony.";
+        showUiToastMessage(successMessage, "success");
         if (window.appUi && typeof window.appUi.refreshDownloadToasts === "function") {
             window.appUi.refreshDownloadToasts();
         }
@@ -383,11 +392,14 @@ function renderSizeOptions(selectedFormat, preferredFormatId) {
 function renderSourceDetail(item) {
     const panel = document.getElementById("sourceDetailPanel");
     const badges = [];
+    const isLiveCapture = Boolean(item && item.is_live_stream && item.supports_live_from_start);
+    const serverActionLabel = isLiveCapture ? "Nagrywaj live od początku" : "Pobierz na serwer";
 
     if (item.media_kind) badges.push('<span class="badge">' + escapeSourceHtml(String(item.media_kind).toLowerCase() === "audio" ? "audio" : "wideo") + '</span>');
     if (item.label) badges.push('<span class="badge">' + escapeSourceHtml(item.label) + '</span>');
     if (item.ext) badges.push('<span class="badge">' + escapeSourceHtml(item.ext) + '</span>');
     if (item.protocol) badges.push('<span class="badge">' + escapeSourceHtml(item.protocol) + '</span>');
+    if (isLiveCapture) badges.push('<span class="badge">LIVE od początku</span>');
 
     panel.innerHTML = `
         <div class="source-detail-card">
@@ -430,7 +442,7 @@ function renderSourceDetail(item) {
                 <a class="btn btn-secondary" href="/single-playlist?page_url=${encodeURIComponent(sourcePageUrl)}&format_id=${encodeURIComponent(item.format_id || "")}" target="_blank">M3U tylko dla tej jakości</a>
                 <a class="btn btn-download" href="${escapeSourceHtml(item.download_url || "#")}" rel="noopener">Pobierz do przeglądarki</a>
                 <button type="button" class="btn btn-server js-source-server-download" data-page-url="${escapeSourceHtml(sourcePageUrl)}" data-format-id="${escapeSourceHtml(item.format_id || "")}">
-                    Pobierz na serwer
+                    ${escapeSourceHtml(serverActionLabel)}
                 </button>
             </div>
         </div>
@@ -485,6 +497,17 @@ function buildSourceContextSections(item) {
             lines: [
                 "Na serwerze ten strumień zostanie przekonwertowany przez ffmpeg do MP3 VBR q=0.",
                 "Pobierz do przeglądarki dalej zwraca surowy plik źródłowy, np. m4a albo webm.",
+            ],
+        });
+    }
+
+    if (item && item.is_live_stream && item.supports_live_from_start) {
+        sections.push({
+            tone: "info",
+            title: "Aktywna transmisja LIVE",
+            lines: [
+                "Pobranie na serwer rozpocznie zapis od początku streama i będzie nagrywać aż do zakończenia transmisji.",
+                "Takie zadanie nie liczy się do limitu równoległych pobrań użytkownika.",
             ],
         });
     }

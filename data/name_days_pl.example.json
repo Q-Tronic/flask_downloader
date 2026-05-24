@@ -1,0 +1,36 @@
+{
+  "01-01": {
+    "names": [
+      "Mieczysław",
+      "Maria"
+    ],
+    "names_inflected": [
+      "Mieczysława",
+      "Marii"
+    ]
+  },
+  "05-24": {
+    "names": [
+      "Jan",
+      "Piotr",
+      "Paweł"
+    ],
+    "names_inflected": [
+      "Jana",
+      "Piotra",
+      "Pawła"
+    ]
+  },
+  "12-24": {
+    "names": [
+      "Adela",
+      "Ewa",
+      "Irmina"
+    ],
+    "names_inflected": [
+      "Adeli",
+      "Ewy",
+      "Irminy"
+    ]
+  }
+}

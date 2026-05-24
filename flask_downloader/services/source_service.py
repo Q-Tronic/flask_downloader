@@ -77,6 +77,21 @@ class SourceMediaService:
             return self._audio_download_target_codec
         return source_ext
 
+    def build_live_download_format(self, item):
+        media_kind = self._normalize_storage_kind((item or {}).get("media_kind") or "video")
+        if media_kind == "audio":
+            return "bestaudio/best"
+
+        try:
+            height = int((item or {}).get("height") or 0)
+        except Exception:
+            height = 0
+
+        height_filter = "[height<=%d]" % height if height > 0 else ""
+        best_video = "bestvideo%s+bestaudio" % height_filter
+        best_muxed = "best%s" % height_filter
+        return "%s/%s/best" % (best_video, best_muxed)
+
     @staticmethod
     def get_download_intermediate_ext(item):
         source_ext = (str((item or {}).get("ext") or "").strip().lower() or "bin")
@@ -210,6 +225,43 @@ class SourceMediaService:
                     return entry
         return info
 
+    @staticmethod
+    def get_live_status_value(info):
+        return str((info or {}).get("live_status") or "").strip().lower()
+
+    @classmethod
+    def is_active_live_stream(cls, info):
+        if bool((info or {}).get("is_live")):
+            return True
+        return cls.get_live_status_value(info) == "is_live"
+
+    @staticmethod
+    def supports_live_from_start(extractor_name):
+        text = str(extractor_name or "").strip().lower()
+        return any(marker in text for marker in ("youtube", "twitch", "tver"))
+
+    @classmethod
+    def describe_live_state(cls, info, extractor_name=""):
+        live_status = cls.get_live_status_value(info)
+        is_live_stream = cls.is_active_live_stream(info)
+        supports_from_start = bool(is_live_stream and cls.supports_live_from_start(extractor_name))
+
+        if is_live_stream:
+            live_status_label = "Transmisja na żywo"
+        elif live_status == "is_upcoming":
+            live_status_label = "Zaplanowana transmisja"
+        elif live_status in ("post_live", "was_live"):
+            live_status_label = "Zakończona transmisja"
+        else:
+            live_status_label = ""
+
+        return {
+            "is_live_stream": is_live_stream,
+            "live_status": live_status,
+            "live_status_label": live_status_label,
+            "supports_live_from_start": supports_from_start,
+        }
+
     def filter_formats(self, info):
         extractor_name = str(info.get("extractor_key") or info.get("extractor") or "").strip().lower()
         allow_audio_only = extractor_name.startswith("youtube")
@@ -255,6 +307,7 @@ class SourceMediaService:
                     "download_format": format_id or "best",
                     "merge_ext": (fmt.get("ext") or "mp4").lower(),
                 }
+                item["live_download_format"] = self.build_live_download_format(item)
 
                 if not item["has_audio"]:
                     item["download_format"] = "%s+bestaudio/best" % (format_id or "bestvideo")
@@ -310,6 +363,7 @@ class SourceMediaService:
                 "media_kind": "audio",
                 "has_audio": True,
                 "download_format": format_id or "bestaudio",
+                "live_download_format": self.build_live_download_format({"media_kind": "audio"}),
                 "merge_ext": (fmt.get("ext") or "m4a").lower(),
             })
 
@@ -335,13 +389,16 @@ class SourceMediaService:
             info = ydl.extract_info(page_url, download=False)
 
         info = self.normalize_info(info)
+        extractor_name = info.get("extractor_key") or info.get("extractor") or "unknown"
+        live_state = self.describe_live_state(info, extractor_name=extractor_name)
 
         data = {
             "title": info.get("title") or "Nieznany tytuł",
             "download_title": self.build_download_title(info),
             "page_url": info.get("webpage_url") or page_url,
-            "extractor": info.get("extractor_key") or info.get("extractor") or "unknown",
+            "extractor": extractor_name,
             "sources": self.filter_formats(info),
+            **live_state,
         }
 
         self._cache[page_url] = {
@@ -370,6 +427,10 @@ class SourceMediaService:
             "download_title": result.get("download_title") or result["title"],
             "page_url": result["page_url"],
             "extractor": result["extractor"],
+            "is_live_stream": bool(result.get("is_live_stream")),
+            "live_status": str(result.get("live_status") or ""),
+            "live_status_label": str(result.get("live_status_label") or ""),
+            "supports_live_from_start": bool(result.get("supports_live_from_start")),
             "sources": [],
         }
 
@@ -390,7 +451,12 @@ class SourceMediaService:
                     result.get("download_title") or result["title"],
                     item,
                 ),
+                "live_download_format": str(item.get("live_download_format") or ""),
                 "vlc_command": 'vlc "%s"' % proxy_url,
+                "is_live_stream": bool(result.get("is_live_stream")),
+                "live_status": str(result.get("live_status") or ""),
+                "live_status_label": str(result.get("live_status_label") or ""),
+                "supports_live_from_start": bool(result.get("supports_live_from_start")),
             })
 
         return output

@@ -23,12 +23,26 @@ function formatBytes(bytes) {
 
 function formatPercent(job) {
     if (job.progress_percent === null || job.progress_percent === undefined) {
+        if (job && job.status === "paused") {
+            return "wstrzymane";
+        }
         return "brak danych";
     }
     return job.progress_percent.toFixed(1) + "%";
 }
 
 let liveSubscription = null;
+let latestJobsPayload = null;
+
+function showToast(message, kind) {
+    if (window.appUi && typeof window.appUi.showToast === "function") {
+        window.appUi.showToast(message, kind);
+        return;
+    }
+    if (kind === "error") {
+        alert(message);
+    }
+}
 
 async function deleteJob(jobId) {
     if (!confirm("Usunąć to zadanie z listy?")) {
@@ -52,8 +66,53 @@ async function deleteJob(jobId) {
     }
 }
 
-async function cancelJob(jobId) {
-    if (!confirm("Przerwać aktywne pobieranie i usunąć niedokończony plik?")) {
+async function pauseJob(jobId) {
+    if (!confirm("Wstrzymać to pobieranie i zachować dane do późniejszego wznowienia?")) {
+        return;
+    }
+
+    try {
+        const response = await fetch("/api/jobs/" + encodeURIComponent(jobId) + "/pause", {
+            method: "POST"
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            showToast(data.error || "Nie udało się wstrzymać pobierania.", "error");
+            return;
+        }
+
+        showToast(data.message || "Wstrzymano pobieranie.", "success");
+        refreshData();
+    } catch (err) {
+        showToast("Błąd wstrzymywania pobierania: " + err, "error");
+    }
+}
+
+async function resumeJob(jobId) {
+    try {
+        const response = await fetch("/api/jobs/" + encodeURIComponent(jobId) + "/resume", {
+            method: "POST"
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            showToast(data.error || "Nie udało się wznowić pobierania.", "error");
+            return;
+        }
+
+        showToast(data.message || "Wznowiono pobieranie.", "success");
+        refreshData();
+    } catch (err) {
+        showToast("Błąd wznawiania pobierania: " + err, "error");
+    }
+}
+
+async function cancelJob(jobId, jobStatus) {
+    const confirmMessage = String(jobStatus || "") === "paused"
+        ? "Anulować to wstrzymane pobieranie i usunąć jego dane tymczasowe?"
+        : "Przerwać aktywne pobieranie i usunąć niedokończony plik?";
+    if (!confirm(confirmMessage)) {
         return;
     }
 
@@ -64,13 +123,14 @@ async function cancelJob(jobId) {
         const data = await response.json();
 
         if (!response.ok || !data.ok) {
-            alert(data.error || "Nie udało się przerwać pobierania.");
+            showToast(data.error || "Nie udało się przerwać pobierania.", "error");
             return;
         }
 
+        showToast(data.message || "Wysłano żądanie anulowania.", "success");
         refreshData();
     } catch (err) {
-        alert("Błąd przerywania pobierania: " + err);
+        showToast("Błąd przerywania pobierania: " + err, "error");
     }
 }
 
@@ -99,15 +159,75 @@ function renderScope(adminLoggedIn, availableUsers, scopeUsername, currentUser) 
     select.value = scopeUsername || "all";
 }
 
+function getJobsTypeFilterValue() {
+    const select = document.getElementById("jobsTypeFilterSelect");
+    return select && select.value ? String(select.value) : "all";
+}
+
+function renderJobsTypeFilter(jobs) {
+    const select = document.getElementById("jobsTypeFilterSelect");
+    if (!select) {
+        return;
+    }
+
+    const currentValue = getJobsTypeFilterValue();
+    const allCount = (jobs || []).length;
+    const liveCount = (jobs || []).filter(function(job) {
+        return !!job && !!job.is_live_capture;
+    }).length;
+    const pausedCount = (jobs || []).filter(function(job) {
+        return String((job || {}).status || "") === "paused";
+    }).length;
+    const standardCount = (jobs || []).filter(function(job) {
+        return !!job && !job.is_live_capture;
+    }).length;
+
+    const optionLabels = {
+        all: "Wszystkie zadania (" + allCount + ")",
+        live: "Tylko LIVE (" + liveCount + ")",
+        paused: "Tylko wstrzymane (" + pausedCount + ")",
+        standard: "Tylko zwykłe (" + standardCount + ")",
+    };
+
+    Array.from(select.options || []).forEach(function(option) {
+        const key = String(option.value || "");
+        if (Object.prototype.hasOwnProperty.call(optionLabels, key)) {
+            option.textContent = optionLabels[key];
+        }
+    });
+
+    select.value = currentValue || "all";
+}
+
 function renderJobs(jobs, adminLoggedIn) {
     const container = document.getElementById("jobs");
-    if (!jobs.length) {
+    const activeFilter = getJobsTypeFilterValue();
+    const filteredJobs = (jobs || []).filter(function(job) {
+        if (activeFilter === "live") {
+            return !!job.is_live_capture;
+        }
+        if (activeFilter === "paused") {
+            return String(job.status || "") === "paused";
+        }
+        if (activeFilter === "standard") {
+            return !job.is_live_capture;
+        }
+        return true;
+    });
+
+    if (!filteredJobs.length) {
         container.innerHTML = '<div class="empty">Brak zadań pobierania.</div>';
         return;
     }
 
-    container.innerHTML = jobs.map(job => {
+    container.innerHTML = filteredJobs.map(job => {
         const status = escapeHtml(job.status);
+        const liveBadge = job.is_live_capture
+            ? '<span class="badge" style="margin-left:8px;">LIVE</span>'
+            : "";
+        const pausedBadge = String(job.status || "") === "paused"
+            ? '<span class="badge" style="margin-left:8px;">PAUSED</span>'
+            : "";
         const width = job.progress_percent === null || job.progress_percent === undefined
             ? (job.status === "completed" ? 100 : 0)
             : Math.max(0, Math.min(100, job.progress_percent));
@@ -125,8 +245,16 @@ function renderJobs(jobs, adminLoggedIn) {
 
         let actionButtons = "";
 
+        if (job.can_pause) {
+            actionButtons += '<button type="button" class="btn btn-secondary js-pause-job" data-job-id="' + escapeHtml(job.job_id) + '">Pauza</button>';
+        }
+
+        if (job.can_resume) {
+            actionButtons += '<button type="button" class="btn btn-secondary js-resume-job" data-job-id="' + escapeHtml(job.job_id) + '">Wznów</button>';
+        }
+
         if (job.can_cancel) {
-            actionButtons += '<button type="button" class="btn btn-stop js-cancel-job" data-job-id="' + escapeHtml(job.job_id) + '">Przerwij pobieranie</button>';
+            actionButtons += '<button type="button" class="btn btn-stop js-cancel-job" data-job-id="' + escapeHtml(job.job_id) + '" data-job-status="' + escapeHtml(job.status) + '">' + (job.status === "paused" ? "Anuluj i usuń" : "Przerwij pobieranie") + '</button>';
         }
 
         if (job.can_delete_from_list) {
@@ -139,7 +267,7 @@ function renderJobs(jobs, adminLoggedIn) {
             <div class="job ${status}">
                 <div class="row">
                     <div class="label">Status</div>
-                    <div class="value"><span class="status ${status}">${escapeHtml(job.status_label)}</span></div>
+                    <div class="value"><span class="status ${status}">${escapeHtml(job.status_label)}</span>${liveBadge}${pausedBadge}</div>
                 </div>
                 <div class="row">
                     <div class="label">Tytuł</div>
@@ -189,8 +317,10 @@ function renderMount(mount) {
 }
 
 function applyJobsPayload(data) {
+    latestJobsPayload = data || null;
     renderMount(data.mount);
     renderScope(Boolean(data.admin_logged_in), data.available_users || [], data.scope_username || "", data.current_user || "");
+    renderJobsTypeFilter(data.jobs || []);
     renderJobs(data.jobs || [], Boolean(data.admin_logged_in));
 }
 
@@ -205,12 +335,40 @@ async function handleJobsClick(event) {
         return;
     }
 
+    const typeSelect = event.target.closest("#jobsTypeFilterSelect");
+    if (typeSelect) {
+        if (latestJobsPayload) {
+            applyJobsPayload(latestJobsPayload);
+        }
+        return;
+    }
+
+    const pauseBtn = event.target.closest(".js-pause-job");
+    if (pauseBtn) {
+        event.preventDefault();
+        const jobId = pauseBtn.dataset.jobId || "";
+        if (jobId) {
+            await pauseJob(jobId);
+        }
+        return;
+    }
+
+    const resumeBtn = event.target.closest(".js-resume-job");
+    if (resumeBtn) {
+        event.preventDefault();
+        const jobId = resumeBtn.dataset.jobId || "";
+        if (jobId) {
+            await resumeJob(jobId);
+        }
+        return;
+    }
+
     const cancelBtn = event.target.closest(".js-cancel-job");
     if (cancelBtn) {
         event.preventDefault();
         const jobId = cancelBtn.dataset.jobId || "";
         if (jobId) {
-            await cancelJob(jobId);
+            await cancelJob(jobId, cancelBtn.dataset.jobStatus || "");
         }
         return;
     }

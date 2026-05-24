@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "backend_update_state": {
     "checked_at": 0.0,
     "check_error": "",
@@ -63,6 +63,9 @@
         "templates": [
           "Aktualnie słucha {sluchacze} {sluchacze_odmiana}",
           "Dzisiaj jest {Dzientygodnia} - {data} - {godzina}",
+          "Dziś imieniny obchodzą: {imieniny}",
+          "Najbliższe święto: {swieta} ({dni_do_swiat})",
+          "Nietypowe święto: {swieta_nietypowe} ({dni_do_swiat_nietypowych})",
           "Słuchasz {nazwa_stacji}"
         ]
       },
@@ -70,6 +73,14 @@
         "mode": "all_user_audio",
         "excluded_relative_paths": [],
         "items": []
+      },
+      "manual_queue": {
+        "play_now": [],
+        "queue_next": []
+      },
+      "history": {
+        "items": [],
+        "last_signature": ""
       },
       "stats": {
         "listener_record": 0

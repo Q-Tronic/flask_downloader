@@ -27,6 +27,7 @@ def register_radio_routes(app, deps):
     set_radio_backend_enabled = deps["set_radio_backend_enabled"]
     restart_radio_backend_now = deps["restart_radio_backend_now"]
     control_radio_station = deps["control_radio_station"]
+    queue_radio_station_track = deps["queue_radio_station_track"]
     read_radio_log_file_for_browser = deps["read_radio_log_file_for_browser"]
     get_radio_backend_log_file = deps["get_radio_backend_log_file"]
     get_radio_station_log_file = deps["get_radio_station_log_file"]
@@ -293,6 +294,23 @@ def register_radio_routes(app, deps):
         action = str(payload.get("action") or "").strip().lower()
         scope_username = resolve_radio_scope(payload.get("owner_username") or request.args.get("user") or get_current_username())
         try:
+            if action in ("play_now", "queue_next"):
+                relative_path = payload.get("relative_path")
+                queue_result = queue_radio_station_track(
+                    scope_username,
+                    relative_path,
+                    queue_mode=action,
+                )
+                message = "Dodano do ręcznej kolejki: %s (%s)." % (
+                    queue_result.get("display_title") or "utwór",
+                    "zagraj teraz" if action == "play_now" else "zagraj jako następne",
+                )
+                return radio_state_response(
+                    owner_username=scope_username,
+                    message=message,
+                    kind="success",
+                    queue_result=queue_result,
+                )
             control_radio_station(scope_username, action)
             if action == "start":
                 message = "Stacja radiowa została uruchomiona."

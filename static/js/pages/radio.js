@@ -670,6 +670,8 @@
         const backendService = currentState.backend_service_state || {};
         const stationRuntime = currentState.station_runtime_state || {};
         const backendTask = currentState.backend_install_task || {};
+        const manualQueueRows = Array.isArray(currentState.manual_queue_rows) ? currentState.manual_queue_rows : [];
+        const historyRows = Array.isArray(currentState.history_rows) ? currentState.history_rows : [];
         const backendCard = document.getElementById("radioBackendRuntimeCard");
         const backendPackages = Array.isArray(backendPackage.packages) ? backendPackage.packages : [];
         const icecastPackage = backendPackages.find(function(item) { return String(item && item.name || "") === "icecast2"; }) || {};
@@ -738,6 +740,48 @@
         setText("radioStationCurrentSong", stationRuntime.current_song || "brak danych");
         setHidden("radioStationRuntimeErrorBox", !stationRuntime.error);
         setText("radioStationRuntimeErrorText", stationRuntime.error || "");
+        const queueNode = document.getElementById("radioStationQueueList");
+        if (queueNode) {
+            queueNode.innerHTML = manualQueueRows.length
+                ? manualQueueRows.map(function(item) {
+                    return `
+                        <div class="radio-runtime-list-item">
+                            <div class="radio-runtime-list-copy">
+                                <strong>${escapeHtml(item.display_title || "bez tytułu")}</strong>
+                                <span>${escapeHtml(item.queue_mode_label || "")}${item.requested_at_text ? " • " + escapeHtml(item.requested_at_text) : ""}</span>
+                            </div>
+                            ${item.url ? `<a class="radio-inline-link" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">Otwórz</a>` : ""}
+                        </div>
+                    `;
+                }).join("")
+                : '<div class="radio-runtime-empty">Brak ręcznie wymuszonych pozycji. Możesz dodać je z tabeli biblioteki audio.</div>';
+        }
+        const historyNode = document.getElementById("radioStationHistoryList");
+        if (historyNode) {
+            historyNode.innerHTML = historyRows.length
+                ? historyRows.map(function(item) {
+                    const metaParts = [item.source_mode_label || ""];
+                    if (item.queue_mode_label) {
+                        metaParts.push(item.queue_mode_label);
+                    }
+                    if (item.dj_name) {
+                        metaParts.push(item.dj_name);
+                    }
+                    if (item.played_at_text) {
+                        metaParts.push(item.played_at_text);
+                    }
+                    return `
+                        <div class="radio-runtime-list-item">
+                            <div class="radio-runtime-list-copy">
+                                <strong>${escapeHtml(item.display_title || "bez tytułu")}</strong>
+                                <span>${escapeHtml(metaParts.filter(Boolean).join(" • "))}</span>
+                            </div>
+                            ${item.url ? `<a class="radio-inline-link" href="${escapeHtml(item.url)}" target="_blank" rel="noopener">Otwórz</a>` : ""}
+                        </div>
+                    `;
+                }).join("")
+                : '<div class="radio-runtime-empty">Historia pojawi się automatycznie po pierwszych zmianach utworu albo wejściu live.</div>';
+        }
 
         const stationStartButton = document.getElementById("radioStationStartButton");
         const stationStopButton = document.getElementById("radioStationStopButton");
@@ -948,6 +992,7 @@
         tbody.innerHTML = rows.map(function(row) {
             const sourceBadgeClass = row.source_type === "upload" ? "is-upload" : "is-download";
             const rowClass = row.included ? "is-included" : "is-excluded";
+            const queueButtonsDisabled = hasStation() ? "" : "disabled";
             return `
                 <tr class="radio-library-table-row ${rowClass}" data-relative-path="${escapeHtml(row.relative_path)}">
                     <td class="is-check">
@@ -971,7 +1016,11 @@
                         <div class="radio-file-meta">${escapeHtml(row.size_text || "")} • ${escapeHtml(row.mtime_text || "")}</div>
                     </td>
                     <td class="is-actions">
-                        <a class="radio-table-link" href="${escapeHtml(row.url || "#")}" target="_blank" rel="noopener">Otwórz</a>
+                        <div class="radio-table-actions">
+                            <a class="radio-table-link" href="${escapeHtml(row.url || "#")}" target="_blank" rel="noopener">Otwórz</a>
+                            <button type="button" class="radio-inline-action" data-radio-queue-action="play_now" data-relative-path="${escapeHtml(row.relative_path)}" ${queueButtonsDisabled}>Teraz</button>
+                            <button type="button" class="radio-inline-action" data-radio-queue-action="queue_next" data-relative-path="${escapeHtml(row.relative_path)}" ${queueButtonsDisabled}>Następny</button>
+                        </div>
                     </td>
                 </tr>
             `;
@@ -1318,6 +1367,21 @@
                 return postJson("/api/radio/station/control", {
                     owner_username: readScopeOwner(),
                     action: "next",
+                });
+            });
+        }
+
+        const queueActionButton = event.target.closest("[data-radio-queue-action]");
+        if (queueActionButton) {
+            event.preventDefault();
+            const queueAction = String(queueActionButton.getAttribute("data-radio-queue-action") || "").trim();
+            const relativePath = String(queueActionButton.getAttribute("data-relative-path") || "").trim();
+            const busyLabel = queueAction === "play_now" ? "Wymuszanie..." : "Dodawanie...";
+            return performButtonAction(queueActionButton, busyLabel, function() {
+                return postJson("/api/radio/station/control", {
+                    owner_username: readScopeOwner(),
+                    action: queueAction,
+                    relative_path: relativePath,
                 });
             });
         }

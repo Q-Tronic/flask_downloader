@@ -39,6 +39,7 @@ class DownloadJobsService:
         *,
         jobs_store,
         cancel_events_store,
+        stop_requests_store,
         jobs_lock,
         default_admin_username,
         normalize_username,
@@ -53,6 +54,7 @@ class DownloadJobsService:
         parse_managed_relative_path,
         resolve_download_path,
         cleanup_empty_download_dirs,
+        cleanup_download_artifacts,
         ensure_share_ready,
         sync_dlna_runtime_safe,
         get_relative_download_path,
@@ -61,6 +63,7 @@ class DownloadJobsService:
     ):
         self._jobs_store = jobs_store
         self._cancel_events_store = cancel_events_store
+        self._stop_requests_store = stop_requests_store
         self._jobs_lock = jobs_lock
         self._default_admin_username = default_admin_username
         self._normalize_username = normalize_username
@@ -75,11 +78,20 @@ class DownloadJobsService:
         self._parse_managed_relative_path = parse_managed_relative_path
         self._resolve_download_path = resolve_download_path
         self._cleanup_empty_download_dirs = cleanup_empty_download_dirs
+        self._cleanup_download_artifacts = cleanup_download_artifacts
         self._ensure_share_ready = ensure_share_ready
         self._sync_dlna_runtime_safe = sync_dlna_runtime_safe
         self._get_relative_download_path = get_relative_download_path
         self._build_managed_file_url = build_managed_file_url
         self._format_relative_path_for_user = format_relative_path_for_user
+
+    def _start_download_thread(self, job_id):
+        thread = threading.Thread(
+            target=self._download_worker,
+            args=(job_id,),
+            daemon=True,
+        )
+        thread.start()
 
     def update_job(self, job_id, **kwargs):
         with self._jobs_lock:
@@ -108,7 +120,7 @@ class DownloadJobsService:
             "format_id": format_id,
             "storage_kind": self._normalize_storage_kind(kwargs.get("storage_kind") or "video"),
             "status": "queued",
-            "status_label": "W kolejce",
+            "status_label": "Przygotowanie live" if bool(kwargs.get("is_live_capture")) else "W kolejce",
             "title": str(kwargs.get("title") or ""),
             "label": str(kwargs.get("label") or ""),
             "filename": str(kwargs.get("filename") or ""),
@@ -125,19 +137,17 @@ class DownloadJobsService:
             "overwrite_existing": bool(kwargs.get("overwrite_existing")),
             "replace_paths": [str(path) for path in (kwargs.get("replace_paths") or []) if path],
             "auto_dlna_collection_id": str(kwargs.get("auto_dlna_collection_id") or "").strip(),
+            "is_live_capture": bool(kwargs.get("is_live_capture")),
+            "live_status": str(kwargs.get("live_status") or ""),
         }
 
         with self._jobs_lock:
             self._jobs_store[job_id] = job
             self._cancel_events_store[job_id] = cancel_event
+            self._stop_requests_store[job_id] = ""
             self._write_download_jobs_locked()
 
-        thread = threading.Thread(
-            target=self._download_worker,
-            args=(job_id,),
-            daemon=True,
-        )
-        thread.start()
+        self._start_download_thread(job_id)
 
         return job
 
@@ -154,18 +164,89 @@ class DownloadJobsService:
             if job.get("status") in ("completed", "failed", "canceled"):
                 return False, "Tego zadania nie można już przerwać."
 
+            if job.get("status") == "paused":
+                cleanup_paths = {
+                    job.get("filepath"),
+                    self._resolve_download_path(
+                        job.get("relative_path"),
+                        self._normalize_storage_kind(job.get("storage_kind") or "video"),
+                        owner_username=job.get("owner_username") or self._default_admin_username,
+                    ),
+                }
+                self._cleanup_download_artifacts(cleanup_paths)
+                job["status"] = "canceled"
+                job["status_label"] = "Anulowane"
+                job["error"] = "Pobieranie zostało anulowane po wstrzymaniu."
+                job["finished_at"] = time.time()
+                job["filepath"] = ""
+                job["relative_path"] = ""
+                self._cancel_events_store.pop(job_id, None)
+                self._stop_requests_store.pop(job_id, None)
+                self._write_download_jobs_locked()
+                return True, "Anulowano wstrzymane pobieranie i usunięto jego dane tymczasowe."
+
             if event is None:
                 return False, "Brak uchwytu anulowania dla zadania."
 
+            self._stop_requests_store[job_id] = "cancel"
             event.set()
             job["status_label"] = "Anulowanie..."
             self._write_download_jobs_locked()
             return True, "Wysłano żądanie anulowania."
 
+    def mark_job_pause_requested(self, job_id):
+        with self._jobs_lock:
+            event = self._cancel_events_store.get(job_id)
+            job = self._jobs_store.get(job_id)
+            if not job:
+                return False, "Nie znaleziono zadania."
+
+            if not self._can_access_owner(job.get("owner_username") or self._default_admin_username):
+                return False, "Nie masz dostępu do tego zadania."
+
+            status = str(job.get("status") or "")
+            if status == "paused":
+                return False, "To zadanie jest już wstrzymane."
+            if status not in ("queued", "downloading"):
+                return False, "To zadanie nie może zostać wstrzymane."
+            if event is None:
+                return False, "Brak uchwytu sterowania dla zadania."
+
+            self._stop_requests_store[job_id] = "pause"
+            event.set()
+            job["status_label"] = "Pauzowanie..."
+            self._write_download_jobs_locked()
+            return True, "Wysłano żądanie wstrzymania."
+
+    def resume_job(self, job_id):
+        with self._jobs_lock:
+            job = self._jobs_store.get(job_id)
+            if not job:
+                return False, "Nie znaleziono zadania."
+
+            if not self._can_access_owner(job.get("owner_username") or self._default_admin_username):
+                return False, "Nie masz dostępu do tego zadania."
+
+            if str(job.get("status") or "") != "paused":
+                return False, "Wznowić można tylko wstrzymane zadanie."
+
+            self._cancel_events_store[job_id] = threading.Event()
+            self._stop_requests_store[job_id] = ""
+            job["status"] = "queued"
+            job["status_label"] = "Przygotowanie live" if bool(job.get("is_live_capture")) else "W kolejce"
+            job["error"] = ""
+            job["finished_at"] = None
+            self._write_download_jobs_locked()
+
+        self._start_download_thread(job_id)
+        return True, "Wznowiono pobieranie."
+
     def cleanup_job_cancel_handle(self, job_id):
         with self._jobs_lock:
             if job_id in self._cancel_events_store:
                 del self._cancel_events_store[job_id]
+            if job_id in self._stop_requests_store:
+                del self._stop_requests_store[job_id]
 
     def purge_expired_jobs(self, now_ts=None):
         now_ts = now_ts or time.time()
@@ -183,6 +264,7 @@ class DownloadJobsService:
 
                 self._jobs_store.pop(job_id, None)
                 self._cancel_events_store.pop(job_id, None)
+                self._stop_requests_store.pop(job_id, None)
                 changed = True
 
             if changed:
@@ -201,6 +283,8 @@ class DownloadJobsService:
             job["owner_username"] = owner_username
             storage_kind = self._normalize_storage_kind(job.get("storage_kind") or "video")
             job["storage_kind"] = storage_kind
+            job["is_live_capture"] = bool(job.get("is_live_capture"))
+            job["live_status"] = str(job.get("live_status") or "")
             if job.get("status") == "completed":
                 job["progress_percent"] = 100.0
             elif job.get("status") == "canceled":
@@ -224,6 +308,15 @@ class DownloadJobsService:
                     job["progress_percent"] = None
             elif job.get("status") == "downloading":
                 job["progress_percent"] = None
+            elif job.get("status") == "paused":
+                if job.get("total_bytes") and job.get("downloaded_bytes") is not None:
+                    try:
+                        job["progress_percent"] = round(
+                            (float(job["downloaded_bytes"]) * 100.0) / float(job["total_bytes"]),
+                            1,
+                        )
+                    except Exception:
+                        job["progress_percent"] = None
 
             resolved_path = job.get("filepath") or self._resolve_download_path(
                 job.get("relative_path"),
@@ -255,7 +348,9 @@ class DownloadJobsService:
                 job["file_display_name"] = job.get("filename") or ""
 
             job["can_delete_from_list"] = job.get("status") in ("completed", "failed", "canceled")
-            job["can_cancel"] = job.get("status") in ("queued", "downloading")
+            job["can_cancel"] = job.get("status") in ("queued", "downloading", "paused")
+            job["can_pause"] = job.get("status") in ("queued", "downloading")
+            job["can_resume"] = job.get("status") == "paused"
 
         return jobs
 
@@ -268,11 +363,12 @@ class DownloadJobsService:
             if not self._can_access_owner(job.get("owner_username") or self._default_admin_username):
                 return False, "Nie masz dostępu do tego zadania.", 403
 
-            if job.get("status") in ("queued", "downloading"):
+            if job.get("status") in ("queued", "downloading", "paused"):
                 return False, "Najpierw przerwij aktywne pobieranie.", 409
 
             del self._jobs_store[job_id]
             self._cancel_events_store.pop(job_id, None)
+            self._stop_requests_store.pop(job_id, None)
             self._write_download_jobs_locked()
 
         return True, "", 200

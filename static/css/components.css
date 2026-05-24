@@ -128,6 +128,11 @@
             gap: 18px;
             width: 100%;
         }
+        .settings-panel-stack {
+            display: grid;
+            gap: 18px;
+            width: 100%;
+        }
         .stack-card {
             background: var(--panel-2);
             border: 1px solid var(--border);
@@ -524,6 +529,10 @@
         .job.queued {
             border-color: #455468;
         }
+        .job.paused {
+            border-color: #4b78a8;
+            box-shadow: inset 0 0 0 1px rgba(92, 167, 255, 0.14);
+        }
         .job.canceled {
             border-color: #607088;
             box-shadow: inset 0 0 0 1px rgba(160, 176, 200, 0.12);
@@ -553,6 +562,7 @@
         .status.failed,
         .status.error { background: #4a1f24; color: #ffd5d9; }
         .status.queued { background: #2b3340; color: #d6e2f3; }
+        .status.paused { background: #1f3852; color: #d4eaff; }
         .status.canceled { background: #303847; color: #d6dce6; }
         .progress {
             width: 100%;
@@ -573,6 +583,7 @@
         .progress-bar.failed,
         .progress-bar.error { background: linear-gradient(90deg, #ff6b6b, #ff8f8f); }
         .progress-bar.queued { background: linear-gradient(90deg, #8091a7, #a3b2c6); }
+        .progress-bar.paused { background: linear-gradient(90deg, #5ca7ff, #8cc8ff); }
         .progress-bar.canceled { background: linear-gradient(90deg, #8997aa, #a9b3c3); }
         .empty {
             color: var(--muted);
@@ -887,7 +898,8 @@
             display: grid;
             gap: 12px;
         }
-        .radio-tab-strip {
+        .radio-tab-strip,
+        .settings-tab-strip {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
             gap: 8px;
@@ -895,7 +907,8 @@
             width: 100%;
             padding: 1px 0 2px;
         }
-        .radio-tab-button {
+        .radio-tab-button,
+        .settings-tab-button {
             appearance: none;
             width: 100%;
             min-height: 40px;
@@ -913,21 +926,24 @@
             cursor: pointer;
             transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease;
         }
-        .radio-tab-button:hover {
+        .radio-tab-button:hover,
+        .settings-tab-button:hover {
             filter: none;
             transform: none;
             border-color: rgba(97, 173, 255, 0.24);
             background: rgba(97, 173, 255, 0.08);
             color: #e2efff;
         }
-        .radio-tab-button.is-active {
+        .radio-tab-button.is-active,
+        .settings-tab-button.is-active {
             filter: none;
             transform: none;
             background: linear-gradient(180deg, rgba(97, 173, 255, 0.18), rgba(49, 95, 164, 0.18));
             border-color: rgba(97, 173, 255, 0.34);
             color: #eef6ff;
         }
-        .radio-panel {
+        .radio-panel,
+        .settings-panel {
             display: grid;
             gap: 14px;
         }
@@ -1009,6 +1025,35 @@
             font-size: 14px;
             line-height: 1.4;
         }
+        .settings-workspace-card .section-title {
+            font-size: 28px;
+            margin-bottom: 4px;
+        }
+        .settings-workspace-card #settingsWorkspaceNote {
+            max-width: 64ch;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        .settings-workspace-head {
+            display: grid;
+            gap: 12px;
+            align-items: start;
+            margin-bottom: 18px;
+        }
+        .settings-workspace-card .btn,
+        .settings-workspace-card button.btn,
+        .settings-workspace-card .dlna-item-actions > button,
+        .settings-workspace-card .dlna-item-actions > .btn {
+            min-height: 40px;
+            padding: 10px 14px;
+            border-radius: 12px;
+            font-size: 13px;
+            line-height: 1.1;
+        }
+        .settings-workspace-card .dlna-item-actions {
+            gap: 8px;
+            margin-top: 2px;
+        }
         .radio-workspace-card .btn,
         .radio-workspace-card button.btn,
         .radio-workspace-card .dlna-item-actions > button,
@@ -1050,8 +1095,175 @@
             padding: 7px 12px;
             font-size: 12px;
         }
+        .settings-panel .stack-card {
+            padding: 16px 18px;
+            border-radius: 16px;
+            background: var(--panel-2);
+            border-color: var(--border);
+        }
+        .settings-panel .stack-card.service-card,
+        .settings-panel .stack-card.update-card {
+            background: var(--panel-2);
+        }
+        .settings-panel .card-heading {
+            gap: 4px;
+            margin-bottom: 12px;
+        }
+        .settings-panel .card-title {
+            font-size: 20px;
+            line-height: 1.08;
+        }
+        .settings-panel .card-subtitle {
+            font-size: 12px;
+            line-height: 1.38;
+        }
+        .settings-panel .settings-overview-grid {
+            gap: 10px;
+            margin-top: 14px;
+        }
+        .settings-panel .overview-tile,
+        .settings-panel .service-metric {
+            gap: 4px;
+            padding: 12px 14px;
+            border-radius: 14px;
+        }
+        .settings-panel .overview-tile span,
+        .settings-panel .service-metric span {
+            font-size: 11px;
+        }
+        .settings-panel .overview-tile strong,
+        .settings-panel .service-metric strong {
+            font-size: 16px;
+            line-height: 1.22;
+        }
+        .settings-panel .service-status-row {
+            gap: 10px;
+        }
+        .settings-panel .service-status-pill {
+            min-height: 34px;
+            padding: 7px 12px;
+            font-size: 12px;
+        }
+        .settings-panel .auth-form {
+            display: grid;
+            gap: 12px;
+        }
+        .settings-panel .auth-form input[type="text"],
+        .settings-panel .auth-form input[type="password"],
+        .settings-panel .auth-form input[type="file"],
+        .settings-panel .auth-form select,
+        .settings-panel .auth-form textarea {
+            padding: 11px 12px;
+            border-radius: 12px;
+            font-size: 14px;
+        }
+        .settings-panel .field-label {
+            font-size: 11px;
+            letter-spacing: 0.1em;
+        }
+        .settings-panel .inline-note {
+            font-size: 12px;
+            line-height: 1.42;
+        }
+        .settings-panel .maintenance-task-panel {
+            padding: 12px 14px;
+            border-radius: 14px;
+            gap: 10px;
+        }
+        .settings-panel .maintenance-task-label {
+            font-size: 15px;
+            line-height: 1.2;
+        }
+        .settings-panel .maintenance-task-percent {
+            font-size: 13px;
+        }
+        .settings-panel .maintenance-task-detail {
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .settings-panel .small {
+            font-size: 12px;
+            line-height: 1.35;
+        }
+        .settings-panel .dlna-item {
+            padding: 14px;
+            border-radius: 14px;
+        }
+        .settings-panel .dlna-item-head {
+            gap: 10px;
+        }
+        .settings-panel .dlna-item-title {
+            font-size: 18px;
+            line-height: 1.12;
+        }
+        .settings-panel .dlna-item-meta {
+            font-size: 12px;
+            line-height: 1.35;
+        }
+        .settings-panel .checkbox-row,
+        .settings-panel .dlna-checkbox {
+            gap: 10px;
+        }
+        .settings-panel .actions {
+            gap: 8px;
+        }
+        .settings-panel .progress {
+            height: 12px;
+            border-radius: 999px;
+        }
         #radioPanelRuntime .service-metric {
             gap: 6px;
+        }
+        .radio-runtime-extra-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 12px;
+        }
+        .radio-runtime-mini-card {
+            gap: 10px;
+        }
+        .radio-runtime-list {
+            display: grid;
+            gap: 8px;
+        }
+        .radio-runtime-list-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 9px 11px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        .radio-runtime-list-copy {
+            min-width: 0;
+            display: grid;
+            gap: 3px;
+        }
+        .radio-runtime-list-copy strong {
+            font-size: 13px;
+            line-height: 1.18;
+            overflow-wrap: anywhere;
+        }
+        .radio-runtime-list-copy span,
+        .radio-runtime-empty,
+        .radio-inline-link {
+            color: var(--muted);
+            font-size: 11px;
+            line-height: 1.28;
+        }
+        .radio-inline-link {
+            color: #9bc7ff;
+            text-decoration: none;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .radio-inline-link:hover {
+            text-decoration: underline;
+        }
+        .radio-runtime-empty {
+            padding: 8px 0 2px;
         }
         #radioPanelRuntime #radioBackendRuntimeCard .dlna-item-actions,
         .radio-panel #radioStationRuntimeBlock .dlna-item-actions {
@@ -1326,7 +1538,7 @@
         }
         .radio-library-table th.is-actions,
         .radio-library-table td.is-actions {
-            width: 76px;
+            width: 204px;
             white-space: nowrap;
         }
         .radio-library-table td.is-role {
@@ -1377,6 +1589,32 @@
         }
         .radio-table-link:hover {
             text-decoration: underline;
+        }
+        .radio-table-actions {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .radio-inline-action {
+            min-height: 28px;
+            padding: 4px 8px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.045);
+            color: #dfeeff;
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .radio-inline-action:hover:not(:disabled) {
+            background: rgba(97, 173, 255, 0.14);
+            border-color: rgba(97, 173, 255, 0.26);
+        }
+        .radio-inline-action:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
         }
         .radio-source-badge {
             display: inline-flex;
@@ -1464,19 +1702,26 @@
             }
         }
         @media (max-width: 760px) {
-            .radio-workspace-card {
+            .radio-workspace-card,
+            .settings-workspace-card {
                 padding: 18px 16px;
             }
-            .radio-panel .stack-card {
+            .radio-panel .stack-card,
+            .settings-panel .stack-card {
                 padding: 14px;
             }
-            .radio-panel .card-title {
+            .radio-panel .card-title,
+            .settings-panel .card-title {
                 font-size: 18px;
             }
             .radio-workspace-card .btn,
             .radio-workspace-card button.btn,
             .radio-workspace-card .dlna-item-actions > button,
-            .radio-workspace-card .dlna-item-actions > .btn {
+            .radio-workspace-card .dlna-item-actions > .btn,
+            .settings-workspace-card .btn,
+            .settings-workspace-card button.btn,
+            .settings-workspace-card .dlna-item-actions > button,
+            .settings-workspace-card .dlna-item-actions > .btn {
                 padding: 9px 12px;
                 font-size: 12px;
             }

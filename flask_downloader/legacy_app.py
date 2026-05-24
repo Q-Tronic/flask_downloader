@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+import io
 import os
 import platform
 import re
@@ -99,6 +100,7 @@ from flask_downloader.services.download_service import DownloadPathService
 from flask_downloader.services.source_service import SourceMediaService
 from flask_downloader.services.ffmpeg_service import FfmpegMaintenanceService
 from flask_downloader.services.ytdlp_service import YtDlpMaintenanceService
+from flask_downloader.services.calendar_service import CalendarService
 from flask_downloader.services.dlna_service import DlnaLibraryService
 from flask_downloader.services.dlna_runtime_service import DlnaRuntimeService
 from flask_downloader.services.dlna_update_service import DlnaUpdateService
@@ -258,6 +260,7 @@ def create_maintenance_task_state(title):
 DOWNLOAD_JOBS = {}
 DOWNLOAD_LOCK = threading.Lock()
 JOB_CANCEL_EVENTS = {}
+JOB_STOP_REQUESTS = {}
 FFMPEG_INSTALL_LOCK = threading.Lock()
 FFMPEG_SCHEDULER_LOCK = threading.Lock()
 FFMPEG_SCHEDULER_STARTED = False
@@ -423,7 +426,7 @@ def ensure_user_has_no_active_jobs(username, action_label="tą operacją"):
             job.get("job_id")
             for job in DOWNLOAD_JOBS.values()
             if normalize_username(job.get("owner_username") or DEFAULT_ADMIN_USERNAME) == normalized_username
-            and job.get("status") in ("queued", "downloading")
+            and job.get("status") in ("queued", "downloading", "paused")
         ]
     if active_jobs:
         raise ValueError("Najpierw przerwij aktywne zadania użytkownika przed %s." % action_label)
@@ -1572,7 +1575,7 @@ def cleanup_download_artifacts(paths):
 def normalize_saved_job_record(raw):
     now_ts = time.time()
     default_job_id = uuid.uuid4().hex
-    allowed_statuses = {"queued", "downloading", "completed", "failed", "canceled"}
+    allowed_statuses = {"queued", "downloading", "paused", "completed", "failed", "canceled"}
     raw_owner_username = raw.get("owner_username") or DEFAULT_ADMIN_USERNAME
 
     try:
@@ -1604,6 +1607,8 @@ def normalize_saved_job_record(raw):
         "overwrite_existing": bool(raw.get("overwrite_existing")),
         "replace_paths": [str(path) for path in (raw.get("replace_paths") or []) if path],
         "auto_dlna_collection_id": str(raw.get("auto_dlna_collection_id") or "").strip(),
+        "is_live_capture": bool(raw.get("is_live_capture")),
+        "live_status": str(raw.get("live_status") or ""),
     }
 
     if job["status"] not in allowed_statuses:
@@ -1659,6 +1664,8 @@ def serialize_job_for_storage(job):
         "overwrite_existing": bool(job.get("overwrite_existing")),
         "replace_paths": [str(path) for path in (job.get("replace_paths") or []) if path],
         "auto_dlna_collection_id": str(job.get("auto_dlna_collection_id") or "").strip(),
+        "is_live_capture": bool(job.get("is_live_capture")),
+        "live_status": str(job.get("live_status") or ""),
     }
 
 
@@ -1935,6 +1942,10 @@ def load_saved_download_jobs():
                     "relative_path": "",
                 })
                 changed = True
+            elif job["status"] == "paused":
+                if not job.get("status_label"):
+                    job["status_label"] = "Wstrzymane"
+                    changed = True
 
             jobs[job_id] = job
 
@@ -2650,6 +2661,12 @@ class DownloadCancelledError(Exception):
     pass
 
 
+class DownloadInterruptedError(Exception):
+    def __init__(self, action, message):
+        super().__init__(message)
+        self.action = str(action or "cancel").strip().lower() or "cancel"
+
+
 def ydl_opts():
     return apply_ffmpeg_location({
         "quiet": True,
@@ -3048,15 +3065,25 @@ def is_job_cancelled(job_id):
     return bool(event and event.is_set())
 
 
+def get_job_stop_action(job_id):
+    with DOWNLOAD_LOCK:
+        return str(JOB_STOP_REQUESTS.get(job_id) or "").strip().lower()
+
+
 def get_user_download_slot_snapshot(owner_username, *, include_job_id=None):
     owner = normalize_username(owner_username or DEFAULT_ADMIN_USERNAME)
 
     with DOWNLOAD_LOCK:
+        include_is_live_capture = False
+        if include_job_id:
+            current_job = DOWNLOAD_JOBS.get(str(include_job_id))
+            include_is_live_capture = bool(current_job and current_job.get("is_live_capture"))
         same_owner_jobs = [
             dict(job)
             for job in DOWNLOAD_JOBS.values()
             if normalize_username(job.get("owner_username") or DEFAULT_ADMIN_USERNAME) == owner
             and job.get("status") in ("queued", "downloading")
+            and not bool(job.get("is_live_capture"))
         ]
 
     same_owner_jobs.sort(
@@ -3081,7 +3108,7 @@ def get_user_download_slot_snapshot(owner_username, *, include_job_id=None):
         "active_count": len(active_job_ids),
         "active_job_ids": active_job_ids,
         "eligible_job_ids": eligible_job_ids,
-        "can_start": bool(include_job_id and str(include_job_id) in eligible_job_ids),
+        "can_start": bool(include_is_live_capture or (include_job_id and str(include_job_id) in eligible_job_ids)),
     }
 
 
@@ -3090,13 +3117,20 @@ def wait_for_user_download_slot(job_id, owner_username, *, poll_interval=0.5):
 
     while True:
         if is_job_cancelled(job_id):
-            raise DownloadCancelledError("Pobieranie anulowane podczas oczekiwania w kolejce.")
+            stop_action = get_job_stop_action(job_id) or "cancel"
+            if stop_action == "pause":
+                raise DownloadInterruptedError("pause", "Pobieranie zostało wstrzymane podczas oczekiwania w kolejce.")
+            raise DownloadInterruptedError("cancel", "Pobieranie anulowane podczas oczekiwania w kolejce.")
 
         with DOWNLOAD_LOCK:
             current_job = DOWNLOAD_JOBS.get(job_id)
             if not current_job:
                 raise DownloadCancelledError("Zadanie zniknęło z kolejki przed rozpoczęciem pobierania.")
             current_status = str(current_job.get("status") or "")
+            current_is_live_capture = bool(current_job.get("is_live_capture"))
+
+        if current_is_live_capture:
+            return
 
         if current_status != "queued":
             return
@@ -3130,6 +3164,14 @@ def mark_job_cancel_requested(job_id):
     return DOWNLOAD_JOBS_SERVICE.mark_job_cancel_requested(job_id)
 
 
+def mark_job_pause_requested(job_id):
+    return DOWNLOAD_JOBS_SERVICE.mark_job_pause_requested(job_id)
+
+
+def resume_job_download(job_id):
+    return DOWNLOAD_JOBS_SERVICE.resume_job(job_id)
+
+
 def cleanup_job_cancel_handle(job_id):
     return DOWNLOAD_JOBS_SERVICE.cleanup_job_cancel_handle(job_id)
 
@@ -3148,7 +3190,9 @@ def download_worker(job_id):
     seen_paths = set()
     replace_paths = []
     overwrite_existing = False
+    is_live_capture_requested = False
     progress_components = {}
+    resume_target_path = ""
 
     try:
         with DOWNLOAD_LOCK:
@@ -3162,14 +3206,30 @@ def download_worker(job_id):
             filename = str(job.get("planned_filename") or "")
             replace_paths = [str(path) for path in (job.get("replace_paths") or []) if path]
             overwrite_existing = bool(job.get("overwrite_existing"))
+            is_live_capture_requested = bool(job.get("is_live_capture"))
+            resume_target_path = str(job.get("filepath") or "").strip()
+            if not resume_target_path:
+                resume_target_path = str(
+                    resolve_download_path(
+                        job.get("relative_path"),
+                        storage_kind,
+                        owner_username=owner_username,
+                    ) or ""
+                ).strip()
 
         if is_job_cancelled(job_id):
-            raise DownloadCancelledError("Pobieranie anulowane przed rozpoczęciem.")
+            stop_action = get_job_stop_action(job_id) or "cancel"
+            if stop_action == "pause":
+                raise DownloadInterruptedError("pause", "Pobieranie zostało wstrzymane przed rozpoczęciem.")
+            raise DownloadInterruptedError("cancel", "Pobieranie anulowane przed rozpoczęciem.")
 
         wait_for_user_download_slot(job_id, owner_username)
 
         if is_job_cancelled(job_id):
-            raise DownloadCancelledError("Pobieranie anulowane przed przydzieleniem slotu.")
+            stop_action = get_job_stop_action(job_id) or "cancel"
+            if stop_action == "pause":
+                raise DownloadInterruptedError("pause", "Pobieranie zostało wstrzymane przed przydzieleniem slotu.")
+            raise DownloadInterruptedError("cancel", "Pobieranie anulowane przed przydzieleniem slotu.")
 
         ensure_download_dir_ready(storage_kind, owner_username)
 
@@ -3178,6 +3238,12 @@ def download_worker(job_id):
         if not fmt:
             raise RuntimeError("Nie znaleziono wskazanego formatu.")
 
+        is_live_capture = bool(
+            is_live_capture_requested
+            and result.get("is_live_stream")
+            and result.get("supports_live_from_start")
+        )
+
         if not filename:
             filename = build_download_filename(result.get("download_title") or result["title"], fmt)
 
@@ -3185,13 +3251,34 @@ def download_worker(job_id):
         if storage_kind == "audio":
             ensure_ffmpeg_available_for_audio_conversion()
 
-        target_path = allocate_target_path(temp_filename, media_kind=storage_kind, owner_username=owner_username)
+        candidate_resume_path = os.path.abspath(resume_target_path) if resume_target_path else ""
+        if candidate_resume_path:
+            resume_artifact_exists = any(
+                os.path.exists(root)
+                or os.path.exists(root + ".part")
+                or os.path.exists(root + ".ytdl")
+                for root in get_download_artifact_roots(candidate_resume_path)
+            )
+            target_path = candidate_resume_path if resume_artifact_exists else ""
+        else:
+            target_path = ""
+
+        if not target_path:
+            target_path = allocate_target_path(temp_filename, media_kind=storage_kind, owner_username=owner_username)
         seen_paths.add(target_path)
 
         update_job(
             job_id,
             status="downloading",
-            status_label="Pobieranie i konwersja" if storage_kind == "audio" else "Pobieranie",
+            status_label=(
+                "Nagrywanie live i konwersja"
+                if is_live_capture and storage_kind == "audio"
+                else "Nagrywanie live od początku"
+                if is_live_capture
+                else "Pobieranie i konwersja"
+                if storage_kind == "audio"
+                else "Pobieranie"
+            ),
             started_at=time.time(),
             title=result["title"],
             label=fmt.get("label") or fmt.get("format_id") or "",
@@ -3202,11 +3289,15 @@ def download_worker(job_id):
             total_bytes=None,
             progress_percent=0.0,
             error="",
+            live_status=str(result.get("live_status") or ""),
             persist=True,
         )
 
         if is_job_cancelled(job_id):
-            raise DownloadCancelledError("Pobieranie anulowane przed otwarciem strumienia.")
+            stop_action = get_job_stop_action(job_id) or "cancel"
+            if stop_action == "pause":
+                raise DownloadInterruptedError("pause", "Pobieranie zostało wstrzymane przed otwarciem strumienia.")
+            raise DownloadInterruptedError("cancel", "Pobieranie anulowane przed otwarciem strumienia.")
 
         def progress_hook(status):
             nonlocal downloaded, total_bytes, target_path, relative_path, progress_components
@@ -3220,7 +3311,10 @@ def download_worker(job_id):
                     seen_paths.add(os.path.abspath(path))
 
             if is_job_cancelled(job_id):
-                raise DownloadCancelledError("Pobieranie zostało przerwane przez użytkownika.")
+                stop_action = get_job_stop_action(job_id) or "cancel"
+                if stop_action == "pause":
+                    raise DownloadInterruptedError("pause", "Pobieranie zostało wstrzymane przez użytkownika.")
+                raise DownloadInterruptedError("cancel", "Pobieranie zostało przerwane przez użytkownika.")
 
             status_name = status.get("status") or ""
             current_downloaded = int(status.get("downloaded_bytes") or 0)
@@ -3295,6 +3389,10 @@ def download_worker(job_id):
                     relative_path=relative_path or get_relative_download_path(target_path, storage_kind, owner_username),
                 )
 
+        selected_download_format = str(
+            fmt.get("live_download_format") if is_live_capture else fmt.get("download_format") or format_id
+        )
+
         ydl_download_opts = apply_ffmpeg_location({
             "quiet": True,
             "no_warnings": True,
@@ -3302,12 +3400,16 @@ def download_worker(job_id):
             "http_headers": {
                 "User-Agent": USER_AGENT,
             },
-            "format": str(fmt.get("download_format") or format_id),
+            "format": selected_download_format,
             "outtmpl": target_path,
             "noplaylist": True,
             "overwrites": False,
+            "continuedl": True,
             "progress_hooks": [progress_hook],
         })
+
+        if is_live_capture:
+            ydl_download_opts["live_from_start"] = True
 
         if storage_kind == "video" and not fmt.get("has_audio"):
             merge_ext = str(fmt.get("merge_ext") or fmt.get("ext") or "mp4").lower()
@@ -3385,7 +3487,7 @@ def download_worker(job_id):
         update_job(
             job_id,
             status="completed",
-            status_label="Ukończone",
+            status_label="Nagranie live zakończone" if is_live_capture else "Ukończone",
             downloaded_bytes=display_total_bytes,
             total_bytes=display_total_bytes,
             progress_percent=100.0,
@@ -3412,22 +3514,35 @@ def download_worker(job_id):
                 )
         sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
 
-    except DownloadCancelledError as exc:
-        cleanup_download_artifacts(seen_paths)
+    except DownloadInterruptedError as exc:
+        if exc.action == "pause":
+            update_job(
+                job_id,
+                status="paused",
+                status_label="Wstrzymane",
+                error=str(exc),
+                finished_at=time.time(),
+                filepath=target_path,
+                filename=filename,
+                relative_path=relative_path or get_relative_download_path(target_path, storage_kind, owner_username),
+                persist=True,
+            )
+        else:
+            cleanup_download_artifacts(seen_paths)
 
-        update_job(
-            job_id,
-            status="canceled",
-            status_label="Anulowane",
-            error=str(exc),
-            finished_at=time.time(),
-            progress_percent=0.0,
-            downloaded_bytes=downloaded,
-            filepath="",
-            filename=filename,
-            relative_path="",
-            persist=True,
-        )
+            update_job(
+                job_id,
+                status="canceled",
+                status_label="Anulowano nagrywanie live" if is_live_capture_requested else "Anulowane",
+                error=str(exc),
+                finished_at=time.time(),
+                progress_percent=0.0,
+                downloaded_bytes=downloaded,
+                filepath="",
+                filename=filename,
+                relative_path="",
+                persist=True,
+            )
 
     except Exception as exc:
         cleanup_download_artifacts(seen_paths)
@@ -3435,7 +3550,7 @@ def download_worker(job_id):
         update_job(
             job_id,
             status="failed",
-            status_label="Niepowodzenie",
+            status_label="Niepowodzenie live" if is_live_capture_requested else "Niepowodzenie",
             error=str(exc),
             finished_at=time.time(),
             filepath="",
@@ -3506,6 +3621,7 @@ SYSTEM_SERVICE = SystemServiceHelper(
 DOWNLOAD_JOBS_SERVICE = DownloadJobsService(
     jobs_store=DOWNLOAD_JOBS,
     cancel_events_store=JOB_CANCEL_EVENTS,
+    stop_requests_store=JOB_STOP_REQUESTS,
     jobs_lock=DOWNLOAD_LOCK,
     default_admin_username=DEFAULT_ADMIN_USERNAME,
     normalize_username=normalize_username,
@@ -3520,6 +3636,7 @@ DOWNLOAD_JOBS_SERVICE = DownloadJobsService(
     parse_managed_relative_path=parse_managed_relative_path,
     resolve_download_path=resolve_download_path,
     cleanup_empty_download_dirs=cleanup_empty_download_dirs,
+    cleanup_download_artifacts=cleanup_download_artifacts,
     ensure_share_ready=ensure_share_ready,
     sync_dlna_runtime_safe=lambda restart_service_if_active=True, force_full_rescan=False: sync_dlna_runtime_safe(
         restart_service_if_active=restart_service_if_active,
@@ -3622,6 +3739,11 @@ RADIO_STORE = radios_store_load_radio_store(
     parse_managed_relative_path=parse_managed_relative_path,
 )
 
+CALENDAR_SERVICE = CalendarService(
+    data_dir=DATA_DIR,
+    requests_module=requests,
+)
+
 
 def write_radio_store_locked():
     radios_store_write_radio_store(RADIOS_FILE, RADIO_STORE)
@@ -3654,6 +3776,7 @@ RADIO_SERVICE = RadioService(
     get_daily_download_dir=get_daily_download_dir,
     ensure_share_ready=ensure_share_ready,
     format_ts=format_ts,
+    build_calendar_placeholder_values=CALENDAR_SERVICE.build_erds_placeholder_values,
 )
 
 RADIO_RUNTIME_SERVICE = None
@@ -3741,6 +3864,270 @@ def get_radio_backend_log_file():
 
 def get_radio_station_log_file(owner_username):
     return get_radio_runtime_service().get_station_log_file(owner_username)
+
+
+def build_config_export_bundle():
+    return build_named_config_export_bundle()
+
+
+def build_named_config_export_bundle(filename_prefix="flask-downloader-config", note=""):
+    export_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    safe_prefix = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(filename_prefix or "flask-downloader-config")).strip("-")
+    export_name = "%s-%s.zip" % ((safe_prefix or "flask-downloader-config"), export_timestamp)
+    archive_paths = [
+        ("data/config.json", CONFIG_FILE),
+        ("data/jobs.json", JOBS_FILE),
+        ("data/users.json", USERS_FILE),
+        ("data/radios.json", RADIOS_FILE),
+    ]
+    missing_files = []
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        for archive_name, source_path in archive_paths:
+            if os.path.isfile(source_path):
+                bundle.write(source_path, arcname=archive_name)
+            else:
+                missing_files.append(archive_name)
+        manifest = {
+            "created_at": datetime.now().isoformat(),
+            "project": "VLC Stream Extractor",
+            "included_files": [archive_name for archive_name, source_path in archive_paths if os.path.isfile(source_path)],
+            "missing_files": missing_files,
+            "note": str(note or "Eksport zawiera tylko bieżące store'y aplikacji. Sekrety z .env nie są dołączane automatycznie."),
+        }
+        bundle.writestr(
+            "manifest.json",
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+        )
+    content = buffer.getvalue()
+    backups_dir = os.path.join(PROJECT_ROOT, "backups")
+    os.makedirs(backups_dir, exist_ok=True)
+    saved_path = os.path.join(backups_dir, export_name)
+    with open(saved_path, "wb") as fh:
+        fh.write(content)
+    return {
+        "filename": export_name,
+        "content": content,
+        "saved_path": saved_path,
+        "missing_files": missing_files,
+    }
+
+
+def normalize_imported_app_config(raw):
+    if not isinstance(raw, dict):
+        raise ValueError("Plik data/config.json w archiwum musi zawierać obiekt JSON.")
+
+    payload = default_app_config()
+    payload["user_storage_root"] = normalize_user_storage_root(raw.get("user_storage_root", payload["user_storage_root"]))
+    try:
+        payload["user_storage_layout_version"] = max(1, int(raw.get("user_storage_layout_version") or 1))
+    except Exception:
+        payload["user_storage_layout_version"] = 1
+    payload["storage"] = normalize_storage_config(raw.get("storage", payload.get("storage")))
+    payload["download_root"] = normalize_download_root(raw.get("download_root", payload["download_root"]))
+    payload["audio_download_root"] = normalize_audio_download_root(raw.get("audio_download_root", payload["audio_download_root"]))
+    payload["job_retention_days"] = normalize_retention_days(raw.get("job_retention_days", payload["job_retention_days"]))
+    payload["yt_dlp_update_state"] = normalize_yt_dlp_update_state(raw.get("yt_dlp_update_state", payload["yt_dlp_update_state"]))
+    payload["ffmpeg_update_state"] = normalize_ffmpeg_update_state(raw.get("ffmpeg_update_state", payload["ffmpeg_update_state"]))
+    payload["dlna_update_state"] = normalize_dlna_update_state(raw.get("dlna_update_state", payload["dlna_update_state"]))
+    payload["dlna"] = normalize_dlna_config(raw.get("dlna", payload["dlna"]))
+    return hydrate_storage_paths(payload)
+
+
+def normalize_imported_jobs_payload(raw):
+    if not isinstance(raw, list):
+        raise ValueError("Plik data/jobs.json w archiwum musi zawierać listę zadań.")
+
+    normalized_jobs = []
+    jobs_by_id = {}
+    seen_job_ids = set()
+
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        job = normalize_saved_job_record(item)
+        job_id = str(job.get("job_id") or "").strip()
+        if not job_id or job_id in seen_job_ids:
+            continue
+        seen_job_ids.add(job_id)
+        if job.get("status") in ("queued", "downloading", "paused"):
+            job["status"] = "failed"
+            job["status_label"] = "Niepowodzenie"
+            if not str(job.get("error") or "").strip():
+                job["error"] = "Zadanie zostało przywrócone z importu konfiguracji i oznaczone jako nieukończone."
+            job["finished_at"] = float(job.get("finished_at") or time.time())
+            job["filepath"] = ""
+            job["relative_path"] = ""
+        normalized_jobs.append(job)
+        jobs_by_id[job_id] = copy.deepcopy(job)
+
+    return {
+        "payload": [serialize_job_for_storage(job) for job in normalized_jobs],
+        "jobs_map": jobs_by_id,
+    }
+
+
+def _normalize_zip_member_name(value):
+    return str(value or "").replace("\\", "/").lstrip("./").strip().lower()
+
+
+def _load_json_from_bundle(bundle, required_name):
+    normalized_required_name = _normalize_zip_member_name(required_name)
+    candidates = {}
+    for member_name in bundle.namelist():
+        normalized_name = _normalize_zip_member_name(member_name)
+        if normalized_name:
+            candidates[normalized_name] = member_name
+
+    selected_member_name = None
+    if normalized_required_name in candidates:
+        selected_member_name = candidates[normalized_required_name]
+    else:
+        basename = normalized_required_name.split("/")[-1]
+        for normalized_name, member_name in candidates.items():
+            if normalized_name.endswith("/" + basename) or normalized_name == basename:
+                selected_member_name = member_name
+                break
+
+    if not selected_member_name:
+        raise ValueError("W archiwum brakuje pliku %s." % required_name)
+
+    try:
+        raw_content = bundle.read(selected_member_name)
+    except KeyError as exc:
+        raise ValueError("Nie udało się odczytać pliku %s z archiwum." % required_name) from exc
+
+    try:
+        return json.loads(raw_content.decode("utf-8"))
+    except Exception as exc:
+        raise ValueError("Plik %s nie zawiera poprawnego JSON-a UTF-8." % required_name) from exc
+
+
+def _load_normalized_store_from_temp(raw_payload, loader, *, temp_suffix=".json"):
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=temp_suffix, delete=False) as temp_file:
+            json.dump(raw_payload, temp_file, ensure_ascii=False, indent=2)
+            temp_path = temp_file.name
+        return loader(temp_path)
+    finally:
+        if temp_path and os.path.isfile(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+def restore_config_bundle(bundle_bytes):
+    raw_content = bundle_bytes if isinstance(bundle_bytes, (bytes, bytearray)) else b""
+    if not raw_content:
+        raise ValueError("Nie przesłano archiwum ZIP z konfiguracją.")
+
+    with DOWNLOAD_LOCK:
+        active_jobs = [
+            job for job in DOWNLOAD_JOBS.values()
+            if str((job or {}).get("status") or "").strip().lower() in ("queued", "downloading", "paused")
+        ]
+    if active_jobs:
+        raise ValueError("Najpierw zakończ lub anuluj aktywne zadania pobierania, a dopiero potem przywróć konfigurację.")
+
+    try:
+        bundle = zipfile.ZipFile(io.BytesIO(raw_content), "r")
+    except Exception as exc:
+        raise ValueError("Przesłany plik nie jest poprawnym archiwum ZIP.") from exc
+
+    with bundle:
+        raw_config = _load_json_from_bundle(bundle, "data/config.json")
+        raw_jobs = _load_json_from_bundle(bundle, "data/jobs.json")
+        raw_users = _load_json_from_bundle(bundle, "data/users.json")
+        raw_radios = _load_json_from_bundle(bundle, "data/radios.json")
+
+    normalized_config = normalize_imported_app_config(raw_config)
+    normalized_jobs = normalize_imported_jobs_payload(raw_jobs)
+    normalized_user_store = _load_normalized_store_from_temp(
+        raw_users,
+        lambda temp_path: users_store_load_user_store(temp_path, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD),
+    )
+    normalized_radio_store = _load_normalized_store_from_temp(
+        raw_radios,
+        lambda temp_path: radios_store_load_radio_store(
+            temp_path,
+            normalize_username=normalize_username,
+            parse_managed_relative_path=parse_managed_relative_path,
+        ),
+    )
+
+    previous_config = get_config_snapshot()
+    previous_user_store = get_user_store_snapshot()
+    previous_radio_store = get_radio_store_snapshot()
+    with DOWNLOAD_LOCK:
+        previous_jobs_payload = [serialize_job_for_storage(job) for job in DOWNLOAD_JOBS.values()]
+        previous_jobs_map = copy.deepcopy(DOWNLOAD_JOBS)
+
+    backup_bundle = build_named_config_export_bundle(
+        filename_prefix="flask-downloader-before-restore",
+        note="Automatyczny backup store'ów utworzony tuż przed przywróceniem konfiguracji z ZIP-a.",
+    )
+
+    try:
+        config_store_write_app_config(CONFIG_FILE, normalized_config)
+        jobs_store_write_jobs_payload(JOBS_FILE, normalized_jobs["payload"])
+        users_store_write_user_store(USERS_FILE, normalized_user_store)
+        radios_store_write_radio_store(RADIOS_FILE, normalized_radio_store)
+    except Exception:
+        try:
+            config_store_write_app_config(CONFIG_FILE, previous_config)
+            jobs_store_write_jobs_payload(JOBS_FILE, previous_jobs_payload)
+            users_store_write_user_store(USERS_FILE, previous_user_store)
+            radios_store_write_radio_store(RADIOS_FILE, previous_radio_store)
+        except Exception:
+            pass
+        raise
+
+    with APP_CONFIG_LOCK:
+        APP_CONFIG.clear()
+        APP_CONFIG.update(copy.deepcopy(normalized_config))
+    with USER_STORE_LOCK:
+        USER_STORE.clear()
+        USER_STORE.update(copy.deepcopy(normalized_user_store))
+    with DOWNLOAD_LOCK:
+        DOWNLOAD_JOBS.clear()
+        DOWNLOAD_JOBS.update(copy.deepcopy(normalized_jobs["jobs_map"]))
+    with RADIO_STORE_LOCK:
+        RADIO_STORE.clear()
+        RADIO_STORE.update(copy.deepcopy(normalized_radio_store))
+
+    warnings = []
+    try:
+        storage_ok, storage_message = ensure_share_ready(auto_remount=True)
+        if not storage_ok and storage_message:
+            warnings.append(str(storage_message).strip())
+    except Exception as exc:
+        warnings.append("Nie udało się sprawdzić backendu danych po imporcie: %s" % exc)
+
+    try:
+        sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
+    except Exception as exc:
+        warnings.append("Konfiguracja została przywrócona, ale synchronizacja DLNA zgłosiła błąd: %s" % exc)
+
+    try:
+        sync_radio_runtime_safe(restart_backend_if_active=True, restart_active_stations=True)
+    except Exception as exc:
+        warnings.append("Konfiguracja została przywrócona, ale synchronizacja radia zgłosiła błąd: %s" % exc)
+
+    return {
+        "backup_bundle": backup_bundle,
+        "imported_files": [
+            "data/config.json",
+            "data/jobs.json",
+            "data/users.json",
+            "data/radios.json",
+        ],
+        "job_count": len(normalized_jobs["jobs_map"]),
+        "user_count": len(list((normalized_user_store or {}).get("users") or [])),
+        "station_count": len(dict((normalized_radio_store or {}).get("stations") or {})),
+        "warnings": warnings,
+    }
 
 
 def start_radio_package_scheduler_once():
@@ -3873,6 +4260,20 @@ def store_uploaded_radio_audio(owner_username, file_storage):
 def store_uploaded_radio_audio_batch(owner_username, file_storages):
     result = RADIO_SERVICE.store_uploaded_audio_batch(owner_username, file_storages)
     sync_radio_runtime_safe(restart_backend_if_active=False, restart_active_stations=False)
+    return result
+
+
+def queue_radio_station_track(owner_username, relative_path, queue_mode="queue_next"):
+    result = RADIO_SERVICE.enqueue_manual_track(owner_username, relative_path, queue_mode=queue_mode)
+    runtime_service = get_radio_runtime_service()
+    runtime_service.refresh_station_queue_files(owner_username)
+    if str(queue_mode or "").strip().lower() == "play_now":
+        station_state = runtime_service.get_station_runtime_state(owner_username)
+        if station_state.get("service_active") and not station_state.get("live_connected"):
+            try:
+                runtime_service.skip_station_track(owner_username)
+            except Exception:
+                pass
     return result
 
 

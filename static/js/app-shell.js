@@ -62,6 +62,9 @@
 
     function toastFormatPercent(job) {
         if (job.progress_percent === null || job.progress_percent === undefined) {
+            if (job && job.is_live_capture && job.status === "downloading") {
+                return "LIVE";
+            }
             return job.status === "queued" ? "0%" : "--";
         }
         return Number(job.progress_percent).toFixed(1) + "%";
