@@ -24,6 +24,16 @@
             <strong id="settingsActiveBackendValue">{{ mount.active_backend_label }}</strong>
         </div>
         <div class="overview-tile">
+            <span>Lokalny storage</span>
+            <strong id="settingsLocalStorageHeadline">{{ storage_disk_state.local.headline }}</strong>
+            <div id="settingsLocalStorageMetaValue" class="inline-note">{{ storage_disk_state.local.meta }}</div>
+        </div>
+        <div class="overview-tile">
+            <span>Udział sieciowy</span>
+            <strong id="settingsNetworkStorageHeadline">{{ storage_disk_state.network.headline }}</strong>
+            <div id="settingsNetworkStorageMetaValue" class="inline-note">{{ storage_disk_state.network.meta }}</div>
+        </div>
+        <div class="overview-tile">
             <span>Aktywny katalog danych</span>
             <strong><code id="settingsActiveStorageRootValue">{{ mount.active_root or config.user_storage_root }}</code></strong>
         </div>
@@ -647,6 +657,84 @@
 
     <section class="settings-panel" data-settings-panel="system" hidden>
         <div class="settings-panel-stack">
+            <div class="stack-card service-card">
+                <div class="card-heading">
+                    <div class="card-title">Wersja aplikacji</div>
+                    <div class="card-subtitle">
+                        Sprawdzisz numer wersji panelu, porównasz go z gałęzią <code>{{ app_update_state.repo_branch }}</code> na GitHubie i w razie potrzeby uruchomisz bezpieczną aktualizację kodu bez ruszania <code>data/</code> oraz <code>.env</code>.
+                    </div>
+                </div>
+
+                <div class="service-status-row">
+                    <span id="appUpdateStatusPill" class="service-status-pill {{ app_update_state.status_pill_kind }}">{{ app_update_state.status_pill_label }}</span>
+                    <div id="appUpdateCheckedAt" class="small">Ostatnie sprawdzenie: {{ app_update_state.checked_at_text }}</div>
+                </div>
+
+                <div class="settings-overview-grid">
+                    <div class="overview-tile">
+                        <span>Wersja na serwerze</span>
+                        <strong id="appUpdateCurrentVersion">{{ app_update_state.current_version }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Wersja na GitHubie</span>
+                        <strong id="appUpdateLatestVersion">{{ app_update_state.latest_version }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Repozytorium</span>
+                        <strong><code id="appUpdateRepoLabel">{{ app_update_state.repo_label }}</code></strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Gałąź aktualizacji</span>
+                        <strong><code id="appUpdateRepoBranch">{{ app_update_state.repo_branch }}</code></strong>
+                    </div>
+                </div>
+
+                <div id="appUpdateCheckErrorBox" class="error" {% if not app_update_state.check_error %}hidden{% endif %}>
+                    <span id="appUpdateCheckErrorText">{% if app_update_state.check_error %}Ostatnia próba sprawdzenia zakończyła się błędem: {{ app_update_state.check_error }}{% endif %}</span>
+                </div>
+
+                <div class="inline-note">
+                    Aktualizacja pobiera nowy kod z GitHuba, robi backup do <code>backups/</code>, zachowuje <code>data/</code> i <code>.env</code>, a na końcu planuje restart usługi Flask.
+                </div>
+
+                <form id="appUpdateCheckForm" method="post" action="/settings/app-check" class="auth-form" data-maintenance-lock="app_update" data-settings-async="true">
+                    <button type="submit" class="btn btn-secondary full-width">Sprawdź wersję aplikacji</button>
+                </form>
+
+                <form id="appUpdateActionForm" method="post" action="/settings/app-update" class="auth-form" data-maintenance-lock="app_update" data-maintenance-start="app_update" data-settings-async="true" {% if not app_update_state.action_needed %}hidden{% endif %}>
+                    <button id="appUpdateActionButton" type="submit" class="btn btn-green full-width">{{ app_update_state.action_button_label }}</button>
+                </form>
+
+                <div id="appUpdateActionNote" class="inline-note" {% if app_update_state.action_needed %}hidden{% endif %}>{{ app_update_state.action_note_text }}</div>
+
+                <div id="appUpdateTaskPanel" class="maintenance-task-panel" {% if not maintenance_tasks.app_update.visible %}hidden{% endif %}>
+                    <div class="service-status-row">
+                        <span id="appUpdateTaskStatusPill" class="service-status-pill {{ maintenance_tasks.app_update.status_kind }}">{{ maintenance_tasks.app_update.status_label }}</span>
+                        <div id="appUpdateTaskTime" class="small">
+                            {% if maintenance_tasks.app_update.active %}
+                                Start: {{ maintenance_tasks.app_update.started_at_text }}
+                            {% elif maintenance_tasks.app_update.finished_at_text %}
+                                Zakończono: {{ maintenance_tasks.app_update.finished_at_text }}
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="maintenance-task-head">
+                        <div id="appUpdateTaskLabel" class="maintenance-task-label">{{ maintenance_tasks.app_update.title or "Aktualizacja aplikacji" }}</div>
+                        <div id="appUpdateTaskPercent" class="maintenance-task-percent">
+                            {% if maintenance_tasks.app_update.progress_percent is not none %}
+                                {{ "%.1f"|format(maintenance_tasks.app_update.progress_percent) }}%
+                            {% else %}
+                                ...
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div id="appUpdateTaskProgress" class="progress{% if maintenance_tasks.app_update.progress_percent is none %} is-indeterminate{% endif %}">
+                        <div id="appUpdateTaskBar" class="progress-bar {% if maintenance_tasks.app_update.active %}downloading{% elif maintenance_tasks.app_update.status == 'success' %}completed{% elif maintenance_tasks.app_update.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if maintenance_tasks.app_update.progress_percent is not none %}{{ maintenance_tasks.app_update.progress_percent }}{% else %}38{% endif %}%;"></div>
+                    </div>
+                    <div id="appUpdateTaskDetail" class="maintenance-task-detail">{{ maintenance_tasks.app_update.detail or "Po uruchomieniu aktualizacji zobaczysz tutaj kolejne etapy pracy." }}</div>
+                </div>
+            </div>
+
             <div class="stack-card service-card">
                 <div class="card-heading">
                     <div class="card-title">Eksport konfiguracji</div>

@@ -5,6 +5,7 @@ import shutil
 PACKAGE_ROOT = os.path.dirname(__file__)
 PROJECT_ROOT = os.path.abspath(os.path.join(PACKAGE_ROOT, os.pardir))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+VERSION_FILE = os.path.join(PROJECT_ROOT, "VERSION")
 
 LEGACY_CONFIG_FILE = os.path.join(PROJECT_ROOT, "flask_downloader_config.json")
 LEGACY_JOBS_FILE = os.path.join(PROJECT_ROOT, "flask_downloader_jobs.json")
@@ -38,6 +39,7 @@ def ensure_data_layout():
 __all__ = [
     "PROJECT_ROOT",
     "DATA_DIR",
+    "VERSION_FILE",
     "LEGACY_CONFIG_FILE",
     "LEGACY_JOBS_FILE",
     "LEGACY_USERS_FILE",

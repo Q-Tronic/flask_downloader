@@ -285,6 +285,15 @@
         setText("settingsNetworkLastTestMessageValue", mount.network_last_test_message || "Brak testu udziału sieciowego.");
     }
 
+    function applyStorageDiskState(storageDiskState) {
+        const local = (storageDiskState && storageDiskState.local) || {};
+        const network = (storageDiskState && storageDiskState.network) || {};
+        setText("settingsLocalStorageHeadline", local.headline || "brak danych");
+        setText("settingsLocalStorageMetaValue", local.meta || "Brak danych o lokalnym storage.");
+        setText("settingsNetworkStorageHeadline", network.headline || "brak danych");
+        setText("settingsNetworkStorageMetaValue", network.meta || "Brak danych o udziale sieciowym.");
+    }
+
     function applyConfigState(config, mount, todayDownloadDir, todayAudioDownloadDir) {
         if (!config) {
             return;
@@ -519,6 +528,41 @@
         updateTaskPanel("ffmpeg", task, "Instalacja ffmpeg");
     }
 
+    function applyAppUpdateState(state, task) {
+        if (!state) {
+            return;
+        }
+
+        const taskActive = !!(task && task.active);
+        const pillKind = taskActive ? "queued" : state.status_pill_kind;
+        const pillLabel = taskActive ? "Trwa aktualizacja aplikacji" : state.status_pill_label;
+
+        setPill("appUpdateStatusPill", pillKind, pillLabel);
+        setText("appUpdateCheckedAt", "Ostatnie sprawdzenie: " + String(state.checked_at_text || ""));
+        setText("appUpdateCurrentVersion", state.current_version || "");
+        setText("appUpdateLatestVersion", state.latest_version || "");
+        setText("appUpdateRepoLabel", state.repo_label || "");
+        setText("appUpdateRepoBranch", state.repo_branch || "");
+
+        const hasError = !!state.check_error;
+        setHidden("appUpdateCheckErrorBox", !hasError);
+        setText("appUpdateCheckErrorText", hasError ? ("Ostatnia próba sprawdzenia zakończyła się błędem: " + state.check_error) : "");
+
+        const actionForm = document.getElementById("appUpdateActionForm");
+        if (actionForm) {
+            actionForm.hidden = !taskActive && !state.action_needed;
+        }
+        const actionButton = document.getElementById("appUpdateActionButton");
+        if (actionButton) {
+            actionButton.textContent = state.action_button_label || actionButton.textContent;
+            actionButton.dataset.idleLabel = actionButton.textContent;
+        }
+        setHidden("appUpdateActionNote", taskActive || !!state.action_needed);
+        setText("appUpdateActionNote", state.action_note_text || "Aplikacja nie wymaga teraz aktualizacji.");
+        setGroupBusy("app_update", task, "Aktualizacja trwa...");
+        updateTaskPanel("appUpdate", task, "Aktualizacja aplikacji");
+    }
+
     function applyDlnaPackageState(state, task) {
         if (!state) {
             return;
@@ -657,12 +701,14 @@
         const tasks = state.maintenance_tasks || state.tasks || {};
         applyMountState(state.mount || null);
         applyConfigState(state.config || null, state.mount || null, state.today_download_dir || "", state.today_audio_download_dir || "");
+        applyStorageDiskState(state.storage_disk_state || {});
         if (Object.prototype.hasOwnProperty.call(state, "user_rows")) {
             renderUserRows(state.user_rows || []);
         }
         applyServiceState(state.service_state || null);
         applyYtDlpState(state.yt_dlp_state || {}, tasks.yt_dlp_update || null);
         applyFfmpegState(state.ffmpeg_state || {}, tasks.ffmpeg_install || null);
+        applyAppUpdateState(state.app_update_state || {}, tasks.app_update || null);
         applyDlnaPackageState(state.dlna_package_state || {}, tasks.dlna_install || null);
         applyDlnaServiceState(state.dlna_service_state || null);
         applyRadioPackageState(state.radio_backend_package_state || {}, tasks.radio_backend_install || null);
@@ -720,6 +766,10 @@
                 busyLabel = "Uruchamianie...";
             } else if (form.id === "settingsRadioActionForm") {
                 busyLabel = "Uruchamianie...";
+            } else if (form.id === "appUpdateCheckForm") {
+                busyLabel = "Sprawdzanie...";
+            } else if (form.id === "appUpdateActionForm") {
+                busyLabel = "Aktualizowanie...";
             } else if (form.id === "settingsDlnaToggleForm") {
                 busyLabel = "Przełączanie...";
             } else if (form.id === "settingsRadioToggleForm") {

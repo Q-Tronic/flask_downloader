@@ -23,6 +23,8 @@ def register_settings_routes(app, deps):
     install_or_update_ffmpeg = deps["install_or_update_ffmpeg"]
     refresh_yt_dlp_update_state = deps["refresh_yt_dlp_update_state"]
     update_yt_dlp_package = deps["update_yt_dlp_package"]
+    refresh_app_update_state = deps["refresh_app_update_state"]
+    update_app_from_github = deps["update_app_from_github"]
     refresh_dlna_package_state = deps["refresh_dlna_package_state"]
     refresh_radio_backend_package_state = deps["refresh_radio_backend_package_state"]
     build_dlna_json_response = deps["build_dlna_json_response"]
@@ -351,6 +353,92 @@ def register_settings_routes(app, deps):
             lambda progress_callback: update_yt_dlp_package(progress_callback=progress_callback),
         )
         message = "Rozpoczęto aktualizację yt-dlp." if started else "Aktualizacja yt-dlp już trwa."
+
+        if wants_json_response():
+            return jsonify({
+                "ok": True,
+                "started": started,
+                "message": message,
+                "task": task,
+                "state": get_settings_page_state(),
+            })
+
+        set_ui_flash(message, "success")
+        return redirect(url_for("settings_page"))
+
+    @app.route("/settings/app-check", methods=["POST"])
+    def settings_check_app_update():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby sprawdzać wersję aplikacji.", "error")
+            return redirect(url_for("index"))
+
+        state = refresh_app_update_state(force=True)
+        if state["check_error"]:
+            message = "Nie udało się sprawdzić wersji aplikacji na GitHubie: %s" % state["check_error"]
+            kind = "error"
+        elif state["update_available"]:
+            message = "Dostępna jest nowsza wersja aplikacji: %s (na serwerze: %s)." % (
+                state["latest_version"],
+                state["current_version"],
+            )
+            kind = "success"
+        else:
+            message = "Masz już najnowszą wersję aplikacji (%s)." % state["current_version"]
+            kind = "success"
+
+        if wants_json_response():
+            return jsonify({
+                "ok": kind == "success",
+                "message": message,
+                "kind": kind,
+                "state": get_settings_page_state(),
+            }), (500 if kind == "error" else 200)
+
+        set_ui_flash(message, "error" if kind == "error" else "success")
+        return redirect(url_for("settings_page"))
+
+    @app.route("/settings/app-update", methods=["POST"])
+    def settings_update_app():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby aktualizować aplikację.", "error")
+            return redirect(url_for("index"))
+
+        state = refresh_app_update_state(force=True)
+        if not state.get("linux_supported", True):
+            message = "Automatyczna aktualizacja aplikacji z panelu WWW wymaga Linuxa."
+            if wants_json_response():
+                return jsonify({
+                    "ok": False,
+                    "error": message,
+                    "kind": "error",
+                    "state": get_settings_page_state(),
+                }), 400
+            set_ui_flash(message, "error")
+            return redirect(url_for("settings_page"))
+
+        if not state["update_available"]:
+            message = "Masz już najnowszą wersję aplikacji (%s)." % state["current_version"]
+            if wants_json_response():
+                return jsonify({
+                    "ok": True,
+                    "started": False,
+                    "message": message,
+                    "kind": "success",
+                    "state": get_settings_page_state(),
+                })
+            set_ui_flash(message, "success")
+            return redirect(url_for("settings_page"))
+
+        started, task = start_maintenance_task(
+            "app_update",
+            "Aktualizacja aplikacji",
+            lambda progress_callback: update_app_from_github(progress_callback=progress_callback),
+        )
+        message = "Rozpoczęto aktualizację aplikacji z GitHuba." if started else "Aktualizacja aplikacji już trwa."
 
         if wants_json_response():
             return jsonify({

@@ -6,8 +6,10 @@ class PageStateService:
         get_config_snapshot,
         get_daily_download_dir,
         get_all_maintenance_task_snapshots,
+        get_storage_disk_state,
         refresh_ffmpeg_update_state,
         refresh_yt_dlp_update_state,
+        refresh_app_update_state,
         refresh_dlna_package_state,
         refresh_radio_backend_package_state,
         get_dlna_service_state,
@@ -26,8 +28,10 @@ class PageStateService:
         self._get_config_snapshot = get_config_snapshot
         self._get_daily_download_dir = get_daily_download_dir
         self._get_all_maintenance_task_snapshots = get_all_maintenance_task_snapshots
+        self._get_storage_disk_state = get_storage_disk_state
         self._refresh_ffmpeg_update_state = refresh_ffmpeg_update_state
         self._refresh_yt_dlp_update_state = refresh_yt_dlp_update_state
+        self._refresh_app_update_state = refresh_app_update_state
         self._refresh_dlna_package_state = refresh_dlna_package_state
         self._refresh_radio_backend_package_state = refresh_radio_backend_package_state
         self._get_dlna_service_state = get_dlna_service_state
@@ -48,9 +52,11 @@ class PageStateService:
             "config": self._get_config_snapshot(),
             "today_download_dir": self._get_daily_download_dir(),
             "today_audio_download_dir": self._get_daily_download_dir(media_kind="audio"),
+            "storage_disk_state": self._get_storage_disk_state(),
             "maintenance_tasks": self._get_all_maintenance_task_snapshots(),
             "ffmpeg_state": self._refresh_ffmpeg_update_state(force=False),
             "yt_dlp_state": self._refresh_yt_dlp_update_state(force=False),
+            "app_update_state": self._refresh_app_update_state(force=False),
             "dlna_package_state": self._refresh_dlna_package_state(force=False),
             "radio_backend_package_state": self._refresh_radio_backend_package_state(force=False),
             "dlna_service_state": self._get_dlna_service_state(),

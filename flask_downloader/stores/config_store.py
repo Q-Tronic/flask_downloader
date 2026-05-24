@@ -12,6 +12,7 @@ def load_app_config(
     normalize_retention_days,
     normalize_yt_dlp_update_state,
     normalize_ffmpeg_update_state,
+    normalize_app_update_state,
     normalize_dlna_update_state,
     normalize_dlna_config,
 ):
@@ -33,6 +34,7 @@ def load_app_config(
             data["job_retention_days"] = normalize_retention_days(raw.get("job_retention_days", data["job_retention_days"]))
             data["yt_dlp_update_state"] = normalize_yt_dlp_update_state(raw.get("yt_dlp_update_state", data["yt_dlp_update_state"]))
             data["ffmpeg_update_state"] = normalize_ffmpeg_update_state(raw.get("ffmpeg_update_state", data["ffmpeg_update_state"]))
+            data["app_update_state"] = normalize_app_update_state(raw.get("app_update_state", data["app_update_state"]))
             data["dlna_update_state"] = normalize_dlna_update_state(raw.get("dlna_update_state", data["dlna_update_state"]))
             data["dlna"] = normalize_dlna_config(raw.get("dlna", data["dlna"]))
     except Exception:

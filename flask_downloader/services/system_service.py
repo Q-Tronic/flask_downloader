@@ -1,5 +1,5 @@
 import os
-import shlex
+import shutil
 import subprocess
 import time
 
@@ -363,9 +363,18 @@ class SystemServiceHelper:
 
     @staticmethod
     def schedule_systemd_service_restart(service_name):
-        command = "sleep 1; systemctl restart %s" % shlex.quote(service_name)
+        systemctl_binary = shutil.which("systemctl") or "/bin/systemctl"
+        command = [systemctl_binary, "restart", service_name]
+        if os.name != "nt":
+            try:
+                if os.geteuid() != 0:
+                    sudo_binary = shutil.which("sudo")
+                    if sudo_binary:
+                        command = [sudo_binary, "-n", systemctl_binary, "restart", service_name]
+            except Exception:
+                pass
         return subprocess.Popen(
-            ["/bin/sh", "-lc", command],
+            command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,

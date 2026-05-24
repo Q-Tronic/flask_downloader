@@ -106,8 +106,10 @@ http://IP_SERWERA:9999/
 ### Konfiguracja
 - tylko dla administratora,
 - wybór aktywnego miejsca zapisu `lokalnie / udział sieciowy SMB-CIFS`,
+- podgląd zajętego, wolnego i całkowitego miejsca dla lokalnego storage oraz udziału sieciowego,
 - test połączenia udziału sieciowego z kontrolą odczytu i zapisu,
 - montowanie i odmontowywanie udziału sieciowego z panelu WWW,
+- podgląd wersji aplikacji i aktualizacja kodu z GitHuba,
 - utrzymanie `yt-dlp`, `ffmpeg`, `DLNA` i backendu radia,
 - zarządzanie użytkownikami.
 

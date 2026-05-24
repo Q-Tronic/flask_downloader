@@ -79,6 +79,9 @@ from flask_downloader.config import (
     NETWORK_STORAGE_CREDENTIALS_FILE as CONFIG_NETWORK_STORAGE_CREDENTIALS_FILE,
     NETWORK_STORAGE_HELPER as CONFIG_NETWORK_STORAGE_HELPER,
     NETWORK_STORAGE_MOUNT_DIR as CONFIG_NETWORK_STORAGE_MOUNT_DIR,
+    REPO_BRANCH as CONFIG_REPO_BRANCH,
+    REPO_NAME as CONFIG_REPO_NAME,
+    REPO_OWNER as CONFIG_REPO_OWNER,
 )
 from flask_downloader.paths import (
     CONFIG_FILE,
@@ -88,6 +91,7 @@ from flask_downloader.paths import (
     PROJECT_ROOT,
     RADIOS_FILE,
     USERS_FILE,
+    VERSION_FILE,
     ensure_data_layout,
 )
 from flask_downloader.bootstrap import register_application_routes, start_background_schedulers
@@ -101,12 +105,14 @@ from flask_downloader.services.source_service import SourceMediaService
 from flask_downloader.services.ffmpeg_service import FfmpegMaintenanceService
 from flask_downloader.services.ytdlp_service import YtDlpMaintenanceService
 from flask_downloader.services.calendar_service import CalendarService
+from flask_downloader.services.app_update_service import AppUpdateService
 from flask_downloader.services.dlna_service import DlnaLibraryService
 from flask_downloader.services.dlna_runtime_service import DlnaRuntimeService
 from flask_downloader.services.dlna_update_service import DlnaUpdateService
 from flask_downloader.services.page_state_service import PageStateService
 from flask_downloader.services.radio_runtime_service import RadioRuntimeService
 from flask_downloader.services.radio_service import RadioService
+from flask_downloader.services.storage_stats_service import StorageStatsService
 from flask_downloader.stores.config_store import (
     load_app_config as config_store_load_app_config,
     write_app_config as config_store_write_app_config,
@@ -170,6 +176,9 @@ USER_STORAGE_LAYOUT_VERSION = 2
 MAX_PARALLEL_DOWNLOADS_PER_USER = CONFIG_MAX_PARALLEL_DOWNLOADS_PER_USER
 APP_SERVICE_USER = CONFIG_APP_SERVICE_USER
 APP_SERVICE_GROUP = CONFIG_APP_SERVICE_GROUP
+APP_REPO_OWNER = CONFIG_REPO_OWNER
+APP_REPO_NAME = CONFIG_REPO_NAME
+APP_REPO_BRANCH = CONFIG_REPO_BRANCH
 
 MOUNT_RETRY_COOLDOWN = 15
 DEFAULT_COMPLETED_JOB_RETENTION_DAYS = 3
@@ -183,6 +192,7 @@ FFMPEG_RELEASE_API_URL = "https://api.github.com/repos/yt-dlp/FFmpeg-Builds/rele
 FFMPEG_TOOLS_ROOT = os.path.join(APP_ROOT, "tools", "ffmpeg")
 FFMPEG_MANAGED_DIR = os.path.join(FFMPEG_TOOLS_ROOT, "managed")
 FFMPEG_MANIFEST_FILE = os.path.join(FFMPEG_MANAGED_DIR, "ffmpeg_manifest.json")
+PYTHON_VENV_PIP = os.path.join(APP_ROOT, ".venv", "bin", "pip")
 SYSTEMD_SERVICE_NAME = CONFIG_SYSTEMD_SERVICE_NAME
 DLNA_PACKAGE_NAME = "gerbera"
 DLNA_SYSTEM_SERVICE_NAME = "gerbera"
@@ -275,6 +285,7 @@ MAINTENANCE_TASKS_LOCK = threading.Lock()
 MAINTENANCE_TASKS = {
     "yt_dlp_update": create_maintenance_task_state("Aktualizacja yt-dlp"),
     "ffmpeg_install": create_maintenance_task_state("Instalacja ffmpeg"),
+    "app_update": create_maintenance_task_state("Aktualizacja aplikacji"),
     "dlna_install": create_maintenance_task_state("Instalacja serwera DLNA"),
     "radio_backend_install": create_maintenance_task_state("Instalacja backendu radia"),
 }
@@ -964,6 +975,7 @@ def default_app_config():
             "check_error": "",
         },
         "ffmpeg_update_state": default_ffmpeg_update_state(),
+        "app_update_state": AppUpdateService.default_update_state(),
         "dlna_update_state": default_dlna_update_state(),
         "dlna": default_dlna_config(),
     })
@@ -1077,6 +1089,10 @@ def normalize_ffmpeg_update_state(value):
     return state
 
 
+def normalize_app_update_state(value):
+    return AppUpdateService.normalize_update_state(value)
+
+
 def normalize_dlna_update_state(value):
     return DLNA_UPDATE_SERVICE.normalize_update_state(value)
 
@@ -1167,6 +1183,7 @@ def load_app_config():
         normalize_retention_days,
         normalize_yt_dlp_update_state,
         normalize_ffmpeg_update_state,
+        normalize_app_update_state,
         normalize_dlna_update_state,
         normalize_dlna_config,
     )
@@ -1470,6 +1487,15 @@ STORAGE_BACKEND_SERVICE = StorageBackendService(
     app_service_group=APP_SERVICE_GROUP,
 )
 
+STORAGE_STATS_SERVICE = StorageStatsService(
+    get_storage_config_snapshot=lambda: get_storage_config_snapshot(),
+    read_storage_runtime_access_state=lambda root_path, require_mount=False: read_storage_runtime_access_state(
+        root_path,
+        require_mount=require_mount,
+    ),
+    format_bytes_text=lambda value: format_bytes_text(value),
+)
+
 
 STORAGE_SERVICE = ManagedStorageService(
     get_config_snapshot=get_config_snapshot,
@@ -1518,6 +1544,10 @@ def get_managed_storage_roots():
 
 def get_storage_kind_for_path(path):
     return STORAGE_SERVICE.get_storage_kind_for_path(path)
+
+
+def get_storage_disk_state():
+    return STORAGE_STATS_SERVICE.get_state()
 
 
 def get_path_owner_username(path):
@@ -2334,6 +2364,21 @@ def read_ffmpeg_update_state():
         return normalize_ffmpeg_update_state(APP_CONFIG.get("ffmpeg_update_state"))
 
 
+def save_app_update_state(latest_version, checked_at, check_error):
+    with APP_CONFIG_LOCK:
+        APP_CONFIG["app_update_state"] = normalize_app_update_state({
+            "latest_version": latest_version,
+            "checked_at": checked_at,
+            "check_error": check_error,
+        })
+        write_app_config_locked()
+
+
+def read_app_update_state():
+    with APP_CONFIG_LOCK:
+        return normalize_app_update_state(APP_CONFIG.get("app_update_state"))
+
+
 def is_ffmpeg_scheduler_started():
     return bool(FFMPEG_SCHEDULER_STARTED)
 
@@ -2637,6 +2682,7 @@ def get_settings_maintenance_state():
     return {
         "yt_dlp_state": get_yt_dlp_update_state_snapshot(),
         "ffmpeg_state": get_ffmpeg_update_state_snapshot(),
+        "app_update_state": get_app_update_state_snapshot(),
         "dlna_package_state": get_dlna_package_state_snapshot(),
         "dlna_service_state": get_dlna_service_state(),
         "radio_backend_package_state": get_radio_backend_package_state(),
@@ -3698,6 +3744,35 @@ def schedule_systemd_service_restart(service_name):
 
 def schedule_flask_service_restart():
     return schedule_systemd_service_restart(SYSTEMD_SERVICE_NAME)
+
+
+APP_UPDATE_SERVICE = AppUpdateService(
+    project_root=APP_ROOT,
+    version_file=VERSION_FILE,
+    requirements_file=os.path.join(APP_ROOT, "requirements.txt"),
+    venv_pip_path=PYTHON_VENV_PIP,
+    requests_module=requests,
+    format_ts=format_ts,
+    is_linux_runtime=lambda: is_linux_runtime(),
+    repo_owner=APP_REPO_OWNER,
+    repo_name=APP_REPO_NAME,
+    repo_branch=APP_REPO_BRANCH,
+    read_update_state=read_app_update_state,
+    save_update_state=save_app_update_state,
+    schedule_service_restart=schedule_flask_service_restart,
+)
+
+
+def get_app_update_state_snapshot():
+    return APP_UPDATE_SERVICE.get_update_state_snapshot()
+
+
+def refresh_app_update_state(force=False):
+    return APP_UPDATE_SERVICE.refresh_update_state(force=force)
+
+
+def update_app_from_github(progress_callback=None):
+    return APP_UPDATE_SERVICE.update_from_github(progress_callback=progress_callback)
 
 
 JOB_VIEW_SERVICE = JobViewService(
@@ -6827,8 +6902,10 @@ PAGE_STATE_SERVICE = PageStateService(
     get_config_snapshot=get_config_snapshot,
     get_daily_download_dir=get_daily_download_dir,
     get_all_maintenance_task_snapshots=get_all_maintenance_task_snapshots,
+    get_storage_disk_state=get_storage_disk_state,
     refresh_ffmpeg_update_state=refresh_ffmpeg_update_state,
     refresh_yt_dlp_update_state=refresh_yt_dlp_update_state,
+    refresh_app_update_state=refresh_app_update_state,
     refresh_dlna_package_state=refresh_dlna_package_state,
     refresh_radio_backend_package_state=refresh_radio_backend_package_state,
     get_dlna_service_state=get_dlna_service_state,

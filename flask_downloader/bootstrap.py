@@ -120,6 +120,8 @@ def register_application_routes(app, context):
         "install_or_update_ffmpeg": context["install_or_update_ffmpeg"],
         "refresh_yt_dlp_update_state": context["refresh_yt_dlp_update_state"],
         "update_yt_dlp_package": context["update_yt_dlp_package"],
+        "refresh_app_update_state": context["refresh_app_update_state"],
+        "update_app_from_github": context["update_app_from_github"],
         "refresh_dlna_package_state": context["refresh_dlna_package_state"],
         "refresh_radio_backend_package_state": context["refresh_radio_backend_package_state"],
         "build_dlna_json_response": context["build_dlna_json_response"],
