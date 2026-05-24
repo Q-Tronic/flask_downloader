@@ -922,11 +922,16 @@ load_existing_install_defaults() {
 }
 
 build_repo_archive_url() {
-    if [[ "$REPO_URL" =~ ^https://github.com/([^/]+)/([^/]+?)(\.git)?/?$ ]]; then
-        local owner="${BASH_REMATCH[1]}"
-        local repo="${BASH_REMATCH[2]}"
-        printf "https://codeload.github.com/%s/%s/tar.gz/refs/heads/%s" "$owner" "$repo" "$BRANCH"
-        return 0
+    local normalized_url="${REPO_URL%/}"
+    normalized_url="${normalized_url%.git}"
+    if [[ "$normalized_url" == https://github.com/*/* ]]; then
+        local owner_repo="${normalized_url#https://github.com/}"
+        local owner="${owner_repo%%/*}"
+        local repo="${owner_repo##*/}"
+        if [[ -n "$owner" && -n "$repo" ]]; then
+            printf "https://codeload.github.com/%s/%s/tar.gz/refs/heads/%s" "$owner" "$repo" "$BRANCH"
+            return 0
+        fi
     fi
     log_fail "Bezpieczna aktualizacja bez Git wymaga repozytorium GitHub w formacie https://github.com/owner/repo(.git)."
     abort_install
@@ -1529,11 +1534,27 @@ log_ok "Wykryto Debian ${DEBIAN_MAJOR}."
 begin_step "Pobranie ustawień instalacji"
 log_info "Wciśnij Enter, aby zostawić wartość domyślną pokazaną w nawiasie kwadratowym."
 log_info "Jeśli nic nie wpiszesz przy porcie, po 30 sekundach zostanie użyte ustawienie domyślne."
-APP_DIR="$(resolve_install_value "$APP_DIR" "$APP_DIR_FROM_ARG" 'Katalog aplikacji' "$APP_DIR_DEFAULT")"
 detect_existing_installation
 load_existing_install_defaults
-if (( EXISTING_INSTALL == 1 )); then
+if (( EXISTING_INSTALL == 1 )) && [[ "$APP_DIR_FROM_ARG" -eq 0 && "$NON_INTERACTIVE" -eq 0 ]]; then
     log_info "Wykryto istniejącą instalację w ${APP_DIR}. Instalator przejdzie w tryb bezpiecznej aktualizacji."
+else
+    APP_DIR="$(resolve_install_value "$APP_DIR" "$APP_DIR_FROM_ARG" 'Katalog aplikacji' "$APP_DIR_DEFAULT")"
+    detect_existing_installation
+    load_existing_install_defaults
+    if (( EXISTING_INSTALL == 1 )); then
+        log_info "Wykryto istniejącą instalację w ${APP_DIR}. Instalator przejdzie w tryb bezpiecznej aktualizacji."
+    fi
+fi
+if (( EXISTING_INSTALL == 1 )); then
+    STORAGE_ROOT_FROM_ARG=1
+    APP_USER_FROM_ARG=1
+    APP_GROUP_FROM_ARG=1
+    APP_PORT_FROM_ARG=1
+    SERVICE_NAME_FROM_ARG=1
+    DLNA_SERVICE_NAME_FROM_ARG=1
+    RADIO_SERVICE_NAME_FROM_ARG=1
+    RADIO_STATION_TEMPLATE_FROM_ARG=1
 fi
 STORAGE_ROOT="$(resolve_install_value "$STORAGE_ROOT" "$STORAGE_ROOT_FROM_ARG" 'Katalog bazowy danych użytkowników' "$STORAGE_ROOT_DEFAULT")"
 APP_USER="$(resolve_install_value "$APP_USER" "$APP_USER_FROM_ARG" 'Użytkownik Linux dla usługi' "$APP_USER_DEFAULT")"

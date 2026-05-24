@@ -39,6 +39,7 @@ Instalator:
 - przygotowuje pliki konfiguracyjne aplikacji.
 
 Jeśli w wybranym katalogu aplikacji wykryje istniejącą instancję, przechodzi automatycznie w tryb bezpiecznej aktualizacji:
+- sam odczytuje bieżące ścieżki, port, użytkownika usługi i nazwy usług z istniejącego `.env`,
 - zachowuje `.env`,
 - zachowuje `data/` i runtime usług,
 - tworzy backup poprzedniego kodu w `backups/`,
