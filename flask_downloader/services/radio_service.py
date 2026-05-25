@@ -205,10 +205,6 @@ class RadioService:
         return changed
 
     def cleanup_missing_library_items(self, owner_username=None):
-        ok, _ = self._ensure_share_ready(auto_remount=True)
-        if not ok:
-            return False
-
         changed = False
         with self._radios_lock:
             target_owner = self._normalize_owner(owner_username) if owner_username else ""
@@ -743,10 +739,6 @@ class RadioService:
         if not normalized_relative_path:
             raise ValueError("Nie wybrano poprawnego pliku audio do kolejki ręcznej.")
 
-        ok, message = self._ensure_share_ready(auto_remount=True)
-        if not ok:
-            raise ValueError("Udział sieciowy offline. %s" % message)
-
         normalized_queue_mode = "play_now" if str(queue_mode or "").strip().lower() == "play_now" else "queue_next"
         catalog_item = self._find_catalog_item_by_relative_path(self._build_audio_catalog_rows(owner), normalized_relative_path)
         if not catalog_item:
@@ -791,9 +783,6 @@ class RadioService:
 
     def add_library_paths(self, owner_username, relative_paths, source_type="download"):
         owner = self._normalize_owner(owner_username)
-        ok, message = self._ensure_share_ready(auto_remount=True)
-        if not ok:
-            raise ValueError("Udział sieciowy offline. %s" % message)
 
         added = 0
         skipped = 0
@@ -858,10 +847,6 @@ class RadioService:
 
     def bulk_save_library(self, owner_username, *, mode="manual", rows=None):
         owner = self._normalize_owner(owner_username)
-        ok, message = self._ensure_share_ready(auto_remount=True)
-        if not ok:
-            raise ValueError("Udział sieciowy offline. %s" % message)
-
         normalized_mode = self._normalize_library_mode_value(mode)
         catalog_rows = self._build_audio_catalog_rows(owner)
         catalog_map = {
@@ -1128,6 +1113,7 @@ class RadioService:
                         next_owner,
                         parsed.get("storage_kind") or "audio",
                         parsed.get("user_relative_path") or "",
+                        storage_id=parsed.get("storage_id") or "local",
                     )
                     changed = True
                 next_items.append(item)
@@ -1139,6 +1125,7 @@ class RadioService:
                         next_owner,
                         parsed.get("storage_kind") or "audio",
                         parsed.get("user_relative_path") or "",
+                        storage_id=parsed.get("storage_id") or "local",
                     ))
                     changed = True
                 elif raw_path:
@@ -1152,6 +1139,7 @@ class RadioService:
                         next_owner,
                         parsed.get("storage_kind") or "audio",
                         parsed.get("user_relative_path") or "",
+                        storage_id=parsed.get("storage_id") or "local",
                     )
                     changed = True
                 next_play_now.append(next_item)
@@ -1164,6 +1152,7 @@ class RadioService:
                         next_owner,
                         parsed.get("storage_kind") or "audio",
                         parsed.get("user_relative_path") or "",
+                        storage_id=parsed.get("storage_id") or "local",
                     )
                     changed = True
                 next_queue_next.append(next_item)
@@ -1176,6 +1165,7 @@ class RadioService:
                         next_owner,
                         parsed.get("storage_kind") or "audio",
                         parsed.get("user_relative_path") or "",
+                        storage_id=parsed.get("storage_id") or "local",
                     )
                     changed = True
                 next_history_items.append(next_item)

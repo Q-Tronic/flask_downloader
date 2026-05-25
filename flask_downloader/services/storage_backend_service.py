@@ -125,5 +125,10 @@ class StorageBackendService:
         payload = self.build_helper_payload(storage_config, mount_now=False)
         return self.run_helper("unmount-cifs", payload, timeout=90)
 
+    def remove_network_storage(self, storage_config, *, remove_credentials=False):
+        payload = self.build_helper_payload(storage_config, mount_now=False)
+        payload["remove_credentials"] = bool(remove_credentials)
+        return self.run_helper("remove-network", payload, timeout=90)
+
 
 __all__ = ["StorageBackendService"]

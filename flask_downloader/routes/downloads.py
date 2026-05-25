@@ -1,7 +1,7 @@
 import os
 import re
 
-from flask import Response, jsonify, request, send_from_directory
+from flask import Response, jsonify, request, send_file
 
 
 def register_download_routes(app, deps):
@@ -44,7 +44,6 @@ def register_download_routes(app, deps):
     normalize_username = deps["normalize_username"]
     DEFAULT_ADMIN_USERNAME = deps["DEFAULT_ADMIN_USERNAME"]
     can_access_owner = deps["can_access_owner"]
-    get_user_storage_root = deps["get_user_storage_root"]
 
     def get_allowed_dlna_collection_map():
         return {
@@ -607,20 +606,25 @@ def register_download_routes(app, deps):
                 mimetype="text/plain; charset=utf-8",
             )
 
-        ok, message = ensure_share_ready(auto_remount=True)
-        if not ok:
-            return Response(
-                "Udział sieciowy offline.\\n%s\\n" % message,
-                status=503,
-                mimetype="text/plain; charset=utf-8",
-            )
-
+        requested_storage_id = str(request.args.get("storage") or "").strip().lower()
         parsed_relative = parse_managed_relative_path(filename)
         owner = normalize_username((parsed_relative or {}).get("owner_username") or owner_username or get_current_username() or DEFAULT_ADMIN_USERNAME)
         storage_kind = normalize_storage_kind((parsed_relative or {}).get("storage_kind") or storage_kind)
         user_relative_path = safe_relative_download_path((parsed_relative or {}).get("user_relative_path") or filename)
-        relative_path = build_managed_relative_path(owner, storage_kind, user_relative_path)
-        path = resolve_download_path(relative_path, storage_kind, owner_username=owner)
+        storage_id = requested_storage_id or str((parsed_relative or {}).get("storage_id") or "").strip().lower()
+        relative_path = build_managed_relative_path(owner, storage_kind, user_relative_path, storage_id=storage_id or None)
+        path = resolve_download_path(relative_path, storage_kind, owner_username=owner, storage_id=storage_id or None)
+        effective_path_info = parse_managed_relative_path(relative_path) or {}
+        effective_storage_id = str(effective_path_info.get("storage_id") or storage_id or "").strip().lower()
+
+        if effective_storage_id == "network":
+            ok, message = ensure_share_ready(auto_remount=True)
+            if not ok:
+                return Response(
+                    "Udział sieciowy offline.\\n%s\\n" % message,
+                    status=503,
+                    mimetype="text/plain; charset=utf-8",
+                )
 
         if not path or not os.path.isfile(path):
             return Response(
@@ -636,7 +640,7 @@ def register_download_routes(app, deps):
                 mimetype="text/plain; charset=utf-8",
             )
 
-        return send_from_directory(get_user_storage_root(owner, storage_kind), user_relative_path, as_attachment=False)
+        return send_file(path, as_attachment=False, conditional=True)
 
     @app.route("/server-files/<owner_username>/<storage_kind>/<path:filename>", methods=["GET"])
     def server_file_with_owner_and_kind(owner_username, storage_kind, filename):

@@ -123,55 +123,68 @@
                     Gdy wybierzesz backend lokalny, pliki będą trafiały do <code id="settingsLocalUsersRootHint">{{ config.storage.local.root }}/flask_downloader_users/login/video/{{ today_download_dir.split('/')[-1] }}/plik.mp4</code>.
                 </div>
 
-                <div id="settingsNetworkFields" {% if config.storage.active_backend != "network" %}hidden{% endif %}>
-                    <label class="field-label" for="networkShare">Adres udziału SMB / CIFS</label>
-                    <input id="networkShare" type="text" name="network_share" value="{{ config.storage.network.share }}" placeholder="//192.168.29.11/udzial">
-
-                    <label class="field-label" for="networkSubpath">Podfolder udziału (opcjonalnie)</label>
-                    <input id="networkSubpath" type="text" name="network_subpath" value="{{ config.storage.network.subpath }}" placeholder="np. WP.to.XXX">
-
-                    <label class="field-label" for="networkMountDir">Katalog montowania udziału</label>
-                    <input id="networkMountDir" type="text" name="network_mount_dir" value="{{ config.storage.network.mount_dir }}" placeholder="/srv/flask_downloader/share-net">
-
-                    <label class="field-label" for="networkUsername">Login SMB</label>
-                    <input id="networkUsername" type="text" name="network_username" value="{{ config.storage.network.username }}" placeholder="np. wpuser">
-
-                    <label class="field-label" for="networkDomain">Domena SMB (opcjonalnie)</label>
-                    <input id="networkDomain" type="text" name="network_domain" value="{{ config.storage.network.domain }}" placeholder="np. WORKGROUP">
-
-                    <label class="field-label" for="networkCredentialsFile">Plik poświadczeń SMB</label>
-                    <input id="networkCredentialsFile" type="text" name="network_credentials_file" value="{{ config.storage.network.credentials_file }}" placeholder="/etc/flask-downloader/network-share.credentials">
-
-                    <label class="field-label" for="networkCifsVersion">Wersja protokołu CIFS</label>
-                    <select id="networkCifsVersion" name="network_cifs_version">
-                        {% for version in ["3.0", "3.1.1", "2.1", "2.0", "1.0"] %}
-                        <option value="{{ version }}" {% if config.storage.network.cifs_version == version %}selected{% endif %}>{{ version }}</option>
-                        {% endfor %}
+                <div id="settingsNetworkFields" {% if config.storage.active_backend != "network" and not mount.network_configured %}hidden{% endif %}>
+                    <label class="field-label" for="networkMode">Tryb udziału sieciowego</label>
+                    <select id="networkMode" name="network_mode">
+                        <option value="managed_smb" {% if config.storage.network.mode != "external_path" %}selected{% endif %}>Zarządzany udział SMB / CIFS</option>
+                        <option value="external_path" {% if config.storage.network.mode == "external_path" %}selected{% endif %}>Zewnętrzna ścieżka montowana poza aplikacją</option>
                     </select>
 
-                    <label class="field-label" for="networkIocharset">Kodowanie znaków</label>
-                    <input id="networkIocharset" type="text" name="network_iocharset" value="{{ config.storage.network.iocharset }}" placeholder="utf8">
+                    <div id="settingsNetworkManagedFields">
+                        <label class="field-label" for="networkShare">Adres udziału SMB / CIFS</label>
+                        <input id="networkShare" type="text" name="network_share" value="{{ config.storage.network.share }}" placeholder="//192.168.29.11/udzial">
 
-                    <label class="field-label" for="networkPassword">Hasło SMB</label>
-                    <input id="networkPassword" type="password" name="network_password" value="" placeholder="Zostaw puste, aby nie zmieniać zapisanego hasła">
+                        <label class="field-label" for="networkSubpath">Podfolder udziału (opcjonalnie)</label>
+                        <input id="networkSubpath" type="text" name="network_subpath" value="{{ config.storage.network.subpath }}" placeholder="np. WP.to.XXX">
 
-                    <label class="checkbox-row" for="keepExistingNetworkPassword">
-                        <input id="keepExistingNetworkPassword" type="checkbox" name="keep_existing_network_password" value="1" {% if config.storage.network.password_saved %}checked{% endif %}>
-                        <span id="settingsKeepPasswordLabel">
-                            Zachowaj zapisane hasło SMB{% if config.storage.network.password_saved %} (plik poświadczeń jest już zapisany){% endif %}
-                        </span>
-                    </label>
+                        <label class="field-label" for="networkUsername">Login SMB</label>
+                        <input id="networkUsername" type="text" name="network_username" value="{{ config.storage.network.username }}" placeholder="np. wpuser">
 
-                    <div class="inline-note">
-                        Test udziału sprawdza połączenie, możliwość odczytu i realny zapis pliku testowego. Aktywny backend sieciowy zapisze nowe pliki do <code id="settingsNetworkUsersRootHint">{{ config.storage.network.mount_dir }}/flask_downloader_users/login/video/{{ today_download_dir.split('/')[-1] }}/plik.mp4</code>.
+                        <label class="field-label" for="networkDomain">Domena SMB (opcjonalnie)</label>
+                        <input id="networkDomain" type="text" name="network_domain" value="{{ config.storage.network.domain }}" placeholder="np. WORKGROUP">
+
+                        <label class="field-label" for="networkCredentialsFile">Plik poświadczeń SMB</label>
+                        <input id="networkCredentialsFile" type="text" name="network_credentials_file" value="{{ config.storage.network.credentials_file }}" placeholder="/etc/flask-downloader/network-share.credentials">
+
+                        <label class="field-label" for="networkCifsVersion">Wersja protokołu CIFS</label>
+                        <select id="networkCifsVersion" name="network_cifs_version">
+                            {% for version in ["3.0", "3.1.1", "2.1", "2.0", "1.0"] %}
+                            <option value="{{ version }}" {% if config.storage.network.cifs_version == version %}selected{% endif %}>{{ version }}</option>
+                            {% endfor %}
+                        </select>
+
+                        <label class="field-label" for="networkIocharset">Kodowanie znaków</label>
+                        <input id="networkIocharset" type="text" name="network_iocharset" value="{{ config.storage.network.iocharset }}" placeholder="utf8">
+
+                        <label class="field-label" for="networkPassword">Hasło SMB</label>
+                        <input id="networkPassword" type="password" name="network_password" value="" placeholder="Zostaw puste, aby nie zmieniać zapisanego hasła">
+
+                        <label class="checkbox-row" for="keepExistingNetworkPassword">
+                            <input id="keepExistingNetworkPassword" type="checkbox" name="keep_existing_network_password" value="1" {% if config.storage.network.password_saved %}checked{% endif %}>
+                            <span id="settingsKeepPasswordLabel">
+                                Zachowaj zapisane hasło SMB{% if config.storage.network.password_saved %} (plik poświadczeń jest już zapisany){% endif %}
+                            </span>
+                        </label>
+                    </div>
+
+                    <label id="settingsNetworkMountDirLabel" class="field-label" for="networkMountDir">Katalog montowania udziału</label>
+                    <input id="networkMountDir" type="text" name="network_mount_dir" value="{{ config.storage.network.mount_dir }}" placeholder="/srv/flask_downloader/share-net">
+
+                    <div id="settingsNetworkHint" class="inline-note">
+                        <span id="settingsNetworkHintText">Test udziału sprawdza połączenie, możliwość odczytu i realny zapis pliku testowego. Aktywny backend sieciowy zapisze nowe pliki do </span><code id="settingsNetworkUsersRootHint">{{ config.storage.network.mount_dir }}/flask_downloader_users/login/video/{{ today_download_dir.split('/')[-1] }}/plik.mp4</code>.
                     </div>
                 </div>
 
                 <div class="actions" style="margin-top: 8px;">
-                    <button type="submit" class="btn" data-busy-label="Zapisywanie serwera danych...">Zapisz serwer danych</button>
-                    <button type="submit" class="btn btn-secondary" formaction="/settings/storage-test-network" data-busy-label="Testowanie udziału...">Sprawdź udział sieciowy</button>
-                    <button type="submit" class="btn btn-green" formaction="/settings/storage-mount-network" data-busy-label="Montowanie udziału...">Zamontuj zapisany udział</button>
-                    <button type="submit" class="btn btn-stop" formaction="/settings/storage-unmount-network" data-busy-label="Odmontowywanie udziału...">Odmontuj zapisany udział</button>
+                    <button id="settingsSaveStorageButton" type="submit" class="btn" data-busy-label="Zapisywanie serwera danych...">Zapisz serwer danych</button>
+                    <button id="settingsTestStorageButton" type="submit" class="btn btn-secondary" formaction="/settings/storage-test-network" data-busy-label="Testowanie udziału...">Sprawdź udział sieciowy</button>
+                    <button id="settingsMountNetworkButton" type="submit" class="btn btn-green" formaction="/settings/storage-mount-network" data-busy-label="Montowanie udziału..." hidden>Zamontuj zapisany udział</button>
+                    <button id="settingsUnmountNetworkButton" type="submit" class="btn btn-stop" formaction="/settings/storage-unmount-network" data-busy-label="Odmontowywanie udziału..." hidden>Odmontuj zapisany udział</button>
+                    <button id="settingsRemoveNetworkButton" type="submit" class="btn btn-delete" formaction="/settings/storage-remove-network" data-busy-label="Usuwanie konfiguracji..." hidden>Usuń konfigurację udziału</button>
+                </div>
+
+                <div id="settingsNetworkFlowHint" class="inline-note">
+                    Jeśli zmienisz dane udziału sieciowego, najpierw sprawdź połączenie, a dopiero potem zapisz serwer danych.
                 </div>
 
                 <div class="inline-note">

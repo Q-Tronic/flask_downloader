@@ -12,10 +12,13 @@ def register_settings_routes(app, deps):
     get_settings_page_state = deps["get_settings_page_state"]
     save_app_config = deps["save_app_config"]
     build_updated_storage_config = deps["build_updated_storage_config"]
+    get_storage_config_snapshot = deps["get_storage_config_snapshot"]
+    build_storage_network_signature = deps["build_storage_network_signature"]
     test_network_storage_config = deps["test_network_storage_config"]
     configure_network_storage_config = deps["configure_network_storage_config"]
     mount_network_storage_config = deps["mount_network_storage_config"]
     unmount_network_storage_config = deps["unmount_network_storage_config"]
+    remove_network_storage_config = deps["remove_network_storage_config"]
     ensure_share_ready = deps["ensure_share_ready"]
     sync_dlna_runtime_safe = deps["sync_dlna_runtime_safe"]
     refresh_ffmpeg_update_state = deps["refresh_ffmpeg_update_state"]
@@ -47,6 +50,7 @@ def register_settings_routes(app, deps):
     def build_storage_form_payload(form):
         field_source = form or request.form
         network_updates = {
+            "mode": field_source.get("network_mode"),
             "share": field_source.get("network_share"),
             "subpath": field_source.get("network_subpath"),
             "mount_dir": field_source.get("network_mount_dir"),
@@ -65,6 +69,29 @@ def register_settings_routes(app, deps):
         )
         return storage_config, password, keep_existing_password
 
+    def is_network_configured(storage_config):
+        network = dict((storage_config or {}).get("network") or {})
+        network_mode = str(network.get("mode") or "managed_smb").strip().lower()
+        if network_mode == "external_path":
+            return bool(str(network.get("mount_dir") or "").strip())
+        return bool(
+            str(network.get("share") or "").strip()
+            and str(network.get("username") or "").strip()
+            and str(network.get("mount_dir") or "").strip()
+            and str(network.get("credentials_file") or "").strip()
+        )
+
+    def has_valid_saved_network_test(storage_config):
+        current_storage = get_storage_config_snapshot()
+        network_state = dict(current_storage.get("network") or {})
+        current_signature = str(network_state.get("last_test_signature") or "").strip()
+        candidate_signature = build_storage_network_signature(storage_config)
+        return bool(
+            network_state.get("last_test_ok")
+            and current_signature
+            and current_signature == candidate_signature
+        )
+
     @app.route("/settings", methods=["GET", "POST"])
     def settings_page():
         if not is_admin_authenticated():
@@ -76,19 +103,45 @@ def register_settings_routes(app, deps):
         if request.method == "POST":
             try:
                 storage_config, password, keep_existing_password = build_storage_form_payload(request.form)
-                network_ready_for_save = bool(
-                    storage_config["network"]["share"]
-                    and storage_config["network"]["username"]
+                network_ready_for_save = is_network_configured(storage_config)
+                network_mode = str(storage_config["network"].get("mode") or "managed_smb").strip().lower()
+                current_storage = get_storage_config_snapshot()
+                current_candidate_signature = build_storage_network_signature(current_storage)
+                current_signature = str((current_storage.get("network") or {}).get("last_test_signature") or "").strip()
+                candidate_signature = build_storage_network_signature(storage_config)
+                network_changed = bool(network_ready_for_save and candidate_signature != current_signature)
+                password_supplied = bool(password)
+                partial_network_config = (
+                    not network_ready_for_save
+                    and (
+                        password_supplied
+                        or candidate_signature != current_candidate_signature
+                        or str((storage_config.get("network") or {}).get("mode") or "") != str((current_storage.get("network") or {}).get("mode") or "")
+                    )
                 )
-                if storage_config["active_backend"] == "network" and not network_ready_for_save:
-                    raise ValueError("Aby włączyć zapis do udziału sieciowego, uzupełnij adres udziału i login SMB.")
 
-                if network_ready_for_save:
+                if storage_config["active_backend"] == "network" and not network_ready_for_save:
+                    if network_mode == "external_path":
+                        raise ValueError("Aby włączyć zewnętrzną ścieżkę storage, uzupełnij ścieżkę zasobu.")
+                    raise ValueError("Aby włączyć zapis do udziału sieciowego, uzupełnij poprawne dane SMB i ścieżkę montowania.")
+                if partial_network_config:
+                    raise ValueError("Dane udziału sieciowego są niepełne. Uzupełnij je i sprawdź połączenie albo usuń konfigurację udziału.")
+
+                if network_ready_for_save and password_supplied:
+                    test_network_storage_config(
+                        storage_config,
+                        password=password,
+                        keep_existing_password=keep_existing_password,
+                    )
+
+                if network_ready_for_save and (network_changed or password_supplied):
+                    if not password_supplied and not has_valid_saved_network_test(storage_config):
+                        raise ValueError("Najpierw sprawdź udział sieciowy aktualnymi danymi, a dopiero potem zapisz serwer danych.")
                     configure_network_storage_config(
                         storage_config,
                         password=password,
                         keep_existing_password=keep_existing_password,
-                        mount_now=(storage_config["active_backend"] == "network"),
+                        mount_now=(storage_config["active_backend"] == "network" and network_mode == "managed_smb"),
                     )
                     storage_config = build_updated_storage_config(
                         active_backend=storage_config["active_backend"],
@@ -98,6 +151,8 @@ def register_settings_routes(app, deps):
                             "password_saved": True,
                         },
                     )
+                elif network_ready_for_save and storage_config["active_backend"] == "network" and network_mode == "managed_smb" and not has_valid_saved_network_test(storage_config):
+                    raise ValueError("Najpierw sprawdź udział sieciowy aktualnymi danymi, a dopiero potem zapisz serwer danych.")
 
                 save_app_config(
                     job_retention_days=request.form.get("job_retention_days"),
@@ -105,7 +160,7 @@ def register_settings_routes(app, deps):
                     local_storage_root=storage_config["local"]["root"],
                     network_storage=storage_config["network"],
                 )
-                ensure_share_ready(auto_remount=True)
+                ensure_share_ready(auto_remount=False)
                 sync_dlna_runtime_safe(restart_service_if_active=False)
                 message = "Konfiguracja została zapisana."
                 if wants_json_response():
@@ -145,6 +200,8 @@ def register_settings_routes(app, deps):
 
         try:
             storage_config, password, keep_existing_password = build_storage_form_payload(request.form)
+            if not is_network_configured(storage_config):
+                raise ValueError("Najpierw uzupełnij komplet danych udziału sieciowego albo wybierz zewnętrzną ścieżkę storage.")
             response = test_network_storage_config(
                 storage_config,
                 password=password,
@@ -183,6 +240,39 @@ def register_settings_routes(app, deps):
             response = mount_network_storage_config()
             ensure_share_ready(auto_remount=False)
             message = str(response.get("message") or "Udział sieciowy został zamontowany.").strip()
+            if wants_json_response():
+                return jsonify({
+                    "ok": True,
+                    "message": message,
+                    "kind": "success",
+                    "state": get_settings_page_state(include_user_rows=True),
+                })
+            set_ui_flash(message, "success")
+        except Exception as exc:
+            if wants_json_response():
+                return jsonify({
+                    "ok": False,
+                    "error": str(exc),
+                    "kind": "error",
+                    "state": get_settings_page_state(include_user_rows=True),
+                }), 400
+            set_ui_flash(str(exc), "error")
+
+        return redirect(url_for("settings_page"))
+
+    @app.route("/settings/storage-remove-network", methods=["POST"])
+    def settings_remove_network_storage():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby usuwać konfigurację udziału sieciowego.", "error")
+            return redirect(url_for("index"))
+
+        try:
+            remove_credentials = parse_boolean_flag(request.form.get("remove_network_credentials"), default=False)
+            response = remove_network_storage_config(remove_credentials=remove_credentials)
+            ensure_share_ready(auto_remount=False)
+            message = str(response.get("message") or "Konfiguracja udziału sieciowego została usunięta.").strip()
             if wants_json_response():
                 return jsonify({
                     "ok": True,

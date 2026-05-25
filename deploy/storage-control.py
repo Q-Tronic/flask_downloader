@@ -257,6 +257,48 @@ def write_managed_fstab_block(block_text):
             os.remove(temp_path)
 
 
+def remove_managed_fstab_block():
+    existing = ""
+    if os.path.isfile(FSTAB_FILE):
+        with open(FSTAB_FILE, "r", encoding="utf-8") as handle:
+            existing = handle.read()
+
+    lines = existing.splitlines()
+    cleaned = []
+    inside_block = False
+    changed = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == FSTAB_MARKER_BEGIN:
+            inside_block = True
+            changed = True
+            continue
+        if stripped == FSTAB_MARKER_END:
+            inside_block = False
+            changed = True
+            continue
+        if not inside_block:
+            cleaned.append(line)
+
+    if not changed:
+        return False
+
+    next_text = "\n".join(cleaned).rstrip("\n")
+    if next_text:
+        next_text += "\n"
+
+    fd, temp_path = tempfile.mkstemp(prefix=".fstab.flask-downloader.", dir=os.path.dirname(FSTAB_FILE))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(next_text)
+        os.chmod(temp_path, 0o644)
+        os.replace(temp_path, FSTAB_FILE)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+    return True
+
+
 def is_mount_active(path):
     return os.path.ismount(path)
 
@@ -362,17 +404,21 @@ def normalize_storage_payload(payload):
     network = dict(storage.get("network") or {})
     app_user = normalize_simple_text((payload or {}).get("app_user"), "Użytkownik aplikacji", required=True, max_len=120)
     app_group = normalize_simple_text((payload or {}).get("app_group"), "Grupa aplikacji", required=True, max_len=120)
+    network_mode = str(network.get("mode") or network.get("management_mode") or "managed_smb").strip().lower()
+    if network_mode != "external_path":
+        network_mode = "managed_smb"
     return {
         "app_user": app_user,
         "app_group": app_group,
         "active_backend": str(storage.get("active_backend") or "local").strip().lower() or "local",
         "network": {
-            "share": normalize_network_share(network.get("share")),
+            "mode": network_mode,
+            "share": normalize_network_share(network.get("share")) if network_mode == "managed_smb" else "",
             "subpath": normalize_subpath(network.get("subpath")),
             "mount_dir": normalize_abs_path(network.get("mount_dir"), "Katalog montowania udziału"),
-            "username": normalize_simple_text(network.get("username"), "Login SMB", required=True, max_len=120),
+            "username": normalize_simple_text(network.get("username"), "Login SMB", required=(network_mode == "managed_smb"), max_len=120),
             "domain": normalize_simple_text(network.get("domain"), "Domena SMB", required=False, max_len=120),
-            "credentials_file": normalize_abs_path(network.get("credentials_file"), "Plik danych logowania SMB"),
+            "credentials_file": normalize_abs_path(network.get("credentials_file"), "Plik danych logowania SMB") if network_mode == "managed_smb" else "",
             "cifs_version": normalize_version(network.get("cifs_version")),
             "iocharset": normalize_iocharset(network.get("iocharset")),
             "password": str(network.get("password") or ""),
@@ -384,6 +430,22 @@ def normalize_storage_payload(payload):
 def test_cifs(payload):
     data = normalize_storage_payload(payload)
     config = data["network"]
+    if config["mode"] == "external_path":
+        access = test_rw_access(config["mount_dir"])
+        ensure_full_rw_access(access, share=config["mount_dir"], mount_dir=config["mount_dir"])
+        respond(
+            ok=True,
+            message=access["message"],
+            share="",
+            mount_dir=config["mount_dir"],
+            read_ok=access["read_ok"],
+            write_ok=access["write_ok"],
+            execute_ok=access["execute_ok"],
+            is_mount=bool(os.path.ismount(config["mount_dir"])),
+            tested=True,
+            mode="external_path",
+        )
+
     credentials_path, persisted = ensure_credentials_available(
         config["credentials_file"],
         config["username"],
@@ -428,6 +490,23 @@ def test_cifs(payload):
 def configure_cifs(payload):
     data = normalize_storage_payload(payload)
     config = data["network"]
+    if config["mode"] == "external_path":
+        remove_managed_fstab_block()
+        access = test_rw_access(config["mount_dir"])
+        ensure_full_rw_access(access, share=config["mount_dir"], mount_dir=config["mount_dir"])
+        respond(
+            ok=True,
+            message=access["message"],
+            share="",
+            mount_dir=config["mount_dir"],
+            read_ok=access["read_ok"],
+            write_ok=access["write_ok"],
+            execute_ok=access["execute_ok"],
+            is_mount=bool(os.path.ismount(config["mount_dir"])),
+            configured=True,
+            mode="external_path",
+        )
+
     uid, gid = get_identity_ids(data["app_user"], data["app_group"])
     mount_now = bool((payload or {}).get("mount_now"))
 
@@ -477,6 +556,21 @@ def configure_cifs(payload):
 def mount_cifs(payload):
     data = normalize_storage_payload(payload)
     config = data["network"]
+    if config["mode"] == "external_path":
+        access = test_rw_access(config["mount_dir"])
+        ensure_full_rw_access(access, share=config["mount_dir"], mount_dir=config["mount_dir"])
+        respond(
+            ok=True,
+            message=access["message"],
+            share="",
+            mount_dir=config["mount_dir"],
+            read_ok=access["read_ok"],
+            write_ok=access["write_ok"],
+            execute_ok=access["execute_ok"],
+            is_mount=bool(os.path.ismount(config["mount_dir"])),
+            mounted=bool(os.path.ismount(config["mount_dir"])),
+            mode="external_path",
+        )
     uid, gid = get_identity_ids(data["app_user"], data["app_group"])
     credentials_path, _ = ensure_credentials_available(
         config["credentials_file"],
@@ -507,6 +601,16 @@ def mount_cifs(payload):
 def unmount_cifs(payload):
     data = normalize_storage_payload(payload)
     config = data["network"]
+    if config["mode"] == "external_path":
+        respond(
+            ok=True,
+            message="Zewnętrzna ścieżka storage nie jest zarządzana przez aplikację jako montowanie SMB.",
+            share="",
+            mount_dir=config["mount_dir"],
+            is_mount=bool(os.path.ismount(config["mount_dir"])),
+            mounted=bool(os.path.ismount(config["mount_dir"])),
+            mode="external_path",
+        )
     ok, message = unmount_share(config["mount_dir"])
     if not ok:
         fail(message, share=config["share"], mount_dir=config["mount_dir"])
@@ -517,6 +621,36 @@ def unmount_cifs(payload):
         mount_dir=config["mount_dir"],
         is_mount=False,
         mounted=False,
+    )
+
+
+def remove_network_config(payload):
+    data = normalize_storage_payload(payload)
+    config = data["network"]
+    remove_credentials = bool((payload or {}).get("remove_credentials"))
+    if config["mode"] == "managed_smb":
+        try:
+            unmount_share(config["mount_dir"])
+        except Exception:
+            pass
+    fstab_removed = remove_managed_fstab_block()
+    credentials_removed = False
+    if remove_credentials and config.get("credentials_file") and os.path.isfile(config["credentials_file"]):
+        try:
+            os.remove(config["credentials_file"])
+            credentials_removed = True
+        except Exception as exc:
+            fail("Nie udało się usunąć pliku poświadczeń SMB: %s" % exc)
+    respond(
+        ok=True,
+        message="Konfiguracja udziału sieciowego została usunięta.",
+        share=config.get("share") or "",
+        mount_dir=config["mount_dir"],
+        fstab_removed=bool(fstab_removed),
+        credentials_removed=bool(credentials_removed),
+        mounted=bool(os.path.ismount(config["mount_dir"])),
+        is_mount=bool(os.path.ismount(config["mount_dir"])),
+        mode=config["mode"],
     )
 
 
@@ -535,6 +669,8 @@ def main():
         mount_cifs(payload)
     elif action == "unmount-cifs":
         unmount_cifs(payload)
+    elif action == "remove-network":
+        remove_network_config(payload)
 
     fail("Nieznana akcja helpera storage-control: %s" % action, code=64)
 

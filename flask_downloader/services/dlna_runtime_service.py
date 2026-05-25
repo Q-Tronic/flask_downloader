@@ -93,16 +93,16 @@ class DlnaRuntimeService:
     def sync_runtime(self, restart_service_if_active=False, force_full_rescan=False):
         with self._sync_lock:
             self._ensure_dlna_runtime_dirs()
-            ok, _ = self._ensure_share_ready(auto_remount=True)
-            files = self._get_server_files() if ok else []
+            try:
+                self._ensure_share_ready(auto_remount=True)
+            except Exception:
+                pass
+            files = self._get_server_files()
             prune_result = self._prune_missing_dlna_media_rules(
                 files=files,
                 sync_runtime=False,
                 restart_service_if_active=restart_service_if_active,
-            ) if ok else {
-                "changed": False,
-                "config": self._get_dlna_config_snapshot(),
-            }
+            )
             dlna_config = self._normalize_dlna_config(prune_result.get("config"))
             layout_upgraded = int(dlna_config.get("layout_version") or 0) < self._dlna_virtual_layout_version
             if layout_upgraded:

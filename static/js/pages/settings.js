@@ -9,6 +9,11 @@
     const pollIntervalMs = 1000;
     let liveSubscription = null;
     const dirtyForms = new Set();
+    let latestSettingsState = {
+        config: pageData.config || null,
+        mount: pageData.mount || null,
+    };
+    let lastValidatedNetworkSnapshot = "";
     let activeTab = readStoredActiveTab() || "storage";
 
     function readStoredActiveTab() {
@@ -69,6 +74,157 @@
         }
         node.className = "service-status-pill " + String(kind || "muted");
         node.textContent = String(label || "");
+    }
+
+    function getFieldValue(id) {
+        const node = document.getElementById(id);
+        return node ? String(node.value || "") : "";
+    }
+
+    function getFieldChecked(id) {
+        const node = document.getElementById(id);
+        return !!(node && node.checked);
+    }
+
+    function normalizeFieldValue(id) {
+        return getFieldValue(id).trim();
+    }
+
+    function getActiveStorageBackendValue() {
+        return normalizeFieldValue("activeStorageBackend") || "local";
+    }
+
+    function getNetworkModeValue() {
+        const value = normalizeFieldValue("networkMode") || "managed_smb";
+        return value === "external_path" ? "external_path" : "managed_smb";
+    }
+
+    function hasAnyNetworkFormInput() {
+        return [
+            "networkShare",
+            "networkSubpath",
+            "networkMountDir",
+            "networkUsername",
+            "networkDomain",
+            "networkCredentialsFile",
+            "networkPassword",
+        ].some(function(id) {
+            return normalizeFieldValue(id) !== "";
+        });
+    }
+
+    function isNetworkConfiguredInForm() {
+        const networkMode = getNetworkModeValue();
+        if (networkMode === "external_path") {
+            return normalizeFieldValue("networkMountDir") !== "";
+        }
+        return (
+            normalizeFieldValue("networkShare") !== "" &&
+            normalizeFieldValue("networkUsername") !== "" &&
+            normalizeFieldValue("networkMountDir") !== "" &&
+            normalizeFieldValue("networkCredentialsFile") !== ""
+        );
+    }
+
+    function buildNetworkFormSnapshot() {
+        return JSON.stringify({
+            mode: getNetworkModeValue(),
+            share: normalizeFieldValue("networkShare"),
+            subpath: normalizeFieldValue("networkSubpath"),
+            mountDir: normalizeFieldValue("networkMountDir"),
+            username: normalizeFieldValue("networkUsername"),
+            domain: normalizeFieldValue("networkDomain"),
+            credentialsFile: normalizeFieldValue("networkCredentialsFile"),
+            cifsVersion: normalizeFieldValue("networkCifsVersion"),
+            iocharset: normalizeFieldValue("networkIocharset"),
+            passwordProvided: normalizeFieldValue("networkPassword") !== "",
+            keepExistingPassword: getFieldChecked("keepExistingNetworkPassword"),
+        });
+    }
+
+    function updateNetworkUsersRootHint() {
+        const suffix = String((document.getElementById("settingsTodayDownloadDirValue")?.textContent || "").split("/").pop() || "YYYY-MM-DD");
+        setText(
+            "settingsNetworkUsersRootHint",
+            (getFieldValue("networkMountDir") || "") + "/flask_downloader_users/login/video/" + suffix + "/plik.mp4"
+        );
+    }
+
+    function toggleNetworkManagedFields(networkMode) {
+        const managedFields = document.getElementById("settingsNetworkManagedFields");
+        if (managedFields) {
+            managedFields.hidden = String(networkMode || "managed_smb") === "external_path";
+        }
+        setText(
+            "settingsNetworkMountDirLabel",
+            String(networkMode || "managed_smb") === "external_path"
+                ? "Ścieżka gotowego zasobu"
+                : "Katalog montowania udziału"
+        );
+        setText(
+            "settingsNetworkHintText",
+            String(networkMode || "managed_smb") === "external_path"
+                ? "Aplikacja nie montuje tej ścieżki sama. Najpierw wskaż gotowy zasób, sprawdź odczyt i zapis, a dopiero potem zapisz serwer danych. Docelowa ścieżka nowych plików to "
+                : "Test udziału sprawdza połączenie, możliwość odczytu i realny zapis pliku testowego. Aktywny backend sieciowy zapisze nowe pliki do "
+        );
+        updateNetworkUsersRootHint();
+    }
+
+    function syncStorageActionState() {
+        const mount = (latestSettingsState && latestSettingsState.mount) || {};
+        const activeBackend = getActiveStorageBackendValue();
+        const networkMode = getNetworkModeValue();
+        const networkConfiguredInForm = isNetworkConfiguredInForm();
+        const networkConfiguredPersisted = !!mount.network_configured;
+        const networkVisible = activeBackend === "network" || networkConfiguredPersisted || hasAnyNetworkFormInput();
+        const currentSnapshot = buildNetworkFormSnapshot();
+        const hasValidatedSnapshot = !!lastValidatedNetworkSnapshot && currentSnapshot === lastValidatedNetworkSnapshot;
+        const partialNetworkConfig = networkVisible && !networkConfiguredInForm && hasAnyNetworkFormInput();
+
+        setHidden("settingsNetworkFields", !networkVisible);
+        toggleNetworkManagedFields(networkMode);
+
+        const saveButton = document.getElementById("settingsSaveStorageButton");
+        const testButton = document.getElementById("settingsTestStorageButton");
+        const mountButton = document.getElementById("settingsMountNetworkButton");
+        const unmountButton = document.getElementById("settingsUnmountNetworkButton");
+        const removeButton = document.getElementById("settingsRemoveNetworkButton");
+        const flowHint = document.getElementById("settingsNetworkFlowHint");
+
+        const needsNetworkValidation = networkVisible && networkConfiguredInForm && !hasValidatedSnapshot;
+        const canSave = (
+            activeBackend === "local" && !partialNetworkConfig && (!networkConfiguredInForm || hasValidatedSnapshot || !networkVisible)
+        ) || (
+            activeBackend === "network" && networkConfiguredInForm && hasValidatedSnapshot
+        );
+
+        if (saveButton) {
+            saveButton.hidden = !canSave;
+        }
+        if (testButton) {
+            testButton.hidden = !(networkVisible && networkConfiguredInForm && !hasValidatedSnapshot);
+        }
+        if (flowHint) {
+            flowHint.hidden = !(networkVisible && (needsNetworkValidation || partialNetworkConfig));
+            if (partialNetworkConfig) {
+                flowHint.textContent = "Dane udziału są niepełne. Uzupełnij je i sprawdź połączenie albo usuń konfigurację udziału.";
+            } else if (needsNetworkValidation) {
+                flowHint.textContent = "Jeśli zmienisz dane udziału sieciowego, najpierw sprawdź połączenie, a dopiero potem zapisz serwer danych.";
+            } else {
+                flowHint.textContent = "";
+            }
+        }
+
+        const allowManagedMountActions = networkMode === "managed_smb" && networkConfiguredPersisted;
+        if (mountButton) {
+            mountButton.hidden = !allowManagedMountActions || !!mount.is_mount;
+        }
+        if (unmountButton) {
+            unmountButton.hidden = !allowManagedMountActions || !mount.is_mount;
+        }
+        if (removeButton) {
+            removeButton.hidden = !(networkConfiguredPersisted || hasAnyNetworkFormInput());
+        }
     }
 
     function getVisibleTabs() {
@@ -270,6 +426,7 @@
             return;
         }
         node.hidden = String(activeBackend || "local") !== "network";
+        syncStorageActionState();
     }
 
     function applyStorageSummary(config, mount) {
@@ -312,11 +469,15 @@
         const local = storage.local || {};
         const network = storage.network || {};
         const configFormDirty = isProtectedFormDirty("settingsConfigForm");
+        latestSettingsState = latestSettingsState || {};
+        latestSettingsState.config = config;
+        latestSettingsState.mount = mount || {};
 
         if (!configFormDirty) {
             setValue("jobRetentionDays", config.job_retention_days || "");
             setValue("activeStorageBackend", storage.active_backend || "local");
             setValue("localStorageRoot", local.root || "");
+            setValue("networkMode", network.mode || "managed_smb");
             setValue("networkShare", network.share || "");
             setValue("networkSubpath", network.subpath || "");
             setValue("networkMountDir", network.mount_dir || "");
@@ -333,8 +494,10 @@
             if (networkPassword) {
                 networkPassword.value = "";
             }
+            lastValidatedNetworkSnapshot = mount && mount.network_last_test_ok ? buildNetworkFormSnapshot() : "";
         }
 
+        toggleNetworkManagedFields(network.mode || "managed_smb");
         toggleNetworkFields(storage.active_backend || "local");
         setText("settingsLocalUsersRootHint", (local.root || "") + "/flask_downloader_users/login/video/" + String((todayDownloadDir || "").split("/").pop() || "YYYY-MM-DD") + "/plik.mp4");
         setText("settingsNetworkUsersRootHint", (network.mount_dir || "") + "/flask_downloader_users/login/video/" + String((todayDownloadDir || "").split("/").pop() || "YYYY-MM-DD") + "/plik.mp4");
@@ -342,6 +505,7 @@
             "settingsKeepPasswordLabel",
             "Zachowaj zapisane hasło SMB" + (network.password_saved ? " (plik poświadczeń jest już zapisany)" : "")
         );
+        syncStorageActionState();
     }
 
     function renderUserRows(rows) {
@@ -697,6 +861,7 @@
         if (!state) {
             return;
         }
+        latestSettingsState = state;
 
         const tasks = state.maintenance_tasks || state.tasks || {};
         applyMountState(state.mount || null);
@@ -751,6 +916,7 @@
         }
 
         const submitAction = String((submitter && submitter.getAttribute("formaction")) || form.action || "");
+        const isStorageTestAction = submitAction.indexOf("/settings/storage-test-network") >= 0;
         let busyLabel = String((submitter && submitter.dataset.busyLabel) || form.dataset.busyLabel || "").trim();
         if (!busyLabel) {
             busyLabel = "Trwa...";
@@ -800,7 +966,7 @@
                 return null;
             });
 
-            if (data && (data.settings_state || data.state)) {
+            if (!isStorageTestAction && data && (data.settings_state || data.state)) {
                 applyStateEnvelope(data);
             }
 
@@ -812,7 +978,12 @@
             if (form.dataset.resetAfterSuccess === "true") {
                 form.reset();
             }
-            clearProtectedFormDirty(form);
+            if (isStorageTestAction) {
+                lastValidatedNetworkSnapshot = buildNetworkFormSnapshot();
+                syncStorageActionState();
+            } else {
+                clearProtectedFormDirty(form);
+            }
 
             if (data.message) {
                 showToast(data.message, data.kind || "success");
@@ -877,6 +1048,22 @@
         markProtectedFormDirty(form);
         if (target.id === "activeStorageBackend") {
             toggleNetworkFields(target.value || "local");
+            return;
+        }
+        if (
+            target.id === "networkMode" ||
+            target.id === "networkShare" ||
+            target.id === "networkSubpath" ||
+            target.id === "networkMountDir" ||
+            target.id === "networkUsername" ||
+            target.id === "networkDomain" ||
+            target.id === "networkCredentialsFile" ||
+            target.id === "networkCifsVersion" ||
+            target.id === "networkIocharset" ||
+            target.id === "networkPassword" ||
+            target.id === "keepExistingNetworkPassword"
+        ) {
+            syncStorageActionState();
         }
     }
 
@@ -897,6 +1084,7 @@
 
     renderUserRows(pageData.userRows || []);
     renderTabs();
+    syncStorageActionState();
     if (window.appLive && typeof window.appLive.createSubscription === "function") {
         liveSubscription = window.appLive.createSubscription({
             url: "/api/settings/stream",

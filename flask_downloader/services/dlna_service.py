@@ -475,18 +475,15 @@ class DlnaLibraryService:
 
     def get_page_state(self):
         mount = self._get_mount_info(auto_remount=True)
-        files = self._get_server_files() if mount.get("online") else []
-        if mount.get("online"):
-            prune_result = self._prune_missing_dlna_media_rules(
-                files=files,
-                sync_runtime=True,
-                restart_service_if_active=False,
-            )
-            dlna_config = self._normalize_dlna_config(prune_result.get("config"))
-            if prune_result.get("changed"):
-                files = self._get_server_files()
-        else:
-            dlna_config = self._get_dlna_config_snapshot()
+        files = self._get_server_files()
+        prune_result = self._prune_missing_dlna_media_rules(
+            files=files,
+            sync_runtime=True,
+            restart_service_if_active=False,
+        )
+        dlna_config = self._normalize_dlna_config(prune_result.get("config"))
+        if prune_result.get("changed"):
+            files = self._get_server_files()
 
         return {
             "mount": mount,

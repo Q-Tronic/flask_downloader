@@ -364,11 +364,17 @@ def normalize_library_mode(value, default="manual"):
     return mode
 
 
-def normalize_library_item(raw, *, owner_username, parse_managed_relative_path):
+def normalize_library_item(raw, *, owner_username, parse_managed_relative_path, canonicalize_relative_path=None):
     if not isinstance(raw, dict):
         return None
 
     relative_path = normalize_text(raw.get("relative_path"), max_len=600).replace("\\", "/").strip("/")
+    if callable(canonicalize_relative_path):
+        relative_path = canonicalize_relative_path(
+            relative_path,
+            owner_username=owner_username,
+            storage_kind="audio",
+        )
     if not relative_path:
         return None
 
@@ -400,11 +406,17 @@ def normalize_library_item(raw, *, owner_username, parse_managed_relative_path):
     }
 
 
-def normalize_manual_queue_item(raw, *, owner_username, parse_managed_relative_path):
+def normalize_manual_queue_item(raw, *, owner_username, parse_managed_relative_path, canonicalize_relative_path=None):
     if not isinstance(raw, dict):
         return None
 
     relative_path = normalize_text(raw.get("relative_path"), max_len=600).replace("\\", "/").strip("/")
+    if callable(canonicalize_relative_path):
+        relative_path = canonicalize_relative_path(
+            relative_path,
+            owner_username=owner_username,
+            storage_kind="audio",
+        )
     if not relative_path:
         return None
 
@@ -433,7 +445,7 @@ def normalize_manual_queue_item(raw, *, owner_username, parse_managed_relative_p
     }
 
 
-def normalize_manual_queue(raw, *, owner_username, parse_managed_relative_path):
+def normalize_manual_queue(raw, *, owner_username, parse_managed_relative_path, canonicalize_relative_path=None):
     payload = {
         "play_now": [],
         "queue_next": [],
@@ -449,6 +461,7 @@ def normalize_manual_queue(raw, *, owner_username, parse_managed_relative_path):
                 raw_item,
                 owner_username=owner_username,
                 parse_managed_relative_path=parse_managed_relative_path,
+                canonicalize_relative_path=canonicalize_relative_path,
             )
             if not normalized_item:
                 continue
@@ -517,7 +530,7 @@ def normalize_history(raw):
     return payload
 
 
-def normalize_station_entry(raw, *, owner_username, parse_managed_relative_path):
+def normalize_station_entry(raw, *, owner_username, parse_managed_relative_path, canonicalize_relative_path=None):
     owner = str(owner_username or "").strip()
     defaults = default_station_entry(owner)
     if not isinstance(raw, dict):
@@ -549,6 +562,12 @@ def normalize_station_entry(raw, *, owner_username, parse_managed_relative_path)
     items = []
     for item in (raw_library if isinstance(raw_library, dict) else {}).get("items") or []:
         normalized_item = normalize_library_item(item, owner_username=owner, parse_managed_relative_path=parse_managed_relative_path)
+        if callable(canonicalize_relative_path) and normalized_item:
+            normalized_item["relative_path"] = canonicalize_relative_path(
+                normalized_item["relative_path"],
+                owner_username=owner,
+                storage_kind="audio",
+            )
         if not normalized_item:
             continue
         relative_path = normalized_item["relative_path"].lower()
@@ -561,6 +580,12 @@ def normalize_station_entry(raw, *, owner_username, parse_managed_relative_path)
     seen_excluded = set()
     for raw_path in (raw_library if isinstance(raw_library, dict) else {}).get("excluded_relative_paths") or []:
         normalized_path = normalize_text(raw_path, max_len=600).replace("\\", "/").strip("/")
+        if callable(canonicalize_relative_path):
+            normalized_path = canonicalize_relative_path(
+                normalized_path,
+                owner_username=owner,
+                storage_kind="audio",
+            )
         if not normalized_path:
             continue
         parsed = parse_managed_relative_path(normalized_path)
@@ -580,6 +605,7 @@ def normalize_station_entry(raw, *, owner_username, parse_managed_relative_path)
         (raw.get("manual_queue") or {}) if isinstance(raw, dict) else {},
         owner_username=owner,
         parse_managed_relative_path=parse_managed_relative_path,
+        canonicalize_relative_path=canonicalize_relative_path,
     )
     history = normalize_history((raw.get("history") or {}) if isinstance(raw, dict) else {})
 
@@ -608,7 +634,7 @@ def normalize_station_entry(raw, *, owner_username, parse_managed_relative_path)
     }
 
 
-def normalize_radio_store(raw, *, normalize_username, parse_managed_relative_path):
+def normalize_radio_store(raw, *, normalize_username, parse_managed_relative_path, canonicalize_relative_path=None):
     defaults = default_radio_store()
     if not isinstance(raw, dict):
         return defaults
@@ -625,6 +651,7 @@ def normalize_radio_store(raw, *, normalize_username, parse_managed_relative_pat
                 value,
                 owner_username=owner_username,
                 parse_managed_relative_path=parse_managed_relative_path,
+                canonicalize_relative_path=canonicalize_relative_path,
             )
 
     return {
@@ -635,7 +662,7 @@ def normalize_radio_store(raw, *, normalize_username, parse_managed_relative_pat
     }
 
 
-def load_radio_store(radios_file, *, normalize_username, parse_managed_relative_path):
+def load_radio_store(radios_file, *, normalize_username, parse_managed_relative_path, canonicalize_relative_path=None):
     store = default_radio_store()
     changed = False
 
@@ -647,6 +674,7 @@ def load_radio_store(radios_file, *, normalize_username, parse_managed_relative_
                 raw,
                 normalize_username=normalize_username,
                 parse_managed_relative_path=parse_managed_relative_path,
+                canonicalize_relative_path=canonicalize_relative_path,
             )
             changed = store != raw
     except Exception:

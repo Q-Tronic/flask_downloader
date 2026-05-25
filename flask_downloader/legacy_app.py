@@ -172,7 +172,7 @@ DEFAULT_ADMIN_PASSWORD = "admin"
 USER_STORAGE_ROOT = CONFIG_USER_STORAGE_ROOT
 DEFAULT_ADMIN_VIDEO_ROOT = os.path.join(USER_STORAGE_ROOT, DEFAULT_ADMIN_USERNAME, "video")
 DEFAULT_ADMIN_AUDIO_ROOT = os.path.join(USER_STORAGE_ROOT, DEFAULT_ADMIN_USERNAME, "audio")
-USER_STORAGE_LAYOUT_VERSION = 2
+USER_STORAGE_LAYOUT_VERSION = 3
 MAX_PARALLEL_DOWNLOADS_PER_USER = CONFIG_MAX_PARALLEL_DOWNLOADS_PER_USER
 APP_SERVICE_USER = CONFIG_APP_SERVICE_USER
 APP_SERVICE_GROUP = CONFIG_APP_SERVICE_GROUP
@@ -453,7 +453,12 @@ def rebase_managed_relative_path_owner(relative_path, previous_username, next_us
     if parsed["owner_username"] != previous_owner:
         return parsed["relative_path"]
 
-    return build_managed_relative_path(next_owner, parsed["storage_kind"], parsed["user_relative_path"])
+    return build_managed_relative_path(
+        next_owner,
+        parsed["storage_kind"],
+        parsed["user_relative_path"],
+        storage_id=parsed.get("storage_id") or "local",
+    )
 
 
 def compute_rebased_user_filepath(path, previous_username, next_username, storage_kind="video"):
@@ -465,8 +470,10 @@ def compute_rebased_user_filepath(path, previous_username, next_username, storag
     next_owner = normalize_username(next_username)
     normalized_storage_kind = normalize_storage_kind(storage_kind or "video")
     candidate = os.path.abspath(text)
-    previous_root = os.path.abspath(get_user_storage_root(previous_owner, normalized_storage_kind))
-    next_root = os.path.abspath(get_user_storage_root(next_owner, normalized_storage_kind))
+    path_info = get_managed_path_info(candidate) or {}
+    storage_id = normalize_storage_id(path_info.get("storage_id") or "local", default="local")
+    previous_root = os.path.abspath(get_user_storage_root(previous_owner, normalized_storage_kind, storage_id=storage_id))
+    next_root = os.path.abspath(get_user_storage_root(next_owner, normalized_storage_kind, storage_id=storage_id))
     try:
         if os.path.commonpath([previous_root, candidate]) != previous_root:
             return candidate
@@ -476,33 +483,53 @@ def compute_rebased_user_filepath(path, previous_username, next_username, storag
     return os.path.abspath(os.path.join(next_root, suffix.replace("/", os.sep)))
 
 
+def iter_storage_ids():
+    return ("local", "network")
+
+
+def ensure_user_storage_dirs(username, storage_id=None):
+    owner = normalize_username(username)
+    if storage_id:
+        ensure_directory(get_user_storage_root(owner, "video", storage_id=storage_id))
+        ensure_directory(get_user_storage_root(owner, "audio", storage_id=storage_id))
+        return
+
+    for candidate_storage_id in iter_storage_ids():
+        base_root = os.path.abspath(get_user_storage_base_root(candidate_storage_id))
+        if candidate_storage_id != "local" and not os.path.isdir(base_root):
+            continue
+        ensure_directory(get_user_storage_root(owner, "video", storage_id=candidate_storage_id))
+        ensure_directory(get_user_storage_root(owner, "audio", storage_id=candidate_storage_id))
+
+
 def move_user_storage_root(previous_username, next_username):
     previous_owner = normalize_username(previous_username)
     next_owner = normalize_username(next_username)
-    previous_root = os.path.abspath(get_user_root(previous_owner))
-    next_root = os.path.abspath(get_user_root(next_owner))
-    base_root = os.path.abspath(get_user_storage_base_root())
+    moved_roots = []
 
-    if previous_root == next_root:
-        ensure_directory(get_user_storage_root(next_owner, "video"))
-        ensure_directory(get_user_storage_root(next_owner, "audio"))
-        return next_root
+    for storage_id in iter_storage_ids():
+        previous_root = os.path.abspath(get_user_root(previous_owner, storage_id=storage_id))
+        next_root = os.path.abspath(get_user_root(next_owner, storage_id=storage_id))
+        base_root = os.path.abspath(get_user_storage_base_root(storage_id))
 
-    try:
-        if os.path.commonpath([base_root, previous_root]) != base_root or os.path.commonpath([base_root, next_root]) != base_root:
-            raise ValueError("Ścieżka użytkownika wykracza poza katalog bazowy.")
-    except Exception as exc:
-        raise ValueError("Nie można bezpiecznie przenieść katalogu użytkownika.") from exc
+        if previous_root == next_root:
+            continue
 
-    if os.path.lexists(next_root):
-        raise ValueError("Docelowy katalog użytkownika już istnieje na dysku. Wybierz inny login.")
+        try:
+            if os.path.commonpath([base_root, previous_root]) != base_root or os.path.commonpath([base_root, next_root]) != base_root:
+                raise ValueError("Ścieżka użytkownika wykracza poza katalog bazowy.")
+        except Exception as exc:
+            raise ValueError("Nie można bezpiecznie przenieść katalogu użytkownika.") from exc
 
-    if os.path.isdir(previous_root):
-        shutil.move(previous_root, next_root)
+        if os.path.lexists(next_root):
+            raise ValueError("Docelowy katalog użytkownika już istnieje na dysku. Wybierz inny login.")
 
-    ensure_directory(get_user_storage_root(next_owner, "video"))
-    ensure_directory(get_user_storage_root(next_owner, "audio"))
-    return next_root
+        if os.path.isdir(previous_root):
+            shutil.move(previous_root, next_root)
+            moved_roots.append(next_root)
+
+    ensure_user_storage_dirs(next_owner)
+    return moved_roots
 
 
 def update_user_account(username, new_username, role):
@@ -628,10 +655,11 @@ def update_user_account(username, new_username, role):
                     write_download_jobs_locked()
 
             if storage_moved:
-                current_root = os.path.abspath(get_user_root(next_owner))
-                previous_root = os.path.abspath(get_user_root(previous_owner))
-                if os.path.isdir(current_root) and not os.path.lexists(previous_root):
-                    shutil.move(current_root, previous_root)
+                for storage_id in iter_storage_ids():
+                    current_root = os.path.abspath(get_user_root(next_owner, storage_id=storage_id))
+                    previous_root = os.path.abspath(get_user_root(previous_owner, storage_id=storage_id))
+                    if os.path.isdir(current_root) and not os.path.lexists(previous_root):
+                        shutil.move(current_root, previous_root)
 
             try:
                 rename_radio_station_owner(next_owner, previous_owner)
@@ -655,14 +683,15 @@ def update_user_account(username, new_username, role):
 def count_user_media_files(username):
     owner = normalize_username(username)
     total = 0
-    for storage_kind in ("video", "audio"):
-        root = get_user_storage_root(owner, storage_kind)
-        if not os.path.isdir(root):
-            continue
-        for _, _, filenames in os.walk(root):
-            for name in filenames:
-                if not is_temporary_download_artifact_name(name):
-                    total += 1
+    for storage_id in iter_storage_ids():
+        for storage_kind in ("video", "audio"):
+            root = get_user_storage_root(owner, storage_kind, storage_id=storage_id)
+            if not os.path.isdir(root):
+                continue
+            for _, _, filenames in os.walk(root):
+                for name in filenames:
+                    if not is_temporary_download_artifact_name(name):
+                        total += 1
     return total
 
 
@@ -731,10 +760,9 @@ def delete_user_account(username):
         dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
         filtered_rules = []
         changed = False
-        prefix = normalized_username + "/"
         for rule in dlna_config.get("media_rules") or []:
-            relative_path = safe_relative_download_path(rule.get("relative_path") or "")
-            if relative_path.startswith(prefix):
+            parsed = parse_managed_relative_path(rule.get("relative_path") or "")
+            if parsed and parsed.get("owner_username") == normalized_username:
                 changed = True
                 continue
             filtered_rules.append(rule)
@@ -750,16 +778,17 @@ def delete_user_account(username):
             APP_CONFIG["dlna"] = normalize_dlna_config(dlna_config)
             write_app_config_locked()
 
-    user_root = os.path.abspath(get_user_root(normalized_username))
-    base_root = os.path.abspath(get_user_storage_base_root())
-    try:
-        if os.path.commonpath([base_root, user_root]) != base_root:
-            raise ValueError("Ścieżka użytkownika wykracza poza katalog bazowy.")
-    except Exception as exc:
-        raise ValueError("Nie można bezpiecznie usunąć katalogu użytkownika.") from exc
+    for storage_id in iter_storage_ids():
+        user_root = os.path.abspath(get_user_root(normalized_username, storage_id=storage_id))
+        base_root = os.path.abspath(get_user_storage_base_root(storage_id))
+        try:
+            if os.path.commonpath([base_root, user_root]) != base_root:
+                raise ValueError("Ścieżka użytkownika wykracza poza katalog bazowy.")
+        except Exception as exc:
+            raise ValueError("Nie można bezpiecznie usunąć katalogu użytkownika.") from exc
 
-    if os.path.isdir(user_root):
-        shutil.rmtree(user_root)
+        if os.path.isdir(user_root):
+            shutil.rmtree(user_root)
 
     delete_radio_station_for_user(normalized_username)
     sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
@@ -800,6 +829,14 @@ def default_dlna_config():
 
 def normalize_storage_backend_kind(value):
     return "network" if str(value or "").strip().lower() == "network" else "local"
+
+
+def normalize_storage_id(value, default="local"):
+    return "network" if str(value or "").strip().lower() == "network" else str(default or "local")
+
+
+def normalize_network_storage_mode(value):
+    return "external_path" if str(value or "").strip().lower() == "external_path" else "managed_smb"
 
 
 def normalize_absolute_storage_path(value, field_label="Katalog danych", fallback=""):
@@ -852,7 +889,28 @@ def normalize_storage_test_state(raw):
         "last_test_ok": bool(raw.get("last_test_ok", False)),
         "last_test_message": str(raw.get("last_test_message") or "").strip(),
         "last_test_at": checked_at,
+        "last_test_signature": str(raw.get("last_test_signature") or "").strip(),
+        "manual_unmounted": bool(raw.get("manual_unmounted", False)),
     }
+
+
+def build_storage_network_signature(storage_config):
+    storage = normalize_storage_config(storage_config or {})
+    network = dict(storage.get("network") or {})
+    signature_payload = {
+        "mode": normalize_network_storage_mode(network.get("mode") or "managed_smb"),
+        "share": str(network.get("share") or "").strip(),
+        "subpath": str(network.get("subpath") or "").strip(),
+        "mount_dir": os.path.abspath(str(network.get("mount_dir") or "").strip() or "."),
+        "username": str(network.get("username") or "").strip(),
+        "domain": str(network.get("domain") or "").strip(),
+        "credentials_file": os.path.abspath(str(network.get("credentials_file") or "").strip() or "."),
+        "cifs_version": str(network.get("cifs_version") or "").strip(),
+        "iocharset": str(network.get("iocharset") or "").strip(),
+    }
+    return hashlib.sha256(
+        json.dumps(signature_payload, ensure_ascii=False, sort_keys=True).encode("utf-8", errors="ignore")
+    ).hexdigest()
 
 
 def get_default_local_storage_root():
@@ -883,10 +941,16 @@ def default_storage_config():
     credentials_file = get_default_network_credentials_file()
     return {
         "active_backend": "network" if str(SMB_SHARE or "").strip() else "local",
+        "default_write_storage_id": "network" if str(SMB_SHARE or "").strip() else "local",
         "local": {
+            "id": "local",
+            "label": "Lokalny storage",
             "root": get_default_local_storage_root(),
         },
         "network": {
+            "id": "network",
+            "label": "Udział sieciowy",
+            "mode": "managed_smb",
             "share": str(SMB_SHARE or "").strip(),
             "subpath": "",
             "mount_dir": get_default_network_mount_dir(),
@@ -899,6 +963,8 @@ def default_storage_config():
             "last_test_ok": False,
             "last_test_message": "",
             "last_test_at": 0.0,
+            "last_test_signature": "",
+            "manual_unmounted": False,
         },
     }
 
@@ -918,15 +984,26 @@ def normalize_storage_config(value):
     if not password_saved and credentials_file and os.path.isfile(credentials_file):
         password_saved = True
 
+    default_write_storage_id = normalize_storage_id(
+        raw.get("default_write_storage_id") or raw.get("active_backend") or base["default_write_storage_id"],
+        default=base["default_write_storage_id"],
+    )
+
     normalized = {
-        "active_backend": normalize_storage_backend_kind(raw.get("active_backend") or base["active_backend"]),
+        "active_backend": default_write_storage_id,
+        "default_write_storage_id": default_write_storage_id,
         "local": {
+            "id": "local",
+            "label": normalize_simple_storage_text(raw_local.get("label") or base["local"].get("label") or "Lokalny storage", max_len=120) or "Lokalny storage",
             "root": normalize_absolute_storage_path(
                 raw_local.get("root") or base["local"]["root"],
                 "Lokalny katalog danych",
             ),
         },
         "network": {
+            "id": "network",
+            "label": normalize_simple_storage_text(raw_network.get("label") or base["network"].get("label") or "Udział sieciowy", max_len=120) or "Udział sieciowy",
+            "mode": normalize_network_storage_mode(raw_network.get("mode") or raw_network.get("management_mode") or base["network"].get("mode") or "managed_smb"),
             "share": normalize_network_share_value(raw_network.get("share") or base["network"]["share"], allow_empty=True),
             "subpath": normalize_network_subpath_value(raw_network.get("subpath") or base["network"]["subpath"]),
             "mount_dir": normalize_absolute_storage_path(
@@ -947,7 +1024,18 @@ def normalize_storage_config(value):
 
 def get_storage_active_root(storage_config=None):
     config = normalize_storage_config(storage_config or default_storage_config())
-    if config["active_backend"] == "network":
+    if normalize_storage_id(config.get("default_write_storage_id") or config.get("active_backend")) == "network":
+        return os.path.abspath(config["network"]["mount_dir"])
+    return os.path.abspath(config["local"]["root"])
+
+
+def get_storage_root_by_id(storage_config=None, storage_id=None):
+    config = normalize_storage_config(storage_config or default_storage_config())
+    normalized_storage_id = normalize_storage_id(
+        storage_id or config.get("default_write_storage_id") or config.get("active_backend"),
+        default="local",
+    )
+    if normalized_storage_id == "network":
         return os.path.abspath(config["network"]["mount_dir"])
     return os.path.abspath(config["local"]["root"])
 
@@ -956,12 +1044,25 @@ def hydrate_storage_paths(config_data):
     payload = copy.deepcopy(config_data or {})
     storage_config = normalize_storage_config(payload.get("storage"))
     active_root = get_storage_active_root(storage_config)
+    local_user_storage_root = os.path.join(os.path.abspath(storage_config["local"]["root"]), "flask_downloader_users")
+    network_user_storage_root = os.path.join(os.path.abspath(storage_config["network"]["mount_dir"]), "flask_downloader_users")
     user_storage_root = os.path.join(active_root, "flask_downloader_users")
     payload["storage"] = storage_config
+    payload["storage_roots"] = {
+        "local": local_user_storage_root,
+        "network": network_user_storage_root,
+    }
     payload["user_storage_root"] = user_storage_root
     payload["download_root"] = os.path.join(user_storage_root, DEFAULT_ADMIN_USERNAME, "video")
     payload["audio_download_root"] = os.path.join(user_storage_root, DEFAULT_ADMIN_USERNAME, "audio")
     return payload
+
+
+def get_storage_user_root_by_id(storage_config=None, storage_id=None):
+    return os.path.join(
+        get_storage_root_by_id(storage_config, storage_id),
+        "flask_downloader_users",
+    )
 
 
 def default_app_config():
@@ -1262,9 +1363,15 @@ def save_app_config(
     network_storage=None,
 ):
     previous_config = get_config_snapshot()
-    previous_user_root = os.path.abspath(previous_config.get("user_storage_root") or USER_STORAGE_ROOT)
-    normalized_days = normalize_retention_days(job_retention_days)
     previous_storage = normalize_storage_config(previous_config.get("storage"))
+    previous_storage_id = normalize_storage_id(
+        previous_storage.get("default_write_storage_id") or previous_storage.get("active_backend"),
+        default="local",
+    )
+    previous_user_root = os.path.abspath(
+        get_storage_user_root_by_id(previous_storage, previous_storage_id)
+    )
+    normalized_days = normalize_retention_days(job_retention_days)
     next_storage_raw = copy.deepcopy(previous_storage)
 
     if local_storage_root is None and download_root:
@@ -1279,6 +1386,10 @@ def save_app_config(
         next_storage_raw["network"].update(network_storage)
 
     next_storage = normalize_storage_config(next_storage_raw)
+    next_storage_id = normalize_storage_id(
+        next_storage.get("default_write_storage_id") or next_storage.get("active_backend"),
+        default="local",
+    )
     next_payload = hydrate_storage_paths({
         "storage": next_storage,
         "user_storage_layout_version": USER_STORAGE_LAYOUT_VERSION,
@@ -1287,7 +1398,12 @@ def save_app_config(
     normalized_user_root = normalize_user_storage_root(next_payload["user_storage_root"])
     next_user_root = os.path.abspath(normalized_user_root)
 
-    if next_storage["active_backend"] == "network" and not os.path.ismount(get_storage_active_root(next_storage)):
+    next_network_mode = normalize_network_storage_mode(next_storage.get("network", {}).get("mode") or "managed_smb")
+    if (
+        next_storage["active_backend"] == "network"
+        and next_network_mode == "managed_smb"
+        and not os.path.ismount(get_storage_active_root(next_storage))
+    ):
         raise ValueError("Aktywny backend jest ustawiony na udział sieciowy, ale udział nie jest teraz zamontowany.")
 
     payload = {
@@ -1300,7 +1416,12 @@ def save_app_config(
     }
 
     path_map = {}
-    if previous_user_root != next_user_root and os.path.isdir(previous_user_root):
+    should_move_storage_tree = (
+        previous_storage_id == next_storage_id == "local"
+        and previous_user_root != next_user_root
+        and os.path.isdir(previous_user_root)
+    )
+    if should_move_storage_tree:
         path_map = move_legacy_storage_tree_contents(previous_user_root, next_user_root)
 
         with DOWNLOAD_LOCK:
@@ -1357,6 +1478,10 @@ def update_storage_network_test_state(ok, message, **extra):
         network["last_test_at"] = time.time()
         if "password_saved" in extra:
             network["password_saved"] = bool(extra.get("password_saved"))
+        if "last_test_signature" in extra:
+            network["last_test_signature"] = str(extra.get("last_test_signature") or "").strip()
+        if "manual_unmounted" in extra:
+            network["manual_unmounted"] = bool(extra.get("manual_unmounted"))
         storage["network"] = normalize_storage_config({"active_backend": storage.get("active_backend"), "local": storage.get("local"), "network": network})["network"]
         APP_CONFIG["storage"] = storage
         APP_CONFIG.update(hydrate_storage_paths(APP_CONFIG))
@@ -1369,6 +1494,7 @@ def build_updated_storage_config(*, active_backend=None, local_root=None, networ
     next_storage = copy.deepcopy(storage)
     if active_backend is not None:
         next_storage["active_backend"] = normalize_storage_backend_kind(active_backend)
+        next_storage["default_write_storage_id"] = normalize_storage_backend_kind(active_backend)
     if local_root is not None:
         next_storage.setdefault("local", {})
         next_storage["local"]["root"] = local_root
@@ -1388,6 +1514,8 @@ def test_network_storage_config(storage_config, *, password="", keep_existing_pa
         True,
         response.get("message") or "Połączenie z udziałem sieciowym działa poprawnie.",
         password_saved=bool(password) or bool(storage_config.get("network", {}).get("password_saved")),
+        last_test_signature=build_storage_network_signature(storage_config),
+        manual_unmounted=bool((storage_config.get("network") or {}).get("manual_unmounted")),
     )
     return response
 
@@ -1403,6 +1531,8 @@ def configure_network_storage_config(storage_config, *, password="", keep_existi
         True,
         response.get("message") or "Konfiguracja udziału sieciowego została zapisana.",
         password_saved=bool(password) or True,
+        last_test_signature=build_storage_network_signature(storage_config),
+        manual_unmounted=not bool(mount_now),
     )
     return response
 
@@ -1414,6 +1544,8 @@ def mount_network_storage_config(storage_config=None):
         True,
         response.get("message") or "Udział sieciowy został zamontowany.",
         password_saved=bool(effective_config.get("network", {}).get("password_saved")),
+        last_test_signature=build_storage_network_signature(effective_config),
+        manual_unmounted=False,
     )
     return response
 
@@ -1425,6 +1557,39 @@ def unmount_network_storage_config(storage_config=None):
         bool(response.get("is_mount") is False),
         response.get("message") or "Udział sieciowy został odmontowany.",
         password_saved=bool(effective_config.get("network", {}).get("password_saved")),
+        last_test_signature=build_storage_network_signature(effective_config),
+        manual_unmounted=True,
+    )
+    return response
+
+
+def remove_network_storage_config(storage_config=None, *, remove_credentials=False):
+    effective_config = normalize_storage_config((storage_config or get_storage_config_snapshot()))
+    response = STORAGE_BACKEND_SERVICE.remove_network_storage(
+        effective_config,
+        remove_credentials=remove_credentials,
+    )
+    next_storage = normalize_storage_config({
+        "active_backend": "local",
+        "default_write_storage_id": "local",
+        "local": effective_config.get("local") or {},
+        "network": default_storage_config().get("network") or {},
+    })
+    payload = hydrate_storage_paths({
+        "storage": next_storage,
+        "user_storage_layout_version": USER_STORAGE_LAYOUT_VERSION,
+        "job_retention_days": get_config_snapshot().get("job_retention_days"),
+    })
+    with APP_CONFIG_LOCK:
+        APP_CONFIG["storage"] = next_storage
+        APP_CONFIG.update(payload)
+        write_app_config_locked()
+    update_storage_network_test_state(
+        False,
+        "Konfiguracja udziału sieciowego została usunięta.",
+        password_saved=False,
+        last_test_signature="",
+        manual_unmounted=False,
     )
     return response
 
@@ -1510,20 +1675,20 @@ STORAGE_SERVICE = ManagedStorageService(
 )
 
 
-def get_user_storage_base_root():
-    return STORAGE_SERVICE.get_user_storage_base_root()
+def get_user_storage_base_root(storage_id=None):
+    return STORAGE_SERVICE.get_user_storage_base_root(storage_id)
 
 
-def get_user_root(username):
-    return STORAGE_SERVICE.get_user_root(username)
+def get_user_root(username, storage_id=None):
+    return STORAGE_SERVICE.get_user_root(username, storage_id)
 
 
-def get_user_storage_root(username, storage_kind="video"):
-    return STORAGE_SERVICE.get_user_storage_root(username, storage_kind)
+def get_user_storage_root(username, storage_kind="video", storage_id=None):
+    return STORAGE_SERVICE.get_user_storage_root(username, storage_kind, storage_id)
 
 
-def build_managed_relative_path(owner_username, storage_kind="video", user_relative_path=""):
-    return STORAGE_SERVICE.build_managed_relative_path(owner_username, storage_kind, user_relative_path)
+def build_managed_relative_path(owner_username, storage_kind="video", user_relative_path="", storage_id=None):
+    return STORAGE_SERVICE.build_managed_relative_path(owner_username, storage_kind, user_relative_path, storage_id=storage_id)
 
 
 def parse_managed_relative_path(value):
@@ -1534,8 +1699,8 @@ def get_managed_path_info(path):
     return STORAGE_SERVICE.get_managed_path_info(path)
 
 
-def get_storage_root(storage_kind="video", owner_username=None):
-    return STORAGE_SERVICE.get_storage_root(storage_kind, owner_username)
+def get_storage_root(storage_kind="video", owner_username=None, storage_id=None):
+    return STORAGE_SERVICE.get_storage_root(storage_kind, owner_username, storage_id=storage_id)
 
 
 def get_managed_storage_roots():
@@ -1574,16 +1739,66 @@ def get_daily_download_dir(ts=None, media_kind="video", owner_username=None):
     return STORAGE_SERVICE.get_daily_download_dir(ts, media_kind=media_kind, owner_username=owner_username)
 
 
-def get_relative_download_path(path, media_kind=None, owner_username=None):
-    return STORAGE_SERVICE.get_relative_download_path(path, media_kind=media_kind, owner_username=owner_username)
+def get_relative_download_path(path, media_kind=None, owner_username=None, storage_id=None):
+    return STORAGE_SERVICE.get_relative_download_path(path, media_kind=media_kind, owner_username=owner_username, storage_id=storage_id)
 
 
 def safe_relative_download_path(value):
     return STORAGE_SERVICE.safe_relative_download_path(value)
 
 
-def resolve_download_path(relative_path, media_kind="video", owner_username=None):
-    return STORAGE_SERVICE.resolve_download_path(relative_path, media_kind=media_kind, owner_username=owner_username)
+def resolve_download_path(relative_path, media_kind="video", owner_username=None, storage_id=None):
+    return STORAGE_SERVICE.resolve_download_path(relative_path, media_kind=media_kind, owner_username=owner_username, storage_id=storage_id)
+
+
+def canonicalize_managed_relative_path(relative_path, *, owner_username=None, storage_kind="video"):
+    safe_path = safe_relative_download_path(relative_path)
+    if not safe_path:
+        return ""
+
+    parsed = parse_managed_relative_path(safe_path)
+    normalized_owner = normalize_username(
+        (parsed or {}).get("owner_username") or owner_username or DEFAULT_ADMIN_USERNAME
+    )
+    normalized_kind = normalize_storage_kind(
+        (parsed or {}).get("storage_kind") or storage_kind or "video"
+    )
+    user_relative_path = safe_relative_download_path(
+        (parsed or {}).get("user_relative_path") or safe_path
+    )
+    if not user_relative_path:
+        return ""
+
+    if parsed and not parsed.get("is_legacy"):
+        return build_managed_relative_path(
+            normalized_owner,
+            normalized_kind,
+            user_relative_path,
+            storage_id=parsed.get("storage_id") or "local",
+        )
+
+    matched_storage_id = ""
+    for candidate_storage_id in ("local", "network"):
+        candidate_path = STORAGE_SERVICE.resolve_download_path(
+            build_managed_relative_path(
+                normalized_owner,
+                normalized_kind,
+                user_relative_path,
+                storage_id=candidate_storage_id,
+            ),
+            normalized_kind,
+            owner_username=normalized_owner,
+        )
+        if candidate_path and os.path.isfile(candidate_path):
+            matched_storage_id = candidate_storage_id
+            break
+
+    return build_managed_relative_path(
+        normalized_owner,
+        normalized_kind,
+        user_relative_path,
+        storage_id=matched_storage_id or STORAGE_SERVICE.get_default_write_storage_id(),
+    )
 
 
 def cleanup_empty_download_dirs(path):
@@ -1613,6 +1828,12 @@ def normalize_saved_job_record(raw):
     except Exception:
         owner_username = DEFAULT_ADMIN_USERNAME
 
+    normalized_relative_path = canonicalize_managed_relative_path(
+        raw.get("relative_path") or "",
+        owner_username=owner_username,
+        storage_kind=normalize_storage_kind(raw.get("storage_kind") or "video"),
+    )
+
     job = {
         "job_id": str(raw.get("job_id") or default_job_id),
         "owner_username": owner_username,
@@ -1626,7 +1847,7 @@ def normalize_saved_job_record(raw):
         "filename": str(raw.get("filename") or ""),
         "planned_filename": str(raw.get("planned_filename") or raw.get("filename") or ""),
         "filepath": str(raw.get("filepath") or ""),
-        "relative_path": safe_relative_download_path(raw.get("relative_path") or ""),
+        "relative_path": normalized_relative_path,
         "downloaded_bytes": 0,
         "total_bytes": None,
         "progress_percent": None,
@@ -1683,7 +1904,11 @@ def serialize_job_for_storage(job):
         "filename": str(job.get("filename") or ""),
         "planned_filename": str(job.get("planned_filename") or ""),
         "filepath": str(job.get("filepath") or ""),
-        "relative_path": safe_relative_download_path(job.get("relative_path") or ""),
+        "relative_path": canonicalize_managed_relative_path(
+            job.get("relative_path") or "",
+            owner_username=job.get("owner_username") or DEFAULT_ADMIN_USERNAME,
+            storage_kind=job.get("storage_kind") or "video",
+        ),
         "downloaded_bytes": int(job.get("downloaded_bytes") or 0),
         "total_bytes": int(job.get("total_bytes")) if job.get("total_bytes") not in (None, "", False) else None,
         "progress_percent": float(job.get("progress_percent")) if job.get("progress_percent") not in (None, "", False) else None,
@@ -1799,15 +2024,13 @@ def migrate_legacy_job_payloads(raw_jobs, path_map, legacy_roots):
                 changed = True
 
         relative_path = safe_relative_download_path(job.get("relative_path") or "")
-        parsed_relative = parse_managed_relative_path(relative_path)
-        if parsed_relative is None and relative_path:
-            job["relative_path"] = build_managed_relative_path(owner_username, storage_kind, relative_path)
-            changed = True
-        elif parsed_relative and (
-            parsed_relative["owner_username"] != owner_username
-            or parsed_relative["storage_kind"] != storage_kind
-        ):
-            job["relative_path"] = build_managed_relative_path(owner_username, storage_kind, parsed_relative["user_relative_path"])
+        canonical_relative_path = canonicalize_managed_relative_path(
+            relative_path,
+            owner_username=owner_username,
+            storage_kind=storage_kind,
+        )
+        if canonical_relative_path and canonical_relative_path != relative_path:
+            job["relative_path"] = canonical_relative_path
             changed = True
         elif job.get("filepath"):
             computed_relative_path = get_relative_download_path(job.get("filepath"), storage_kind, owner_username)
@@ -1849,9 +2072,13 @@ def migrate_legacy_dlna_rules(config):
         rule = dict(raw_rule)
         storage_kind = normalize_storage_kind(rule.get("storage_kind") or "video")
         relative_path = safe_relative_download_path(rule.get("relative_path") or "")
-        parsed = parse_managed_relative_path(relative_path)
-        if relative_path and parsed is None:
-            rule["relative_path"] = build_managed_relative_path(DEFAULT_ADMIN_USERNAME, storage_kind, relative_path)
+        canonical_relative_path = canonicalize_managed_relative_path(
+            relative_path,
+            owner_username=DEFAULT_ADMIN_USERNAME,
+            storage_kind=storage_kind,
+        )
+        if canonical_relative_path and canonical_relative_path != relative_path:
+            rule["relative_path"] = canonical_relative_path
             changed = True
         media_rules.append(rule)
 
@@ -2948,6 +3175,20 @@ def ensure_share_ready(auto_remount=True):
         return False, message
 
     network_config = dict(storage_config.get("network") or {})
+    network_mode = normalize_network_storage_mode(network_config.get("mode") or "managed_smb")
+    if network_mode == "external_path":
+        if not os.path.isdir(active_root):
+            message = "Zewnętrzna ścieżka storage jest niedostępna: %s" % active_root
+            set_mount_status(False, message)
+            return False, message
+        ok, message = check_download_dir_ready("video")
+        if ok:
+            ready_message = "Zewnętrzna ścieżka storage gotowa: %s" % active_root
+            set_mount_status(True, ready_message)
+            return True, ready_message
+        set_mount_status(False, message)
+        return False, message
+
     share_path = str(network_config.get("share") or "").strip()
     if not share_path:
         message = "Aktywny backend to udział sieciowy, ale nie skonfigurowano adresu udziału."
@@ -2964,7 +3205,8 @@ def ensure_share_ready(auto_remount=True):
         return False, message
 
     now = time.time()
-    if auto_remount and (now - LAST_MOUNT_ATTEMPT_TS >= MOUNT_RETRY_COOLDOWN):
+    manual_unmounted = bool(network_config.get("manual_unmounted"))
+    if auto_remount and not manual_unmounted and (now - LAST_MOUNT_ATTEMPT_TS >= MOUNT_RETRY_COOLDOWN):
         LAST_MOUNT_ATTEMPT_TS = now
         try:
             response = STORAGE_BACKEND_SERVICE.mount_network_storage(storage_config)
@@ -2972,6 +3214,8 @@ def ensure_share_ready(auto_remount=True):
                 True,
                 str(response.get("message") or "Udział sieciowy został zamontowany.").strip(),
                 password_saved=storage_config.get("network", {}).get("password_saved"),
+                last_test_signature=build_storage_network_signature(storage_config),
+                manual_unmounted=False,
             )
         except Exception as exc:
             detail = str(exc or "").strip() or "Nie udało się zamontować udziału sieciowego."
@@ -2979,6 +3223,8 @@ def ensure_share_ready(auto_remount=True):
                 False,
                 detail,
                 password_saved=storage_config.get("network", {}).get("password_saved"),
+                last_test_signature=build_storage_network_signature(storage_config),
+                manual_unmounted=False,
             )
             message = "Udział sieciowy offline. Automatyczne ponowne montowanie nie powiodło się.\n%s" % detail
             set_mount_status(False, message)
@@ -2992,7 +3238,10 @@ def ensure_share_ready(auto_remount=True):
         set_mount_status(False, message)
         return False, message
 
-    message = "Udział sieciowy offline. Punkt montowania nie jest aktywny: %s" % active_root
+    if manual_unmounted:
+        message = "Udział sieciowy jest ręcznie odmontowany. Zamontuj go ponownie z panelu, gdy będzie potrzebny."
+    else:
+        message = "Udział sieciowy offline. Punkt montowania nie jest aktywny: %s" % active_root
     set_mount_status(False, message)
     return False, message
 
@@ -3006,7 +3255,11 @@ def get_mount_info(auto_remount=True, viewer_username=None, is_admin=None):
     username = str(viewer_username or get_current_username() or "").strip()
     video_dir = get_daily_download_dir(owner_username=username or DEFAULT_ADMIN_USERNAME)
     audio_dir = get_daily_download_dir(media_kind="audio", owner_username=username or DEFAULT_ADMIN_USERNAME)
-    runtime_access = read_storage_runtime_access_state(active_root, require_mount=(active_backend == "network"))
+    active_network_mode = normalize_network_storage_mode(storage_config.get("network", {}).get("mode") or "managed_smb")
+    runtime_access = read_storage_runtime_access_state(
+        active_root,
+        require_mount=(active_backend == "network" and active_network_mode == "managed_smb"),
+    )
     public_message = message if admin_view else (
         "Przestrzeń użytkowników jest gotowa."
         if online else
@@ -3031,12 +3284,20 @@ def get_mount_info(auto_remount=True, viewer_username=None, is_admin=None):
         "is_mount": bool(runtime_access.get("is_mount")),
     }
     if admin_view:
+        network_config = dict(storage_config.get("network") or {})
+        network_mode = normalize_network_storage_mode(network_config.get("mode") or "managed_smb")
+        network_configured = bool(network_config.get("mount_dir")) if network_mode == "external_path" else bool(
+            network_config.get("share")
+            and network_config.get("username")
+            and network_config.get("credentials_file")
+        )
         payload.update({
             "active_root": active_root,
             "local_root": storage_config["local"]["root"],
             "network_share": storage_config["network"]["share"],
             "network_subpath": storage_config["network"]["subpath"],
             "network_mount_dir": storage_config["network"]["mount_dir"],
+            "network_mode": network_mode,
             "network_username": storage_config["network"]["username"],
             "network_domain": storage_config["network"]["domain"],
             "network_credentials_file": storage_config["network"]["credentials_file"],
@@ -3047,11 +3308,9 @@ def get_mount_info(auto_remount=True, viewer_username=None, is_admin=None):
             "network_last_test_message": storage_config["network"]["last_test_message"],
             "network_last_test_at": storage_config["network"]["last_test_at"],
             "network_last_test_at_text": format_ts(storage_config["network"]["last_test_at"]),
-            "network_configured": bool(
-                storage_config["network"]["share"]
-                and storage_config["network"]["username"]
-                and storage_config["network"]["credentials_file"]
-            ),
+            "network_last_test_signature": storage_config["network"].get("last_test_signature") or "",
+            "network_manual_unmounted": bool(storage_config["network"].get("manual_unmounted")),
+            "network_configured": network_configured,
             "runtime_access_message": runtime_access.get("message") or "",
         })
     return payload
@@ -3812,6 +4071,7 @@ RADIO_STORE = radios_store_load_radio_store(
     RADIOS_FILE,
     normalize_username=normalize_username,
     parse_managed_relative_path=parse_managed_relative_path,
+    canonicalize_relative_path=canonicalize_managed_relative_path,
 )
 
 CALENDAR_SERVICE = CalendarService(
@@ -4129,6 +4389,7 @@ def restore_config_bundle(bundle_bytes):
             temp_path,
             normalize_username=normalize_username,
             parse_managed_relative_path=parse_managed_relative_path,
+            canonicalize_relative_path=canonicalize_managed_relative_path,
         ),
     )
 
