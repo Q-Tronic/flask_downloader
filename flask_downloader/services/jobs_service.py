@@ -118,6 +118,7 @@ class DownloadJobsService:
             "owner_username": owner_username,
             "page_url": page_url,
             "format_id": format_id,
+            "selection_signature": dict(kwargs.get("selection_signature") or {}),
             "storage_kind": self._normalize_storage_kind(kwargs.get("storage_kind") or "video"),
             "status": "queued",
             "status_label": "Przygotowanie live" if bool(kwargs.get("is_live_capture")) else "W kolejce",
@@ -139,6 +140,7 @@ class DownloadJobsService:
             "auto_dlna_collection_id": str(kwargs.get("auto_dlna_collection_id") or "").strip(),
             "is_live_capture": bool(kwargs.get("is_live_capture")),
             "live_status": str(kwargs.get("live_status") or ""),
+            "processing_stage": "",
         }
 
         with self._jobs_lock:
@@ -180,6 +182,7 @@ class DownloadJobsService:
                 job["finished_at"] = time.time()
                 job["filepath"] = ""
                 job["relative_path"] = ""
+                job["processing_stage"] = ""
                 self._cancel_events_store.pop(job_id, None)
                 self._stop_requests_store.pop(job_id, None)
                 self._write_download_jobs_locked()
@@ -236,6 +239,7 @@ class DownloadJobsService:
             job["status_label"] = "Przygotowanie live" if bool(job.get("is_live_capture")) else "W kolejce"
             job["error"] = ""
             job["finished_at"] = None
+            job["processing_stage"] = ""
             self._write_download_jobs_locked()
 
         self._start_download_thread(job_id)
@@ -349,7 +353,7 @@ class DownloadJobsService:
 
             job["can_delete_from_list"] = job.get("status") in ("completed", "failed", "canceled")
             job["can_cancel"] = job.get("status") in ("queued", "downloading", "paused")
-            job["can_pause"] = job.get("status") in ("queued", "downloading")
+            job["can_pause"] = job.get("status") in ("queued", "downloading") and not str(job.get("processing_stage") or "").strip()
             job["can_resume"] = job.get("status") == "paused"
 
         return jobs

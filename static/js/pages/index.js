@@ -227,21 +227,20 @@ function collectSourceFormats() {
     const seen = new Set();
     return sourceCatalog.filter(item => {
         const mediaKind = String(item.media_kind || "video").toLowerCase();
-        const ext = String(item.ext || "unknown").toLowerCase();
-        const key = mediaKind + ":" + ext;
+        const key = mediaKind;
         if (seen.has(key)) {
             return false;
         }
         seen.add(key);
         return true;
     }).map(item => ({
-        value: String(item.media_kind || "video").toLowerCase() + ":" + String(item.ext || "unknown").toLowerCase(),
-        label: (String(item.media_kind || "video").toLowerCase() === "audio" ? "Audio" : "Wideo") + " • " + String(item.ext || "unknown").toUpperCase()
+        value: String(item.media_kind || "video").toLowerCase(),
+        label: String(item.media_kind || "video").toLowerCase() === "audio" ? "Audio" : "Wideo"
     }));
 }
 
 function getSourceFormatKey(item) {
-    return String(item.media_kind || "video").toLowerCase() + ":" + String(item.ext || "unknown").toLowerCase();
+    return String(item.media_kind || "video").toLowerCase();
 }
 
 function getSourceBitrate(item) {
@@ -343,10 +342,6 @@ function chooseBestSource(items) {
 
 function buildSizeOptionLabel(item, duplicateCountMap) {
     const baseLabel = item.label || item.format_id || "Źródło";
-    const duplicates = duplicateCountMap[baseLabel] || 0;
-    if (duplicates > 1 && item.protocol) {
-        return baseLabel + " • " + item.protocol;
-    }
     return baseLabel;
 }
 
@@ -364,26 +359,56 @@ function renderSizeOptions(selectedFormat, preferredFormatId) {
     const items = sourceCatalog.filter(item => {
         return getSourceFormatKey(item) === selectedFormat;
     });
-    const duplicateCountMap = {};
-
-    items.forEach(item => {
-        const key = item.label || item.format_id || "Źródło";
-        duplicateCountMap[key] = (duplicateCountMap[key] || 0) + 1;
-    });
 
     if (!items.length) {
         select.innerHTML = "";
         return null;
     }
 
-    const bestItem = chooseBestSource(items) || items[items.length - 1];
-    const activeFormatId = preferredFormatId && items.some(item => String(item.format_id) === String(preferredFormatId))
-        ? String(preferredFormatId)
-        : String((bestItem && bestItem.format_id) || items[items.length - 1].format_id);
+    const groups = [];
+    const groupMap = new Map();
 
-    select.innerHTML = items.map(item => {
-        const isSelected = String(item.format_id) === activeFormatId ? " selected" : "";
-        return '<option value="' + escapeSourceHtml(item.format_id) + '"' + isSelected + '>' + escapeSourceHtml(buildSizeOptionLabel(item, duplicateCountMap)) + '</option>';
+    items.forEach(function(item) {
+        const mediaKind = String(item.media_kind || "video").toLowerCase();
+        const label = mediaKind === "audio"
+            ? "Najlepsze audio"
+            : String(item.label || item.format_id || "Źródło");
+        const key = mediaKind === "audio" ? "audio-best" : label;
+        if (!groupMap.has(key)) {
+            const group = {key, label, items: []};
+            groupMap.set(key, group);
+            groups.push(group);
+        }
+        groupMap.get(key).items.push(item);
+    });
+
+    const options = groups.map(function(group) {
+        return {
+            key: group.key,
+            label: group.label,
+            items: group.items,
+            representative: chooseBestSource(group.items) || group.items[group.items.length - 1],
+        };
+    }).filter(function(option) {
+        return Boolean(option.representative);
+    });
+
+    const matchingPreferred = preferredFormatId
+        ? options.find(function(option) {
+            return option.items.some(function(item) {
+                return String(item.format_id) === String(preferredFormatId);
+            });
+        })
+        : null;
+    const fallbackOption = options[0];
+    const activeOption = matchingPreferred || fallbackOption;
+    const activeFormatId = String((activeOption && activeOption.representative && activeOption.representative.format_id) || "");
+
+    select.innerHTML = options.map(function(option) {
+        const representative = option.representative;
+        const optionValue = String((representative && representative.format_id) || "");
+        const isSelected = optionValue === activeFormatId ? " selected" : "";
+        return '<option value="' + escapeSourceHtml(optionValue) + '"' + isSelected + '>' + escapeSourceHtml(option.label) + '</option>';
     }).join("");
 
     return activeFormatId;
@@ -482,10 +507,10 @@ function buildSourceContextSections(item) {
     if (String(item.media_kind || "video").toLowerCase() === "video" && !item.has_audio) {
         sections.push({
             tone: "info",
-            title: "Wybrane źródło ma osobne audio",
+            title: "Serwer automatycznie dobierze dźwięk",
             lines: [
-                "Pobranie do przeglądarki lub proxy może nie zawierać dźwięku.",
-                "Przycisk Pobierz na serwer połączy wideo z audio przez yt-dlp.",
+                "Podgląd proxy lub pobranie do przeglądarki może nie zawierać dźwięku.",
+                "Przycisk Pobierz na serwer automatycznie dobierze audio do tej jakości i zapisze gotowy plik z dźwiękiem.",
             ],
         });
     }

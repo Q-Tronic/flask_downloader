@@ -1839,6 +1839,7 @@ def normalize_saved_job_record(raw):
         "owner_username": owner_username,
         "page_url": str(raw.get("page_url") or ""),
         "format_id": str(raw.get("format_id") or ""),
+        "selection_signature": dict(raw.get("selection_signature") or {}),
         "storage_kind": normalize_storage_kind(raw.get("storage_kind") or "video"),
         "status": str(raw.get("status") or "failed"),
         "status_label": str(raw.get("status_label") or "Nieznany"),
@@ -1860,6 +1861,7 @@ def normalize_saved_job_record(raw):
         "auto_dlna_collection_id": str(raw.get("auto_dlna_collection_id") or "").strip(),
         "is_live_capture": bool(raw.get("is_live_capture")),
         "live_status": str(raw.get("live_status") or ""),
+        "processing_stage": str(raw.get("processing_stage") or "").strip(),
     }
 
     if job["status"] not in allowed_statuses:
@@ -1896,6 +1898,7 @@ def serialize_job_for_storage(job):
         "owner_username": normalize_username(job.get("owner_username") or DEFAULT_ADMIN_USERNAME),
         "page_url": str(job.get("page_url") or ""),
         "format_id": str(job.get("format_id") or ""),
+        "selection_signature": dict(job.get("selection_signature") or {}),
         "storage_kind": normalize_storage_kind(job.get("storage_kind") or "video"),
         "status": str(job.get("status") or ""),
         "status_label": str(job.get("status_label") or ""),
@@ -1921,6 +1924,7 @@ def serialize_job_for_storage(job):
         "auto_dlna_collection_id": str(job.get("auto_dlna_collection_id") or "").strip(),
         "is_live_capture": bool(job.get("is_live_capture")),
         "live_status": str(job.get("live_status") or ""),
+        "processing_stage": str(job.get("processing_stage") or "").strip(),
     }
 
 
@@ -3541,6 +3545,11 @@ def download_worker(job_id):
         result = extract_video_data(page_url, force_refresh=True)
         fmt = find_format(result, format_id)
         if not fmt:
+            fmt = SOURCE_MEDIA_SERVICE.find_format_by_signature(
+                result,
+                job.get("selection_signature") or {},
+            )
+        if not fmt:
             raise RuntimeError("Nie znaleziono wskazanego formatu.")
 
         is_live_capture = bool(
@@ -3681,6 +3690,7 @@ def download_worker(job_id):
                     downloaded_bytes=downloaded,
                     total_bytes=total_bytes,
                     progress_percent=100.0 if progress_percent is None else progress_percent,
+                    processing_stage="",
                     relative_path=relative_path or get_relative_download_path(target_path, storage_kind, owner_username),
                 )
                 return
@@ -3691,8 +3701,85 @@ def download_worker(job_id):
                     downloaded_bytes=downloaded,
                     total_bytes=total_bytes,
                     progress_percent=progress_percent if progress_percent is not None else 0.0,
+                    processing_stage="",
                     relative_path=relative_path or get_relative_download_path(target_path, storage_kind, owner_username),
                 )
+
+        def resolve_postprocessor_stage(postprocessor_name):
+            normalized_name = str(postprocessor_name or "").strip().lower()
+            if "extractaudio" in normalized_name:
+                return "audio-conversion", "Konwersja audio"
+            if "merger" in normalized_name:
+                return (
+                    "live-finalization",
+                    "Finalizacja nagrania live" if is_live_capture else "Scalanie pliku",
+                )
+            if "movefilesafterdownload" in normalized_name or normalized_name.startswith("movefiles"):
+                return "move-output", "Przenoszenie gotowego pliku"
+            if (
+                "fixup" in normalized_name
+                or "metadata" in normalized_name
+                or "embed" in normalized_name
+                or "subtitles" in normalized_name
+            ):
+                return (
+                    "finalizing",
+                    "Finalizacja nagrania live" if is_live_capture else "Finalizacja pliku",
+                )
+            return (
+                "processing",
+                "Finalizacja nagrania live" if is_live_capture else "Przetwarzanie pliku",
+            )
+
+        def estimate_postprocess_input_bytes(info_dict):
+            fallback_size = max(int(downloaded or 0), int(total_bytes or 0))
+            candidate_paths = set()
+
+            for path in (info_dict.get("filepath"), info_dict.get("__real_download")):
+                if path and path != "-":
+                    candidate_paths.add(os.path.abspath(path))
+
+            for item in info_dict.get("requested_downloads") or []:
+                if not isinstance(item, dict):
+                    continue
+                for path in (item.get("filepath"), item.get("tmpfilename")):
+                    if path and path != "-":
+                        candidate_paths.add(os.path.abspath(path))
+
+            total_on_disk = 0
+            found_any = False
+            for path in candidate_paths:
+                try:
+                    if os.path.isfile(path):
+                        total_on_disk += int(os.path.getsize(path))
+                        found_any = True
+                except Exception:
+                    continue
+
+            if found_any:
+                merged_size = max(total_on_disk, fallback_size)
+                return merged_size, merged_size
+            return fallback_size, fallback_size or None
+
+        def postprocessor_hook(status):
+            hook_status = str(status.get("status") or "").strip().lower()
+            if hook_status not in {"started", "processing", "finished"}:
+                return
+
+            info_dict = status.get("info_dict") or {}
+            stage_key, stage_label = resolve_postprocessor_stage(status.get("postprocessor"))
+            processed_downloaded, processed_total = estimate_postprocess_input_bytes(info_dict)
+
+            update_job(
+                job_id,
+                status="downloading",
+                status_label=stage_label,
+                downloaded_bytes=processed_downloaded,
+                total_bytes=processed_total,
+                progress_percent=None,
+                processing_stage=stage_key,
+                relative_path=relative_path or get_relative_download_path(target_path, storage_kind, owner_username),
+            )
 
         selected_download_format = str(
             fmt.get("live_download_format") if is_live_capture else fmt.get("download_format") or format_id
@@ -3711,6 +3798,7 @@ def download_worker(job_id):
             "overwrites": False,
             "continuedl": True,
             "progress_hooks": [progress_hook],
+            "postprocessor_hooks": [postprocessor_hook],
         })
 
         if is_live_capture:
@@ -3800,6 +3888,7 @@ def download_worker(job_id):
             filepath=target_path,
             filename=os.path.basename(target_path),
             relative_path=relative_path,
+            processing_stage="",
             persist=True,
         )
         auto_dlna_collection_id = str(job.get("auto_dlna_collection_id") or "").strip()
@@ -3830,6 +3919,7 @@ def download_worker(job_id):
                 filepath=target_path,
                 filename=filename,
                 relative_path=relative_path or get_relative_download_path(target_path, storage_kind, owner_username),
+                processing_stage="",
                 persist=True,
             )
         else:
@@ -3846,6 +3936,7 @@ def download_worker(job_id):
                 filepath="",
                 filename=filename,
                 relative_path="",
+                processing_stage="",
                 persist=True,
             )
 
@@ -3860,6 +3951,7 @@ def download_worker(job_id):
             finished_at=time.time(),
             filepath="",
             relative_path="",
+            processing_stage="",
             persist=True,
         )
 

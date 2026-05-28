@@ -22,6 +22,9 @@ function formatBytes(bytes) {
 }
 
 function formatPercent(job) {
+    if (job && job.processing_stage) {
+        return "przetwarzanie";
+    }
     if (job.progress_percent === null || job.progress_percent === undefined) {
         if (job && job.status === "paused") {
             return "wstrzymane";
@@ -29,6 +32,22 @@ function formatPercent(job) {
         return "brak danych";
     }
     return job.progress_percent.toFixed(1) + "%";
+}
+
+function formatProgressLine(job) {
+    if (job && job.processing_stage) {
+        const stageLabel = String(job.status_label || "Przetwarzanie pliku").toLowerCase();
+        const sizeBits = [];
+        if (job.downloaded_bytes !== null && job.downloaded_bytes !== undefined) {
+            sizeBits.push(formatBytes(job.downloaded_bytes));
+        }
+        if (job.total_bytes !== null && job.total_bytes !== undefined && job.total_bytes !== job.downloaded_bytes) {
+            sizeBits.push(formatBytes(job.total_bytes));
+        }
+        const sizeText = sizeBits.length ? " (" + sizeBits.join(" / ") + ")" : "";
+        return "Pobieranie zakończone - trwa " + stageLabel + sizeText;
+    }
+    return formatPercent(job) + " - " + formatBytes(job.downloaded_bytes) + " / " + formatBytes(job.total_bytes);
 }
 
 let liveSubscription = null;
@@ -221,16 +240,21 @@ function renderJobs(jobs, adminLoggedIn) {
     }
 
     container.innerHTML = filteredJobs.map(job => {
+        const isProcessing = !!String(job.processing_stage || "").trim();
         const status = escapeHtml(job.status);
+        const statusClass = isProcessing ? "downloading processing" : status;
         const liveBadge = job.is_live_capture
             ? '<span class="badge" style="margin-left:8px;">LIVE</span>'
             : "";
         const pausedBadge = String(job.status || "") === "paused"
             ? '<span class="badge" style="margin-left:8px;">PAUSED</span>'
             : "";
-        const width = job.progress_percent === null || job.progress_percent === undefined
+        const width = isProcessing
+            ? 38
+            : job.progress_percent === null || job.progress_percent === undefined
             ? (job.status === "completed" ? 100 : 0)
             : Math.max(0, Math.min(100, job.progress_percent));
+        const progressWrapClass = isProcessing ? "progress is-indeterminate" : "progress";
 
         const errorHtml = job.error
             ? '<div class="row"><div class="label">Szczegóły</div><div class="value">' + escapeHtml(job.error) + '</div></div>'
@@ -267,7 +291,7 @@ function renderJobs(jobs, adminLoggedIn) {
             <div class="job ${status}">
                 <div class="row">
                     <div class="label">Status</div>
-                    <div class="value"><span class="status ${status}">${escapeHtml(job.status_label)}</span>${liveBadge}${pausedBadge}</div>
+                    <div class="value"><span class="status ${statusClass}">${escapeHtml(job.status_label)}</span>${liveBadge}${pausedBadge}</div>
                 </div>
                 <div class="row">
                     <div class="label">Tytuł</div>
@@ -280,9 +304,9 @@ function renderJobs(jobs, adminLoggedIn) {
                 <div class="row">
                     <div class="label">Postęp</div>
                     <div class="value">
-                        ${formatPercent(job)} - ${formatBytes(job.downloaded_bytes)} / ${formatBytes(job.total_bytes)}
-                        <div class="progress">
-                            <div class="progress-bar ${status}" style="width:${width}%;"></div>
+                        ${escapeHtml(formatProgressLine(job))}
+                        <div class="${progressWrapClass}">
+                            <div class="progress-bar ${statusClass}" style="width:${width}%;"></div>
                         </div>
                     </div>
                 </div>

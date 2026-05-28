@@ -93,6 +93,106 @@ class SourceMediaService:
         return "%s/%s/best" % (best_video, best_muxed)
 
     @staticmethod
+    def _merge_format_candidates(target_item, incoming_item):
+        existing = list(target_item.get("_format_candidates") or [])
+        seen = {
+            (
+                str(candidate.get("format_id") or "").strip(),
+                bool(candidate.get("has_audio")),
+            )
+            for candidate in existing
+        }
+
+        for candidate in incoming_item.get("_format_candidates") or []:
+            format_id = str(candidate.get("format_id") or "").strip()
+            has_audio = bool(candidate.get("has_audio"))
+            if not format_id:
+                continue
+            key = (format_id, has_audio)
+            if key in seen:
+                continue
+            seen.add(key)
+            existing.append({
+                "format_id": format_id,
+                "has_audio": has_audio,
+            })
+
+        target_item["_format_candidates"] = existing
+
+    @staticmethod
+    def _build_download_selector(item):
+        candidates = []
+        seen_ids = set()
+
+        for candidate in item.get("_format_candidates") or []:
+            format_id = str(candidate.get("format_id") or "").strip()
+            if not format_id or format_id in seen_ids:
+                continue
+            seen_ids.add(format_id)
+            candidates.append({
+                "format_id": format_id,
+                "has_audio": bool(candidate.get("has_audio")),
+            })
+
+        if not candidates:
+            fallback_format_id = str(item.get("format_id") or "").strip()
+            if fallback_format_id:
+                candidates.append({
+                    "format_id": fallback_format_id,
+                    "has_audio": bool(item.get("has_audio")),
+                })
+
+        if item.get("media_kind") != "video":
+            return str(item.get("format_id") or "best")
+
+        preferred_id = str(item.get("format_id") or "").strip()
+        preferred_has_audio = bool(item.get("has_audio"))
+        audio_candidates = [candidate for candidate in candidates if candidate["has_audio"]]
+        video_only_candidates = [candidate for candidate in candidates if not candidate["has_audio"]]
+
+        selectors = []
+        if preferred_id:
+            if preferred_has_audio:
+                selectors.append(preferred_id)
+            else:
+                selectors.append("%s+bestaudio/best" % preferred_id)
+
+        selectors.extend(
+            candidate["format_id"]
+            for candidate in audio_candidates
+            if candidate["format_id"] != preferred_id
+        )
+        selectors.extend(
+            "%s+bestaudio/best" % candidate["format_id"]
+            for candidate in video_only_candidates
+            if candidate["format_id"] != preferred_id
+        )
+        if audio_candidates:
+            selectors.append("best")
+        else:
+            selectors.append("bestvideo+bestaudio/best")
+
+        deduped = []
+        seen = set()
+        for selector in selectors:
+            if not selector or selector in seen:
+                continue
+            seen.add(selector)
+            deduped.append(selector)
+
+        return "/".join(deduped) or "best"
+
+    @staticmethod
+    def build_selection_signature(item):
+        return {
+            "media_kind": str((item or {}).get("media_kind") or "").strip().lower(),
+            "label": str((item or {}).get("label") or "").strip(),
+            "height": int((item or {}).get("height") or 0),
+            "width": int((item or {}).get("width") or 0),
+            "ext": str((item or {}).get("ext") or "").strip().lower(),
+        }
+
+    @staticmethod
     def get_download_intermediate_ext(item):
         source_ext = (str((item or {}).get("ext") or "").strip().lower() or "bin")
         return source_ext
@@ -102,6 +202,31 @@ class SourceMediaService:
         base = os.path.splitext(str(filename or ""))[0]
         normalized_ext = str(ext or "").strip().lstrip(".") or "bin"
         return "%s.%s" % (base, normalized_ext)
+
+    @staticmethod
+    def make_quality_label(fmt):
+        try:
+            height = int(fmt.get("height") or 0)
+        except Exception:
+            height = 0
+        try:
+            width = int(fmt.get("width") or 0)
+        except Exception:
+            width = 0
+
+        if height >= 4320 or width >= 7680:
+            return "8K"
+        if height >= 2160 or width >= 3840:
+            return "4K"
+        if height >= 1440 or width >= 2560:
+            return "2K"
+        if height > 0:
+            return "%sp" % height
+
+        note = str(fmt.get("format_note") or fmt.get("resolution") or "").strip()
+        if note:
+            return note
+        return str(fmt.get("format_id") or "Źródło")
 
     @staticmethod
     def _normalize_title_text(value):
@@ -169,45 +294,16 @@ class SourceMediaService:
 
         vcodec = fmt.get("vcodec")
         acodec = fmt.get("acodec")
-        height = fmt.get("height")
-        width = fmt.get("width")
         ext = fmt.get("ext")
-        note = fmt.get("format_note") or fmt.get("resolution")
         tbr = fmt.get("tbr")
         abr = fmt.get("abr")
 
         if vcodec == "none" and acodec != "none":
-            parts.append("Audio")
+            return "Audio"
 
-            if abr:
-                try:
-                    parts.append("%dk" % int(float(abr)))
-                except Exception:
-                    pass
-            elif tbr:
-                try:
-                    parts.append("%dk" % int(float(tbr)))
-                except Exception:
-                    pass
-
-            if ext:
-                parts.append(str(ext))
-
-            return " | ".join(parts)
-
-        if height:
-            parts.append("%sp" % height)
-        elif note:
-            parts.append(str(note))
-
-        if width and height:
-            parts.append("%sx%s" % (width, height))
-
-        if tbr:
-            try:
-                parts.append("%dk" % int(float(tbr)))
-            except Exception:
-                pass
+        quality_label = SourceMediaService.make_quality_label(fmt)
+        if quality_label:
+            parts.append(str(quality_label))
 
         if not parts and ext:
             parts.append(str(ext))
@@ -306,6 +402,11 @@ class SourceMediaService:
                     "has_audio": acodec not in (None, "", "none"),
                     "download_format": format_id or "best",
                     "merge_ext": (fmt.get("ext") or "mp4").lower(),
+                    "bitrate_kbps": float(fmt.get("tbr") or 0) if fmt.get("tbr") not in (None, "", False) else 0.0,
+                    "_format_candidates": [{
+                        "format_id": format_id or "default",
+                        "has_audio": acodec not in (None, "", "none"),
+                    }],
                 }
                 item["live_download_format"] = self.build_live_download_format(item)
 
@@ -324,19 +425,24 @@ class SourceMediaService:
                     grouped_video[group_key] = item
                     continue
 
+                self._merge_format_candidates(existing, item)
+
                 existing_score = (
+                    float(existing.get("bitrate_kbps") or 0.0),
                     1 if existing.get("has_audio") else 0,
                     1 if "m3u8" in str(existing.get("protocol") or "").lower() else 0,
                     1 if str(existing.get("protocol") or "").lower().startswith("http") else 0,
                     len(str(existing.get("format_id") or "")),
                 )
                 item_score = (
+                    float(item.get("bitrate_kbps") or 0.0),
                     1 if item.get("has_audio") else 0,
                     1 if "m3u8" in protocol else 0,
                     1 if protocol.startswith("http") else 0,
                     len(str(item.get("format_id") or "")),
                 )
                 if item_score > existing_score:
+                    self._merge_format_candidates(item, existing)
                     grouped_video[group_key] = item
                 continue
 
@@ -353,7 +459,7 @@ class SourceMediaService:
 
             audio_results.append({
                 "format_id": format_id or "bestaudio",
-                "label": self.make_label(fmt),
+                "label": "Audio",
                 "height": 0,
                 "width": 0,
                 "ext": fmt.get("ext") or "",
@@ -365,6 +471,7 @@ class SourceMediaService:
                 "download_format": format_id or "bestaudio",
                 "live_download_format": self.build_live_download_format({"media_kind": "audio"}),
                 "merge_ext": (fmt.get("ext") or "m4a").lower(),
+                "bitrate_kbps": float((fmt.get("abr") or fmt.get("tbr") or 0) or 0),
             })
 
         def sort_key(item):
@@ -373,7 +480,13 @@ class SourceMediaService:
             width = item.get("width") or 0
             return (media_rank, height, width, str(item.get("label", "")), str(item.get("format_id", "")))
 
-        results = list(grouped_video.values()) + audio_results
+        video_results = []
+        for item in grouped_video.values():
+            item["download_format"] = self._build_download_selector(item)
+            item.pop("_format_candidates", None)
+            video_results.append(item)
+
+        results = video_results + audio_results
         results.sort(key=sort_key)
         return results
 
@@ -465,6 +578,24 @@ class SourceMediaService:
     def find_format(result, format_id):
         for item in result["sources"]:
             if str(item["format_id"]) == str(format_id):
+                return item
+        return None
+
+    @classmethod
+    def find_format_by_signature(cls, result, signature):
+        requested = {
+            "media_kind": str((signature or {}).get("media_kind") or "").strip().lower(),
+            "label": str((signature or {}).get("label") or "").strip(),
+            "height": int((signature or {}).get("height") or 0),
+            "width": int((signature or {}).get("width") or 0),
+            "ext": str((signature or {}).get("ext") or "").strip().lower(),
+        }
+        if not any(requested.values()):
+            return None
+
+        for item in result.get("sources", []):
+            candidate = cls.build_selection_signature(item)
+            if candidate == requested:
                 return item
         return None
 

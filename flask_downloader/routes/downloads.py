@@ -99,6 +99,13 @@ def register_download_routes(app, deps):
         job = create_job(
             page_url,
             str(fmt.get("format_id") or ""),
+            selection_signature={
+                "media_kind": str(fmt.get("media_kind") or "").strip().lower(),
+                "label": str(fmt.get("label") or "").strip(),
+                "height": int(fmt.get("height") or 0),
+                "width": int(fmt.get("width") or 0),
+                "ext": str(fmt.get("ext") or "").strip().lower(),
+            },
             owner_username=owner_username,
             storage_kind=storage_kind,
             title=result["title"],
