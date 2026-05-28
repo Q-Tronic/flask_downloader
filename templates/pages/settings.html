@@ -1,4 +1,137 @@
-
+{% set storage_disk_state = storage_disk_state|default({
+    "local": {"headline": "brak danych", "meta": "Ten proces aplikacji nie dostarczył jeszcze metryk lokalnego storage."},
+    "network": {"headline": "brak danych", "meta": "Ten proces aplikacji nie dostarczył jeszcze metryk udziału sieciowego."}
+}, true) %}
+{% set app_update_state = app_update_state|default({
+    "repo_branch": "main",
+    "status_pill_kind": "muted",
+    "status_pill_label": "Jeszcze nie sprawdzono",
+    "checked_at_text": "-",
+    "current_version": "brak danych",
+    "latest_version": "jeszcze nie sprawdzono",
+    "repo_label": "Q-Tronic/flask_downloader",
+    "check_error": "",
+    "action_button_label": "Zaktualizuj aplikację z GitHuba",
+    "action_needed": false,
+    "action_note_text": "Ten działający proces aplikacji nie dostarczył jeszcze stanu aktualizacji. Po późniejszym restarcie backendu panel pobierze pełne dane."
+}, true) %}
+{% set yt_dlp_state = yt_dlp_state|default({
+    "current_version": "brak danych",
+    "latest_version": "brak danych",
+    "status_pill_kind": "muted",
+    "status_pill_label": "Brak danych",
+    "check_error": "",
+    "action_needed": false,
+    "action_button_label": "Zaktualizuj yt-dlp",
+    "action_note_text": "Ten działający proces aplikacji nie dostarczył jeszcze stanu yt-dlp."
+}, true) %}
+{% set ffmpeg_state = ffmpeg_state|default({
+    "current_version": "brak danych",
+    "latest_version": "brak danych",
+    "status_pill_kind": "muted",
+    "status_pill_label": "Brak danych",
+    "check_error": "",
+    "action_needed": false,
+    "action_button_label": "Zainstaluj / zaktualizuj ffmpeg",
+    "action_note_text": "Ten działający proces aplikacji nie dostarczył jeszcze stanu ffmpeg.",
+    "active_bin_path": "-",
+    "source_label": "-",
+    "managed_build_label": "-",
+    "runtime_uses_managed": false
+}, true) %}
+{% set dlna_package_state = dlna_package_state|default({
+    "current_version": "brak danych",
+    "latest_version": "brak danych",
+    "status_pill_kind": "muted",
+    "status_pill_label": "Brak danych",
+    "check_error": "",
+    "action_needed": false,
+    "action_button_label": "Zainstaluj / zaktualizuj Gerbera",
+    "action_note_text": "Ten działający proces aplikacji nie dostarczył jeszcze stanu pakietu DLNA.",
+    "service_enabled": false,
+    "service_running": false,
+    "service_uptime_text": "-",
+    "service_status_text": "-",
+    "package_name": "gerbera",
+    "repo_channel": "latest",
+    "runtime_root": "-",
+    "log_path": "-"
+}, true) %}
+{% set dlna_service_state = dlna_service_state|default({
+    "service_name": "flask-downloader-dlna",
+    "status_label": "Brak danych",
+    "unit_file_label": "Brak danych",
+    "error": "",
+    "export_root": "-",
+    "desired_enabled": false,
+    "toggle_button_label": "Włącz autostart DLNA"
+}, true) %}
+{% set radio_backend_package_state = radio_backend_package_state|default({
+    "status_pill_kind": "muted",
+    "status_pill_label": "Brak danych",
+    "check_error": "",
+    "action_needed": false,
+    "action_button_label": "Zainstaluj / zaktualizuj backend radia",
+    "action_note_text": "Ten działający proces aplikacji nie dostarczył jeszcze stanu backendu radia.",
+    "service_enabled": false,
+    "service_running": false,
+    "service_uptime_text": "-",
+    "service_status_text": "-",
+    "runtime_root": "-",
+    "log_path": "-",
+    "packages": [
+        {"name": "icecast2", "current_version": "brak danych", "latest_version": "brak danych"},
+        {"name": "liquidsoap", "current_version": "brak danych", "latest_version": "brak danych"}
+    ]
+}, true) %}
+{% set radio_backend_service_state = radio_backend_service_state|default({
+    "status_label": "Brak danych",
+    "unit_file_label": "Brak danych",
+    "error": "",
+    "runtime_root": "-",
+    "service_active": false,
+    "toggle_button_label": "Włącz backend radia"
+}, true) %}
+{% set service_state = service_state|default({
+    "service_name": "flask-downloader",
+    "status_kind": "muted",
+    "status_label": "Brak danych",
+    "main_pid": "",
+    "sub_state": "",
+    "app_uptime_text": "-",
+    "service_uptime_text": "-",
+    "last_restart_text": "-",
+    "error": ""
+}, true) %}
+{% set maintenance_tasks = maintenance_tasks|default({}, true) %}
+{% set default_maintenance_task = {
+    "visible": false,
+    "active": false,
+    "status_kind": "muted",
+    "status_label": "Brak aktywnego zadania",
+    "started_at_text": "",
+    "finished_at_text": "",
+    "title": "",
+    "progress_percent": none,
+    "status": "",
+    "detail": "Po uruchomieniu zadania zobaczysz tutaj kolejne etapy pracy."
+} %}
+{% set yt_dlp_task = maintenance_tasks.yt_dlp_update if maintenance_tasks.yt_dlp_update is defined else default_maintenance_task %}
+{% set ffmpeg_task = maintenance_tasks.ffmpeg_install if maintenance_tasks.ffmpeg_install is defined else default_maintenance_task %}
+{% set dlna_install_task = maintenance_tasks.dlna_install if maintenance_tasks.dlna_install is defined else default_maintenance_task %}
+{% set radio_backend_install_task = maintenance_tasks.radio_backend_install if maintenance_tasks.radio_backend_install is defined else default_maintenance_task %}
+{% set app_update_task = maintenance_tasks.app_update if maintenance_tasks is defined and maintenance_tasks.app_update is defined else {
+    "visible": false,
+    "active": false,
+    "status_kind": "muted",
+    "status_label": "Brak aktywnego zadania",
+    "started_at_text": "",
+    "finished_at_text": "",
+    "title": "Aktualizacja aplikacji",
+    "progress_percent": none,
+    "status": "",
+    "detail": "Po uruchomieniu aktualizacji zobaczysz tutaj kolejne etapy pracy."
+} %}
 <section class="page-card">
     <div class="page-title-row">
         <h1 class="page-title">Konfiguracja</h1>
@@ -348,31 +481,31 @@
                     Aktualizacja nie jest teraz wymagana.
                 </div>
 
-                <div id="ytDlpTaskPanel" class="maintenance-task-panel" {% if not maintenance_tasks.yt_dlp_update.visible %}hidden{% endif %}>
+                <div id="ytDlpTaskPanel" class="maintenance-task-panel" {% if not yt_dlp_task.visible %}hidden{% endif %}>
                     <div class="service-status-row">
-                        <span id="ytDlpTaskStatusPill" class="service-status-pill {{ maintenance_tasks.yt_dlp_update.status_kind }}">{{ maintenance_tasks.yt_dlp_update.status_label }}</span>
+                        <span id="ytDlpTaskStatusPill" class="service-status-pill {{ yt_dlp_task.status_kind }}">{{ yt_dlp_task.status_label }}</span>
                         <div id="ytDlpTaskTime" class="small">
-                            {% if maintenance_tasks.yt_dlp_update.active %}
-                                Start: {{ maintenance_tasks.yt_dlp_update.started_at_text }}
-                            {% elif maintenance_tasks.yt_dlp_update.finished_at_text %}
-                                Zakończono: {{ maintenance_tasks.yt_dlp_update.finished_at_text }}
+                            {% if yt_dlp_task.active %}
+                                Start: {{ yt_dlp_task.started_at_text }}
+                            {% elif yt_dlp_task.finished_at_text %}
+                                Zakończono: {{ yt_dlp_task.finished_at_text }}
                             {% endif %}
                         </div>
                     </div>
                     <div class="maintenance-task-head">
-                        <div id="ytDlpTaskLabel" class="maintenance-task-label">{{ maintenance_tasks.yt_dlp_update.title or "Aktualizacja yt-dlp" }}</div>
+                        <div id="ytDlpTaskLabel" class="maintenance-task-label">{{ yt_dlp_task.title or "Aktualizacja yt-dlp" }}</div>
                         <div id="ytDlpTaskPercent" class="maintenance-task-percent">
-                            {% if maintenance_tasks.yt_dlp_update.progress_percent is not none %}
-                                {{ "%.1f"|format(maintenance_tasks.yt_dlp_update.progress_percent) }}%
+                            {% if yt_dlp_task.progress_percent is not none %}
+                                {{ "%.1f"|format(yt_dlp_task.progress_percent) }}%
                             {% else %}
                                 ...
                             {% endif %}
                         </div>
                     </div>
-                    <div id="ytDlpTaskProgress" class="progress{% if maintenance_tasks.yt_dlp_update.progress_percent is none %} is-indeterminate{% endif %}">
-                        <div id="ytDlpTaskBar" class="progress-bar {% if maintenance_tasks.yt_dlp_update.active %}downloading{% elif maintenance_tasks.yt_dlp_update.status == 'success' %}completed{% elif maintenance_tasks.yt_dlp_update.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if maintenance_tasks.yt_dlp_update.progress_percent is not none %}{{ maintenance_tasks.yt_dlp_update.progress_percent }}{% else %}38{% endif %}%;"></div>
+                    <div id="ytDlpTaskProgress" class="progress{% if yt_dlp_task.progress_percent is none %} is-indeterminate{% endif %}">
+                        <div id="ytDlpTaskBar" class="progress-bar {% if yt_dlp_task.active %}downloading{% elif yt_dlp_task.status == 'success' %}completed{% elif yt_dlp_task.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if yt_dlp_task.progress_percent is not none %}{{ yt_dlp_task.progress_percent }}{% else %}38{% endif %}%;"></div>
                     </div>
-                    <div id="ytDlpTaskDetail" class="maintenance-task-detail">{{ maintenance_tasks.yt_dlp_update.detail or "Po uruchomieniu aktualizacji zobaczysz tutaj kolejne etapy pracy." }}</div>
+                    <div id="ytDlpTaskDetail" class="maintenance-task-detail">{{ yt_dlp_task.detail or "Po uruchomieniu aktualizacji zobaczysz tutaj kolejne etapy pracy." }}</div>
                 </div>
             </div>
 
@@ -437,31 +570,31 @@
                     Aktualizacja nie jest teraz wymagana.
                 </div>
 
-                <div id="ffmpegTaskPanel" class="maintenance-task-panel" {% if not maintenance_tasks.ffmpeg_install.visible %}hidden{% endif %}>
+                <div id="ffmpegTaskPanel" class="maintenance-task-panel" {% if not ffmpeg_task.visible %}hidden{% endif %}>
                     <div class="service-status-row">
-                        <span id="ffmpegTaskStatusPill" class="service-status-pill {{ maintenance_tasks.ffmpeg_install.status_kind }}">{{ maintenance_tasks.ffmpeg_install.status_label }}</span>
+                        <span id="ffmpegTaskStatusPill" class="service-status-pill {{ ffmpeg_task.status_kind }}">{{ ffmpeg_task.status_label }}</span>
                         <div id="ffmpegTaskTime" class="small">
-                            {% if maintenance_tasks.ffmpeg_install.active %}
-                                Start: {{ maintenance_tasks.ffmpeg_install.started_at_text }}
-                            {% elif maintenance_tasks.ffmpeg_install.finished_at_text %}
-                                Zakończono: {{ maintenance_tasks.ffmpeg_install.finished_at_text }}
+                            {% if ffmpeg_task.active %}
+                                Start: {{ ffmpeg_task.started_at_text }}
+                            {% elif ffmpeg_task.finished_at_text %}
+                                Zakończono: {{ ffmpeg_task.finished_at_text }}
                             {% endif %}
                         </div>
                     </div>
                     <div class="maintenance-task-head">
-                        <div id="ffmpegTaskLabel" class="maintenance-task-label">{{ maintenance_tasks.ffmpeg_install.title or "Instalacja ffmpeg" }}</div>
+                        <div id="ffmpegTaskLabel" class="maintenance-task-label">{{ ffmpeg_task.title or "Instalacja ffmpeg" }}</div>
                         <div id="ffmpegTaskPercent" class="maintenance-task-percent">
-                            {% if maintenance_tasks.ffmpeg_install.progress_percent is not none %}
-                                {{ "%.1f"|format(maintenance_tasks.ffmpeg_install.progress_percent) }}%
+                            {% if ffmpeg_task.progress_percent is not none %}
+                                {{ "%.1f"|format(ffmpeg_task.progress_percent) }}%
                             {% else %}
                                 ...
                             {% endif %}
                         </div>
                     </div>
-                    <div id="ffmpegTaskProgress" class="progress{% if maintenance_tasks.ffmpeg_install.progress_percent is none %} is-indeterminate{% endif %}">
-                        <div id="ffmpegTaskBar" class="progress-bar {% if maintenance_tasks.ffmpeg_install.active %}downloading{% elif maintenance_tasks.ffmpeg_install.status == 'success' %}completed{% elif maintenance_tasks.ffmpeg_install.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if maintenance_tasks.ffmpeg_install.progress_percent is not none %}{{ maintenance_tasks.ffmpeg_install.progress_percent }}{% else %}38{% endif %}%;"></div>
+                    <div id="ffmpegTaskProgress" class="progress{% if ffmpeg_task.progress_percent is none %} is-indeterminate{% endif %}">
+                        <div id="ffmpegTaskBar" class="progress-bar {% if ffmpeg_task.active %}downloading{% elif ffmpeg_task.status == 'success' %}completed{% elif ffmpeg_task.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if ffmpeg_task.progress_percent is not none %}{{ ffmpeg_task.progress_percent }}{% else %}38{% endif %}%;"></div>
                     </div>
-                    <div id="ffmpegTaskDetail" class="maintenance-task-detail">{{ maintenance_tasks.ffmpeg_install.detail or "Po uruchomieniu instalacji zobaczysz tutaj kolejne etapy pracy." }}</div>
+                    <div id="ffmpegTaskDetail" class="maintenance-task-detail">{{ ffmpeg_task.detail or "Po uruchomieniu instalacji zobaczysz tutaj kolejne etapy pracy." }}</div>
                 </div>
             </div>
         </div>
@@ -526,31 +659,31 @@
                     Pakiet DLNA nie wymaga teraz aktualizacji.
                 </div>
 
-                <div id="settingsDlnaTaskPanel" class="maintenance-task-panel" {% if not maintenance_tasks.dlna_install.visible %}hidden{% endif %}>
+                <div id="settingsDlnaTaskPanel" class="maintenance-task-panel" {% if not dlna_install_task.visible %}hidden{% endif %}>
                     <div class="service-status-row">
-                        <span id="settingsDlnaTaskStatusPill" class="service-status-pill {{ maintenance_tasks.dlna_install.status_kind }}">{{ maintenance_tasks.dlna_install.status_label }}</span>
+                        <span id="settingsDlnaTaskStatusPill" class="service-status-pill {{ dlna_install_task.status_kind }}">{{ dlna_install_task.status_label }}</span>
                         <div id="settingsDlnaTaskTime" class="small">
-                            {% if maintenance_tasks.dlna_install.active %}
-                                Start: {{ maintenance_tasks.dlna_install.started_at_text }}
-                            {% elif maintenance_tasks.dlna_install.finished_at_text %}
-                                Zakończono: {{ maintenance_tasks.dlna_install.finished_at_text }}
+                            {% if dlna_install_task.active %}
+                                Start: {{ dlna_install_task.started_at_text }}
+                            {% elif dlna_install_task.finished_at_text %}
+                                Zakończono: {{ dlna_install_task.finished_at_text }}
                             {% endif %}
                         </div>
                     </div>
                     <div class="maintenance-task-head">
-                        <div id="settingsDlnaTaskLabel" class="maintenance-task-label">{{ maintenance_tasks.dlna_install.title or "Instalacja serwera DLNA" }}</div>
+                        <div id="settingsDlnaTaskLabel" class="maintenance-task-label">{{ dlna_install_task.title or "Instalacja serwera DLNA" }}</div>
                         <div id="settingsDlnaTaskPercent" class="maintenance-task-percent">
-                            {% if maintenance_tasks.dlna_install.progress_percent is not none %}
-                                {{ "%.1f"|format(maintenance_tasks.dlna_install.progress_percent) }}%
+                            {% if dlna_install_task.progress_percent is not none %}
+                                {{ "%.1f"|format(dlna_install_task.progress_percent) }}%
                             {% else %}
                                 ...
                             {% endif %}
                         </div>
                     </div>
-                    <div id="settingsDlnaTaskProgress" class="progress{% if maintenance_tasks.dlna_install.progress_percent is none %} is-indeterminate{% endif %}">
-                        <div id="settingsDlnaTaskBar" class="progress-bar {% if maintenance_tasks.dlna_install.active %}downloading{% elif maintenance_tasks.dlna_install.status == 'success' %}completed{% elif maintenance_tasks.dlna_install.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if maintenance_tasks.dlna_install.progress_percent is not none %}{{ maintenance_tasks.dlna_install.progress_percent }}{% else %}38{% endif %}%;"></div>
+                    <div id="settingsDlnaTaskProgress" class="progress{% if dlna_install_task.progress_percent is none %} is-indeterminate{% endif %}">
+                        <div id="settingsDlnaTaskBar" class="progress-bar {% if dlna_install_task.active %}downloading{% elif dlna_install_task.status == 'success' %}completed{% elif dlna_install_task.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if dlna_install_task.progress_percent is not none %}{{ dlna_install_task.progress_percent }}{% else %}38{% endif %}%;"></div>
                     </div>
-                    <div id="settingsDlnaTaskDetail" class="maintenance-task-detail">{{ maintenance_tasks.dlna_install.detail or "Po uruchomieniu instalacji zobaczysz tutaj kolejne etapy pracy." }}</div>
+                    <div id="settingsDlnaTaskDetail" class="maintenance-task-detail">{{ dlna_install_task.detail or "Po uruchomieniu instalacji zobaczysz tutaj kolejne etapy pracy." }}</div>
                 </div>
 
                 <form id="settingsDlnaToggleForm" method="post" action="/settings/dlna-toggle-service" class="auth-form" data-settings-async="true">
@@ -624,31 +757,31 @@
                     Backend radia nie wymaga teraz instalacji ani aktualizacji.
                 </div>
 
-                <div id="settingsRadioTaskPanel" class="maintenance-task-panel" {% if not maintenance_tasks.radio_backend_install.visible %}hidden{% endif %}>
+                <div id="settingsRadioTaskPanel" class="maintenance-task-panel" {% if not radio_backend_install_task.visible %}hidden{% endif %}>
                     <div class="service-status-row">
-                        <span id="settingsRadioTaskStatusPill" class="service-status-pill {{ maintenance_tasks.radio_backend_install.status_kind }}">{{ maintenance_tasks.radio_backend_install.status_label }}</span>
+                        <span id="settingsRadioTaskStatusPill" class="service-status-pill {{ radio_backend_install_task.status_kind }}">{{ radio_backend_install_task.status_label }}</span>
                         <div id="settingsRadioTaskTime" class="small">
-                            {% if maintenance_tasks.radio_backend_install.active %}
-                                Start: {{ maintenance_tasks.radio_backend_install.started_at_text }}
-                            {% elif maintenance_tasks.radio_backend_install.finished_at_text %}
-                                Zakończono: {{ maintenance_tasks.radio_backend_install.finished_at_text }}
+                            {% if radio_backend_install_task.active %}
+                                Start: {{ radio_backend_install_task.started_at_text }}
+                            {% elif radio_backend_install_task.finished_at_text %}
+                                Zakończono: {{ radio_backend_install_task.finished_at_text }}
                             {% endif %}
                         </div>
                     </div>
                     <div class="maintenance-task-head">
-                        <div id="settingsRadioTaskLabel" class="maintenance-task-label">{{ maintenance_tasks.radio_backend_install.title or "Instalacja backendu radia" }}</div>
+                        <div id="settingsRadioTaskLabel" class="maintenance-task-label">{{ radio_backend_install_task.title or "Instalacja backendu radia" }}</div>
                         <div id="settingsRadioTaskPercent" class="maintenance-task-percent">
-                            {% if maintenance_tasks.radio_backend_install.progress_percent is not none %}
-                                {{ "%.1f"|format(maintenance_tasks.radio_backend_install.progress_percent) }}%
+                            {% if radio_backend_install_task.progress_percent is not none %}
+                                {{ "%.1f"|format(radio_backend_install_task.progress_percent) }}%
                             {% else %}
                                 ...
                             {% endif %}
                         </div>
                     </div>
-                    <div id="settingsRadioTaskProgress" class="progress{% if maintenance_tasks.radio_backend_install.progress_percent is none %} is-indeterminate{% endif %}">
-                        <div id="settingsRadioTaskBar" class="progress-bar {% if maintenance_tasks.radio_backend_install.active %}downloading{% elif maintenance_tasks.radio_backend_install.status == 'success' %}completed{% elif maintenance_tasks.radio_backend_install.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if maintenance_tasks.radio_backend_install.progress_percent is not none %}{{ maintenance_tasks.radio_backend_install.progress_percent }}{% else %}38{% endif %}%;"></div>
+                    <div id="settingsRadioTaskProgress" class="progress{% if radio_backend_install_task.progress_percent is none %} is-indeterminate{% endif %}">
+                        <div id="settingsRadioTaskBar" class="progress-bar {% if radio_backend_install_task.active %}downloading{% elif radio_backend_install_task.status == 'success' %}completed{% elif radio_backend_install_task.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if radio_backend_install_task.progress_percent is not none %}{{ radio_backend_install_task.progress_percent }}{% else %}38{% endif %}%;"></div>
                     </div>
-                    <div id="settingsRadioTaskDetail" class="maintenance-task-detail">{{ maintenance_tasks.radio_backend_install.detail or "Po uruchomieniu instalacji zobaczysz tutaj kolejne etapy pracy." }}</div>
+                    <div id="settingsRadioTaskDetail" class="maintenance-task-detail">{{ radio_backend_install_task.detail or "Po uruchomieniu instalacji zobaczysz tutaj kolejne etapy pracy." }}</div>
                 </div>
 
                 <form id="settingsRadioToggleForm" method="post" action="/settings/radio-toggle-service" class="auth-form" data-settings-async="true">
@@ -720,31 +853,31 @@
 
                 <div id="appUpdateActionNote" class="inline-note" {% if app_update_state.action_needed %}hidden{% endif %}>{{ app_update_state.action_note_text }}</div>
 
-                <div id="appUpdateTaskPanel" class="maintenance-task-panel" {% if not maintenance_tasks.app_update.visible %}hidden{% endif %}>
+                <div id="appUpdateTaskPanel" class="maintenance-task-panel" {% if not app_update_task.visible %}hidden{% endif %}>
                     <div class="service-status-row">
-                        <span id="appUpdateTaskStatusPill" class="service-status-pill {{ maintenance_tasks.app_update.status_kind }}">{{ maintenance_tasks.app_update.status_label }}</span>
+                        <span id="appUpdateTaskStatusPill" class="service-status-pill {{ app_update_task.status_kind }}">{{ app_update_task.status_label }}</span>
                         <div id="appUpdateTaskTime" class="small">
-                            {% if maintenance_tasks.app_update.active %}
-                                Start: {{ maintenance_tasks.app_update.started_at_text }}
-                            {% elif maintenance_tasks.app_update.finished_at_text %}
-                                Zakończono: {{ maintenance_tasks.app_update.finished_at_text }}
+                            {% if app_update_task.active %}
+                                Start: {{ app_update_task.started_at_text }}
+                            {% elif app_update_task.finished_at_text %}
+                                Zakończono: {{ app_update_task.finished_at_text }}
                             {% endif %}
                         </div>
                     </div>
                     <div class="maintenance-task-head">
-                        <div id="appUpdateTaskLabel" class="maintenance-task-label">{{ maintenance_tasks.app_update.title or "Aktualizacja aplikacji" }}</div>
+                        <div id="appUpdateTaskLabel" class="maintenance-task-label">{{ app_update_task.title or "Aktualizacja aplikacji" }}</div>
                         <div id="appUpdateTaskPercent" class="maintenance-task-percent">
-                            {% if maintenance_tasks.app_update.progress_percent is not none %}
-                                {{ "%.1f"|format(maintenance_tasks.app_update.progress_percent) }}%
+                            {% if app_update_task.progress_percent is not none %}
+                                {{ "%.1f"|format(app_update_task.progress_percent) }}%
                             {% else %}
                                 ...
                             {% endif %}
                         </div>
                     </div>
-                    <div id="appUpdateTaskProgress" class="progress{% if maintenance_tasks.app_update.progress_percent is none %} is-indeterminate{% endif %}">
-                        <div id="appUpdateTaskBar" class="progress-bar {% if maintenance_tasks.app_update.active %}downloading{% elif maintenance_tasks.app_update.status == 'success' %}completed{% elif maintenance_tasks.app_update.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if maintenance_tasks.app_update.progress_percent is not none %}{{ maintenance_tasks.app_update.progress_percent }}{% else %}38{% endif %}%;"></div>
+                    <div id="appUpdateTaskProgress" class="progress{% if app_update_task.progress_percent is none %} is-indeterminate{% endif %}">
+                        <div id="appUpdateTaskBar" class="progress-bar {% if app_update_task.active %}downloading{% elif app_update_task.status == 'success' %}completed{% elif app_update_task.status == 'error' %}error{% else %}queued{% endif %}" style="width:{% if app_update_task.progress_percent is not none %}{{ app_update_task.progress_percent }}{% else %}38{% endif %}%;"></div>
                     </div>
-                    <div id="appUpdateTaskDetail" class="maintenance-task-detail">{{ maintenance_tasks.app_update.detail or "Po uruchomieniu aktualizacji zobaczysz tutaj kolejne etapy pracy." }}</div>
+                    <div id="appUpdateTaskDetail" class="maintenance-task-detail">{{ app_update_task.detail or "Po uruchomieniu aktualizacji zobaczysz tutaj kolejne etapy pracy." }}</div>
                 </div>
             </div>
 
