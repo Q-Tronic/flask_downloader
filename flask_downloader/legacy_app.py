@@ -6973,15 +6973,71 @@ def ensure_dlna_service_started(enable_unit=False, timeout=90, failure_label="st
     raise RuntimeError("Usługa DLNA nie utrzymała %s. %s" % (failure_label, detail or "Sprawdź log usługi DLNA."))
 
 
-def ensure_dlna_service_stopped(timeout=90, reset_failed_after_stop=True):
+def _ensure_dlna_service_stopped_legacy(timeout=90, reset_failed_after_stop=True):
     stop_result = run_systemctl_command_result("stop", DLNA_SERVICE_NAME, timeout=timeout)
-    wait_timeout = 25.0 if stop_result.get("timed_out") else 12.0
+    wait_timeout = 45.0 if stop_result.get("timed_out") else 12.0
     service_state = wait_for_dlna_service_stopped(timeout=wait_timeout)
     main_pid = str(service_state.get("main_pid") or "").strip()
     active_state = str(service_state.get("active_state") or "")
 
-    if active_state == "active" or main_pid not in ("", "0"):
-        detail = build_dlna_service_failure_detail(service_state, stop_result.get("detail"))
+    kill_result = {"detail": "", "returncode": 0}
+    if active_state in ("active", "deactivating") or main_pid not in ("", "0"):
+        if stop_result.get("timed_out"):
+            kill_result = run_systemctl_command_result(
+                "kill",
+                "--signal=SIGKILL",
+                DLNA_SERVICE_NAME,
+                timeout=30,
+            )
+            service_state = wait_for_dlna_service_stopped(timeout=20.0)
+            main_pid = str(service_state.get("main_pid") or "").strip()
+            active_state = str(service_state.get("active_state") or "")
+        if active_state in ("active", "deactivating") or main_pid not in ("", "0"):
+            detail = build_dlna_service_failure_detail(
+                service_state,
+                " | ".join(
+                    str(part or "").strip()
+                    for part in (stop_result.get("detail"), kill_result.get("detail"))
+                    if str(part or "").strip()
+                ),
+            )
+        raise RuntimeError("Nie udało się zatrzymać poprzedniej instancji DLNA. %s" % (detail or "Sprawdź log usługi DLNA."))
+
+    if reset_failed_after_stop or active_state == "failed":
+        run_systemctl_command_result("reset-failed", DLNA_SERVICE_NAME, timeout=30)
+        service_state = get_dlna_service_state()
+    return service_state
+
+
+def ensure_dlna_service_stopped(timeout=90, reset_failed_after_stop=True):
+    stop_result = run_systemctl_command_result("stop", DLNA_SERVICE_NAME, timeout=timeout)
+    wait_timeout = 45.0 if stop_result.get("timed_out") else 12.0
+    service_state = wait_for_dlna_service_stopped(timeout=wait_timeout)
+    main_pid = str(service_state.get("main_pid") or "").strip()
+    active_state = str(service_state.get("active_state") or "")
+    kill_result = {"detail": "", "returncode": 0}
+
+    if active_state in ("active", "deactivating") or main_pid not in ("", "0"):
+        if stop_result.get("timed_out"):
+            kill_result = run_systemctl_command_result(
+                "kill",
+                "--signal=SIGKILL",
+                DLNA_SERVICE_NAME,
+                timeout=30,
+            )
+            service_state = wait_for_dlna_service_stopped(timeout=20.0)
+            main_pid = str(service_state.get("main_pid") or "").strip()
+            active_state = str(service_state.get("active_state") or "")
+
+    if active_state in ("active", "deactivating") or main_pid not in ("", "0"):
+        detail = build_dlna_service_failure_detail(
+            service_state,
+            " | ".join(
+                str(part or "").strip()
+                for part in (stop_result.get("detail"), kill_result.get("detail"))
+                if str(part or "").strip()
+            ),
+        )
         raise RuntimeError("Nie udało się zatrzymać poprzedniej instancji DLNA. %s" % (detail or "Sprawdź log usługi DLNA."))
 
     if reset_failed_after_stop or active_state == "failed":

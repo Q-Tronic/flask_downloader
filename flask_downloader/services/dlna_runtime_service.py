@@ -182,11 +182,15 @@ class DlnaRuntimeService:
             dlna_config = self._get_dlna_config_snapshot()
             dlna_config["enabled"] = False
             self._set_dlna_config(dlna_config)
-            try:
-                self._run_systemctl_command_result("disable", self._dlna_service_name, timeout=90)
+            package_state = self._get_dlna_package_state_snapshot()
+            if package_state["installed"]:
+                disable_result = self._run_systemctl_command_result("disable", self._dlna_service_name, timeout=90)
                 self.ensure_service_stopped(timeout=90)
-            except Exception:
-                pass
+                if disable_result["returncode"] != 0:
+                    raise RuntimeError(
+                        disable_result.get("detail")
+                        or "Nie udało się wyłączyć autostartu serwera DLNA."
+                    )
 
         return self.get_service_state()
 
