@@ -408,6 +408,16 @@
             display: grid;
             gap: 14px;
         }
+        .source-detail-rename {
+            display: grid;
+            gap: 8px;
+            margin-top: 16px;
+            margin-bottom: 16px;
+            padding: 14px 16px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+        }
         .source-existing-wrap {
             display: grid;
             gap: 12px;

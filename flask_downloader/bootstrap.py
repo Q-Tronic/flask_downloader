@@ -63,6 +63,7 @@ def register_application_routes(app, context):
         "normalize_storage_kind": context["normalize_storage_kind"],
         "create_job": context["create_job"],
         "build_download_filename": context["build_download_filename"],
+        "normalize_requested_download_filename": context["normalize_requested_download_filename"],
         "mark_job_cancel_requested": context["mark_job_cancel_requested"],
         "mark_job_pause_requested": context["mark_job_pause_requested"],
         "resume_job_download": context["resume_job_download"],

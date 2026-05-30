@@ -168,7 +168,7 @@ function clearSourceContextToast() {
     }
 }
 
-async function startServerDownload(pageUrl, formatId, overwriteExisting) {
+async function startServerDownload(pageUrl, formatId, overwriteExisting, customFilename) {
     try {
         const response = await fetch("/enqueue-download", {
             method: "POST",
@@ -176,6 +176,7 @@ async function startServerDownload(pageUrl, formatId, overwriteExisting) {
             body: JSON.stringify({
                 page_url: pageUrl,
                 format_id: formatId,
+                custom_filename: String(customFilename || "").trim(),
                 overwrite_existing: Boolean(overwriteExisting),
                 auto_dlna_collection_id: getQuickDlnaCollectionId(),
             })
@@ -186,7 +187,7 @@ async function startServerDownload(pageUrl, formatId, overwriteExisting) {
         if (response.status === 409 && data.requires_confirmation) {
             const confirmMessage = buildOverwriteConfirmMessage(data.existing_downloads);
             if (confirmMessage && confirm(confirmMessage)) {
-                return startServerDownload(pageUrl, formatId, true);
+                return startServerDownload(pageUrl, formatId, true, customFilename);
             }
             return;
         }
@@ -462,6 +463,21 @@ function renderSourceDetail(item) {
                 </div>
             </div>
 
+            <div class="source-detail-rename">
+                <label class="field-label" for="sourceCustomFilenameInput">Nazwa pliku na serwerze</label>
+                <input
+                    id="sourceCustomFilenameInput"
+                    class="text-input"
+                    type="text"
+                    value="${escapeSourceHtml(item.target_filename || "")}"
+                    placeholder="${escapeSourceHtml(item.target_filename || "")}"
+                    maxlength="120"
+                    autocomplete="off"
+                    spellcheck="false"
+                />
+                <div class="small muted">Możesz wpisać własną nazwę bez rozszerzenia albo z nim. Serwer i tak zapisze poprawne rozszerzenie i oczyści nazwę pod Windows.</div>
+            </div>
+
             <div class="actions">
                 <a class="btn" href="${escapeSourceHtml(item.proxy_url || "#")}" target="_blank" rel="noopener">Otwórz przez proxy</a>
                 <a class="btn btn-secondary" href="/single-playlist?page_url=${encodeURIComponent(sourcePageUrl)}&format_id=${encodeURIComponent(item.format_id || "")}" target="_blank">M3U tylko dla tej jakości</a>
@@ -720,7 +736,9 @@ function handleSourceServerDownloadClick(event) {
     }
 
     event.preventDefault();
-    startServerDownload(serverButton.dataset.pageUrl || "", serverButton.dataset.formatId || "", false);
+    const filenameInput = document.getElementById("sourceCustomFilenameInput");
+    const customFilename = filenameInput ? String(filenameInput.value || "").trim() : "";
+    startServerDownload(serverButton.dataset.pageUrl || "", serverButton.dataset.formatId || "", false, customFilename);
 }
 
 function handleQuickDownloadClick(event) {

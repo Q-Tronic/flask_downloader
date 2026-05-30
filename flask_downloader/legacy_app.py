@@ -3006,11 +3006,45 @@ def is_valid_http_url(url):
 
 
 def safe_filename(value, default="file"):
-    value = str(value or "").strip()
-    value = re.sub(r'[\\\\/:*?"<>|]+', "_", value)
-    value = re.sub(r"\\s+", "_", value)
-    value = re.sub(r"_+", "_", value).strip("._ ")
-    return value[:180] or default
+    reserved_names = {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    }
+    fallback = str(default or "file").strip() or "file"
+    text = str(value or "").strip()
+    text = re.sub(r"[\x00-\x1f]+", "", text)
+    text = re.sub(r'[\\\\/:*?"<>|]+', "_", text)
+    text = re.sub(r"\\s+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("._ ")
+    if not text:
+        text = fallback
+
+    base, ext = os.path.splitext(text)
+    if ext == ".":
+        base, ext = text.rstrip("."), ""
+    base = (base or text or fallback).strip("._ ")
+    ext = str(ext or "").strip()
+
+    if not base:
+        base = fallback
+    if base.upper() in reserved_names:
+        base = "_%s" % base
+
+    max_length = 120
+    allowed_base_length = max(8, max_length - len(ext))
+    base = base[:allowed_base_length].rstrip("._ ")
+    if not base:
+        base = (fallback[:allowed_base_length] or "file").strip("._ ") or "file"
+    if base.upper() in reserved_names:
+        base = "_%s" % base
+
+    result = ("%s%s" % (base, ext)).rstrip(" .")
+    if not result:
+        result = fallback
+    if os.path.splitext(result)[0].upper() in reserved_names:
+        result = "_%s" % result
+    return result[:max_length] or fallback
 
 
 def safe_basename(value):
@@ -3054,6 +3088,10 @@ def build_download_filename(title, item):
 
 def build_intermediate_download_filename(title, item):
     return SOURCE_MEDIA_SERVICE.build_intermediate_download_filename(title, item)
+
+
+def normalize_requested_download_filename(requested_filename, title, item):
+    return SOURCE_MEDIA_SERVICE.normalize_requested_download_filename(requested_filename, title, item)
 
 
 def make_label(fmt):

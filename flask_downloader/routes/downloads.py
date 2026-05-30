@@ -28,6 +28,7 @@ def register_download_routes(app, deps):
     normalize_storage_kind = deps["normalize_storage_kind"]
     create_job = deps["create_job"]
     build_download_filename = deps["build_download_filename"]
+    normalize_requested_download_filename = deps["normalize_requested_download_filename"]
     mark_job_cancel_requested = deps["mark_job_cancel_requested"]
     mark_job_pause_requested = deps["mark_job_pause_requested"]
     resume_job_download = deps["resume_job_download"]
@@ -88,14 +89,20 @@ def register_download_routes(app, deps):
             "jobs": filter_jobs_for_viewer(get_jobs_snapshot(), scope_username=scope_username),
         }
 
-    def enqueue_download_job(*, page_url, result, fmt, owner_username, overwrite_existing=False, auto_dlna_collection_id=""):
-        duplicate_state = get_source_download_match_state(result, fmt.get("format_id"), owner_username=owner_username)
+    def enqueue_download_job(*, page_url, result, fmt, owner_username, overwrite_existing=False, auto_dlna_collection_id="", custom_filename=""):
         storage_kind = normalize_storage_kind(fmt.get("media_kind") or "video")
         is_live_capture = bool(result.get("is_live_stream") and result.get("supports_live_from_start"))
+        download_title = result.get("download_title") or result["title"]
+        filename = normalize_requested_download_filename(custom_filename, download_title, fmt)
+        duplicate_state = get_source_download_match_state(
+            result,
+            fmt.get("format_id"),
+            owner_username=owner_username,
+            target_filename_override=filename,
+        )
         if duplicate_state["same_quality_count"] and not overwrite_existing:
             return None, duplicate_state
 
-        filename = build_download_filename(result.get("download_title") or result["title"], fmt)
         job = create_job(
             page_url,
             str(fmt.get("format_id") or ""),
@@ -188,6 +195,7 @@ def register_download_routes(app, deps):
                 return jsonify({"ok": False, "error": "Nie znaleziono wybranego źródła."}), 404
 
             item = dict(item)
+            item["target_filename"] = build_download_filename(result.get("download_title") or result["title"], item)
             item["existing_downloads"] = public_source_download_match_state(
                 get_source_download_match_state(result, format_id, owner_username=get_current_username())
             )
@@ -232,6 +240,7 @@ def register_download_routes(app, deps):
         payload = request.get_json(silent=True) or {}
         page_url = str(payload.get("page_url") or "").strip()
         format_id = str(payload.get("format_id") or "").strip()
+        custom_filename = str(payload.get("custom_filename") or "").strip()
         overwrite_existing = bool(payload.get("overwrite_existing"))
         try:
             auto_dlna_collection_id = normalize_requested_auto_dlna_collection_id(payload.get("auto_dlna_collection_id"))
@@ -265,6 +274,7 @@ def register_download_routes(app, deps):
                 owner_username=owner_username,
                 overwrite_existing=overwrite_existing,
                 auto_dlna_collection_id=auto_dlna_collection_id,
+                custom_filename=custom_filename,
             )
             if duplicate_state["same_quality_count"] and not overwrite_existing:
                 return jsonify({

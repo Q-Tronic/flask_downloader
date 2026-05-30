@@ -284,6 +284,17 @@ class SourceMediaService:
         base = self.build_download_basename(title, item)
         return "%s.%s" % (base, ext)
 
+    def normalize_requested_download_filename(self, requested_filename, title, item):
+        default_filename = self.build_download_filename(title, item)
+        requested_text = str(requested_filename or "").strip()
+        if not requested_text:
+            return default_filename
+
+        requested_root = os.path.splitext(requested_text)[0].strip()
+        default_root = os.path.splitext(default_filename)[0].strip() or "file"
+        normalized_root = self._safe_filename(requested_root or default_root, default=default_root)
+        return self.replace_filename_extension(normalized_root, self.get_download_output_ext(item))
+
     def build_intermediate_download_filename(self, title, item):
         final_filename = self.build_download_filename(title, item)
         return self.replace_filename_extension(final_filename, self.get_download_intermediate_ext(item))
@@ -741,10 +752,12 @@ class SourceMediaService:
         candidates.sort(key=sort_key)
         return candidates[0]
 
-    def get_source_download_match_state(self, result, format_id, owner_username=None):
+    def get_source_download_match_state(self, result, format_id, owner_username=None, target_filename_override=""):
         target_item = self.find_format(result, format_id)
         download_title = result.get("download_title") or result["title"]
-        target_filename = self.build_download_filename(download_title, target_item) if target_item else ""
+        target_filename = str(target_filename_override or "").strip()
+        if not target_filename:
+            target_filename = self.build_download_filename(download_title, target_item) if target_item else ""
         media_kind = self._normalize_storage_kind((target_item or {}).get("media_kind") or "video")
         owner = self._normalize_username(
             owner_username or self._get_current_username() or self._default_admin_username
