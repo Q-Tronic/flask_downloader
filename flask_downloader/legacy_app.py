@@ -3549,6 +3549,27 @@ def download_worker(job_id):
     resume_target_path = ""
 
     try:
+        def normalize_download_pathlike(value):
+            if isinstance(value, os.PathLike):
+                try:
+                    return os.path.abspath(os.fspath(value))
+                except Exception:
+                    return ""
+            if isinstance(value, bytes):
+                try:
+                    return os.path.abspath(os.fsdecode(value))
+                except Exception:
+                    return ""
+            if isinstance(value, str):
+                cleaned = value.strip()
+                if not cleaned or cleaned == "-":
+                    return ""
+                try:
+                    return os.path.abspath(cleaned)
+                except Exception:
+                    return ""
+            return ""
+
         with DOWNLOAD_LOCK:
             job = DOWNLOAD_JOBS.get(job_id)
             if not job:
@@ -3610,7 +3631,7 @@ def download_worker(job_id):
         if storage_kind == "audio":
             ensure_ffmpeg_available_for_audio_conversion()
 
-        candidate_resume_path = os.path.abspath(resume_target_path) if resume_target_path else ""
+        candidate_resume_path = normalize_download_pathlike(resume_target_path)
         if candidate_resume_path:
             resume_artifact_exists = any(
                 os.path.exists(root)
@@ -3666,8 +3687,9 @@ def download_worker(job_id):
             info_dict = status.get("info_dict") or {}
 
             for path in (hook_filename, hook_tmpfilename, info_dict.get("filepath")):
-                if path and path != "-":
-                    seen_paths.add(os.path.abspath(path))
+                normalized_seen_path = normalize_download_pathlike(path)
+                if normalized_seen_path:
+                    seen_paths.add(normalized_seen_path)
 
             if is_job_cancelled(job_id):
                 stop_action = get_job_stop_action(job_id) or "cancel"
@@ -3680,9 +3702,9 @@ def download_worker(job_id):
             total_candidate = status.get("total_bytes") or status.get("total_bytes_estimate")
             current_total = int(total_candidate) if isinstance(total_candidate, (int, float)) else None
 
-            current_filename = hook_filename or info_dict.get("filepath") or target_path
-            if current_filename and current_filename != "-":
-                target_path = os.path.abspath(current_filename)
+            current_filename = normalize_download_pathlike(hook_filename) or normalize_download_pathlike(info_dict.get("filepath")) or target_path
+            if current_filename:
+                target_path = current_filename
                 relative_path = get_relative_download_path(target_path, storage_kind, owner_username)
 
             component_key, include_in_total = resolve_progress_component(
@@ -3781,15 +3803,17 @@ def download_worker(job_id):
             candidate_paths = set()
 
             for path in (info_dict.get("filepath"), info_dict.get("__real_download")):
-                if path and path != "-":
-                    candidate_paths.add(os.path.abspath(path))
+                normalized_candidate = normalize_download_pathlike(path)
+                if normalized_candidate:
+                    candidate_paths.add(normalized_candidate)
 
             for item in info_dict.get("requested_downloads") or []:
                 if not isinstance(item, dict):
                     continue
                 for path in (item.get("filepath"), item.get("tmpfilename")):
-                    if path and path != "-":
-                        candidate_paths.add(os.path.abspath(path))
+                    normalized_candidate = normalize_download_pathlike(path)
+                    if normalized_candidate:
+                        candidate_paths.add(normalized_candidate)
 
             total_on_disk = 0
             found_any = False
@@ -3867,16 +3891,16 @@ def download_worker(job_id):
 
         requested_downloads = download_info.get("requested_downloads") or []
         for item in requested_downloads:
-            filepath = item.get("filepath")
+            filepath = normalize_download_pathlike(item.get("filepath"))
             if filepath:
-                seen_paths.add(os.path.abspath(filepath))
+                seen_paths.add(filepath)
 
-        final_path = download_info.get("filepath")
+        final_path = normalize_download_pathlike(download_info.get("filepath"))
         if not final_path and requested_downloads:
-            final_path = requested_downloads[-1].get("filepath")
+            final_path = normalize_download_pathlike(requested_downloads[-1].get("filepath"))
 
         if final_path:
-            target_path = os.path.abspath(final_path)
+            target_path = final_path
             seen_paths.add(target_path)
 
         preferred_completed_path = os.path.abspath(

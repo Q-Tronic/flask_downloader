@@ -182,11 +182,28 @@ class DownloadPathService:
                 self._safe_filename(final_filename, default="video.bin"),
             )
         )
-        cleanup_targets = {
-            os.path.abspath(path)
-            for path in (replace_paths or [])
-            if path and os.path.abspath(path) != normalized_target_path
-        }
+        cleanup_targets = set()
+        for path in (replace_paths or []):
+            if isinstance(path, os.PathLike):
+                try:
+                    candidate_path = os.path.abspath(os.fspath(path))
+                except Exception:
+                    continue
+            elif isinstance(path, bytes):
+                try:
+                    candidate_path = os.path.abspath(os.fsdecode(path))
+                except Exception:
+                    continue
+            elif isinstance(path, str):
+                cleaned = path.strip()
+                if not cleaned:
+                    continue
+                candidate_path = os.path.abspath(cleaned)
+            else:
+                continue
+
+            if candidate_path != normalized_target_path:
+                cleanup_targets.add(candidate_path)
 
         cleanup_fn = self._cleanup_download_artifacts or self.cleanup_download_artifacts
         if cleanup_targets:
