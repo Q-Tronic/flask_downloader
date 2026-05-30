@@ -3142,8 +3142,13 @@ def format_bytes_text(num_bytes):
     return SOURCE_MEDIA_SERVICE.format_bytes_text(num_bytes)
 
 
-def get_source_download_match_state(result, format_id, owner_username=None):
-    return SOURCE_MEDIA_SERVICE.get_source_download_match_state(result, format_id, owner_username=owner_username)
+def get_source_download_match_state(result, format_id, owner_username=None, target_filename_override=""):
+    return SOURCE_MEDIA_SERVICE.get_source_download_match_state(
+        result,
+        format_id,
+        owner_username=owner_username,
+        target_filename_override=target_filename_override,
+    )
 
 
 def public_source_download_match_state(state):
