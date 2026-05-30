@@ -2063,11 +2063,36 @@ def migrate_legacy_job_payloads(raw_jobs, path_map, legacy_roots):
     return migrated_jobs, changed
 
 
-def migrate_legacy_dlna_rules(config):
+def migrate_legacy_dlna_rules(config, default_storage_id="local"):
     if not isinstance(config, dict):
         return config, False
 
+    def parse_managed_relative_path_legacy(value):
+        safe_value = safe_relative_download_path(value or "")
+        if not safe_value or not safe_value.startswith("@"):
+            return None
+
+        parts = [str(part or "").strip() for part in safe_value.split("/")]
+        if len(parts) < 4:
+            return None
+
+        storage_id = normalize_storage_id(str(parts[0])[1:], default=normalized_default_storage_id)
+        owner_username = normalize_username(parts[1] or DEFAULT_ADMIN_USERNAME)
+        storage_kind = normalize_storage_kind(parts[2] or "video")
+        user_relative_path = safe_relative_download_path("/".join(parts[3:]))
+        if not user_relative_path:
+            return None
+
+        return {
+            "storage_id": storage_id,
+            "owner_username": owner_username,
+            "storage_kind": storage_kind,
+            "user_relative_path": user_relative_path,
+            "is_legacy": False,
+        }
+
     changed = False
+    normalized_default_storage_id = normalize_storage_id(default_storage_id or "local", default="local")
     media_rules = []
     for raw_rule in config.get("media_rules") or []:
         if not isinstance(raw_rule, dict):
@@ -2076,11 +2101,23 @@ def migrate_legacy_dlna_rules(config):
         rule = dict(raw_rule)
         storage_kind = normalize_storage_kind(rule.get("storage_kind") or "video")
         relative_path = safe_relative_download_path(rule.get("relative_path") or "")
-        canonical_relative_path = canonicalize_managed_relative_path(
-            relative_path,
-            owner_username=DEFAULT_ADMIN_USERNAME,
-            storage_kind=storage_kind,
-        )
+        parsed_relative_path = None
+        if relative_path.startswith("@"):
+            parsed_relative_path = parse_managed_relative_path_legacy(relative_path)
+        if parsed_relative_path and not parsed_relative_path.get("is_legacy"):
+            canonical_relative_path = build_managed_relative_path(
+                parsed_relative_path.get("owner_username") or DEFAULT_ADMIN_USERNAME,
+                parsed_relative_path.get("storage_kind") or storage_kind,
+                parsed_relative_path.get("user_relative_path") or "",
+                storage_id=parsed_relative_path.get("storage_id") or normalized_default_storage_id,
+            )
+        else:
+            canonical_relative_path = build_managed_relative_path(
+                DEFAULT_ADMIN_USERNAME,
+                storage_kind,
+                relative_path,
+                storage_id=normalized_default_storage_id,
+            )
         if canonical_relative_path and canonical_relative_path != relative_path:
             rule["relative_path"] = canonical_relative_path
             changed = True
@@ -2145,7 +2182,15 @@ def migrate_legacy_storage_layout():
         if APP_CONFIG.get("audio_download_root") != admin_audio_root:
             APP_CONFIG["audio_download_root"] = admin_audio_root
             config_changed = True
-        migrated_dlna_config, dlna_changed = migrate_legacy_dlna_rules(normalize_dlna_config(APP_CONFIG.get("dlna")))
+        migrated_dlna_config, dlna_changed = migrate_legacy_dlna_rules(
+            normalize_dlna_config(APP_CONFIG.get("dlna")),
+            default_storage_id=normalize_storage_id(
+                ((APP_CONFIG.get("storage") or {}).get("default_write_storage_id"))
+                or ((APP_CONFIG.get("storage") or {}).get("active_backend"))
+                or "local",
+                default="local",
+            ),
+        )
         if dlna_changed:
             APP_CONFIG["dlna"] = normalize_dlna_config(migrated_dlna_config)
             config_changed = True
