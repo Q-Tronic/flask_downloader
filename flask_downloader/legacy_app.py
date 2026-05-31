@@ -5354,6 +5354,8 @@ LOG_FILE=%s
 APP_ROOT=%s
 APP_PYTHON=%s
 RESET_AFTER_SEC=300
+AUTO_PRUNE_TIMEOUT_SEC=25
+MAX_PRESTART_DELAY_SEC=75
 
 mkdir -p "$(dirname "$STATE_FILE")" "$(dirname "$LOG_FILE")" "$EXPORT_ROOT"
 
@@ -5405,9 +5407,16 @@ auto_prune_missing_rules() {
   if [ ! -x "$APP_PYTHON" ]; then
     return 0
   fi
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin=$(command -v timeout)
+  fi
   local prune_output
+  local prune_status=0
   prune_output=$(
-    cd "$APP_ROOT" && "$APP_PYTHON" - <<'PY'
+    cd "$APP_ROOT" || exit 1
+    if [ -n "$timeout_bin" ]; then
+      PYTHONPATH="$APP_ROOT" "$timeout_bin" "${AUTO_PRUNE_TIMEOUT_SEC}s" "$APP_PYTHON" - <<'PY'
 from flask_downloader.legacy_app import prune_missing_dlna_media_rules
 result = prune_missing_dlna_media_rules(
     files=None,
@@ -5417,7 +5426,27 @@ result = prune_missing_dlna_media_rules(
 if result.get("changed"):
     print(int(result.get("removed_count") or 0))
 PY
-  ) || true
+    else
+      PYTHONPATH="$APP_ROOT" "$APP_PYTHON" - <<'PY'
+from flask_downloader.legacy_app import prune_missing_dlna_media_rules
+result = prune_missing_dlna_media_rules(
+    files=None,
+    sync_runtime=False,
+    restart_service_if_active=False,
+)
+if result.get("changed"):
+    print(int(result.get("removed_count") or 0))
+PY
+    fi
+  )
+  prune_status=$?
+  if [ "$prune_status" -eq 124 ]; then
+    log_line "DLNA guard pominął auto-prune brakujących reguł, bo przekroczył ${AUTO_PRUNE_TIMEOUT_SEC}s."
+    return 0
+  fi
+  if [ "$prune_status" -ne 0 ]; then
+    return 0
+  fi
   prune_output=$(printf '%%s' "$prune_output" | tr -d '\\r' | tail -n 1)
   case "$prune_output" in
     ''|*[!0-9]*)
@@ -5441,6 +5470,10 @@ case "${1:-}" in
       delay_seconds=60
     elif [ "${RESTART_ATTEMPT:-0}" -ge 3 ]; then
       delay_seconds=1800
+    fi
+    if [ "$delay_seconds" -gt "$MAX_PRESTART_DELAY_SEC" ]; then
+      log_line "DLNA guard skrócił backoff z ${delay_seconds}s do ${MAX_PRESTART_DELAY_SEC}s, żeby nie przekroczyć limitu startu systemd."
+      delay_seconds=$MAX_PRESTART_DELAY_SEC
     fi
     if [ "$delay_seconds" -gt 0 ]; then
       log_line "DLNA padła wcześniej. Automatyczna próba ${RESTART_ATTEMPT} za ${delay_seconds}s."
@@ -5959,6 +5992,11 @@ def prune_missing_dlna_media_rules(files=None, sync_runtime=True, restart_servic
     presence_index = build_dlna_library_presence_index(files=files)
     file_keys = presence_index["file_keys"]
     folder_keys = presence_index["folder_keys"]
+    available_storage_ids = set()
+    for candidate_storage_id in iter_storage_ids():
+        candidate_root = os.path.abspath(get_user_storage_base_root(candidate_storage_id))
+        if candidate_storage_id == "local" or os.path.isdir(candidate_root):
+            available_storage_ids.add(candidate_storage_id)
 
     with APP_CONFIG_LOCK:
         dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
@@ -5970,6 +6008,14 @@ def prune_missing_dlna_media_rules(files=None, sync_runtime=True, restart_servic
             kind = str(rule.get("kind") or "").strip().lower()
             storage_kind = normalize_storage_kind(rule.get("storage_kind") or "video")
             relative_path = safe_relative_download_path(rule.get("relative_path") or "")
+            parsed_relative_path = parse_managed_relative_path(relative_path) or {}
+            rule_storage_id = normalize_storage_id(
+                rule.get("storage_id") or parsed_relative_path.get("storage_id") or "local",
+                default="local",
+            )
+            if rule_storage_id not in available_storage_ids:
+                kept_rules.append(rule)
+                continue
             exists = (storage_kind, relative_path) in (folder_keys if kind == "folder" else file_keys)
             if exists:
                 kept_rules.append(rule)
@@ -6393,6 +6439,46 @@ def get_dlna_server_self_client_ips(dlna_config=None):
     return result
 
 
+def resolve_dlna_bind_interface_name(bind_ip):
+    bind_text = str(bind_ip or "").strip()
+    if not bind_text:
+        return ""
+    try:
+        target_ip = ipaddress.ip_address(bind_text)
+    except Exception:
+        return ""
+    if target_ip.version != 4:
+        return ""
+
+    try:
+        result = subprocess.run(
+            ["ip", "-o", "-4", "addr", "show"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except Exception:
+        return ""
+
+    if result.returncode != 0:
+        return ""
+
+    for raw_line in (result.stdout or "").splitlines():
+        line = str(raw_line or "").strip()
+        if not line or " inet " not in line:
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        interface_name = str(parts[1] or "").strip()
+        address_text = str(parts[3] or "").strip().split("/", 1)[0]
+        if address_text == bind_text:
+            return interface_name
+    return ""
+
+
 def write_dlna_gerbera_config(dlna_config=None):
     config = dlna_config or get_dlna_config_snapshot()
     ensure_dlna_runtime_dirs()
@@ -6415,14 +6501,25 @@ def write_dlna_gerbera_config(dlna_config=None):
     home_el.text = DLNA_HOME_DIR
     home_el.attrib.pop("override", None)
 
-    ip_el = gerbera_find(server_el, "ip")
     bind_ip = config.get("bind_ip") or ""
-    if bind_ip:
-        if ip_el is None:
-            ip_el = gerbera_sub_element(server_el, "ip")
-        ip_el.text = bind_ip
-    elif ip_el is not None:
-        server_el.remove(ip_el)
+    ip_el = gerbera_find(server_el, "ip")
+    interface_el = gerbera_find(server_el, "interface")
+    bind_interface_name = resolve_dlna_bind_interface_name(bind_ip)
+    if bind_interface_name:
+        if interface_el is None:
+            interface_el = gerbera_sub_element(server_el, "interface")
+        interface_el.text = bind_interface_name
+        if ip_el is not None:
+            server_el.remove(ip_el)
+    else:
+        if interface_el is not None:
+            server_el.remove(interface_el)
+        if bind_ip:
+            if ip_el is None:
+                ip_el = gerbera_sub_element(server_el, "ip")
+            ip_el.text = bind_ip
+        elif ip_el is not None:
+            server_el.remove(ip_el)
 
     ui_el = gerbera_ensure(server_el, "ui")
     ui_el.set("enabled", "no")
