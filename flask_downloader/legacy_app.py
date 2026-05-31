@@ -6008,9 +6008,12 @@ def prune_missing_dlna_media_rules(files=None, sync_runtime=True, restart_servic
             kind = str(rule.get("kind") or "").strip().lower()
             storage_kind = normalize_storage_kind(rule.get("storage_kind") or "video")
             relative_path = safe_relative_download_path(rule.get("relative_path") or "")
-            parsed_relative_path = parse_managed_relative_path(relative_path) or {}
+            relative_parts = relative_path.split("/") if relative_path else []
+            inferred_storage_id = ""
+            if relative_parts and str(relative_parts[0] or "").startswith(MANAGED_STORAGE_PREFIX):
+                inferred_storage_id = str(relative_parts[0] or "")[1:]
             rule_storage_id = normalize_storage_id(
-                rule.get("storage_id") or parsed_relative_path.get("storage_id") or "local",
+                rule.get("storage_id") or inferred_storage_id or "local",
                 default="local",
             )
             if rule_storage_id not in available_storage_ids:
