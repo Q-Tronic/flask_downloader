@@ -97,7 +97,7 @@ from flask_downloader.paths import (
 from flask_downloader.bootstrap import register_application_routes, start_background_schedulers
 from flask_downloader.services.jobs_service import DownloadJobsService, JobViewService
 from flask_downloader.services.maintenance_service import MaintenanceTaskService
-from flask_downloader.services.storage_service import ManagedStorageService
+from flask_downloader.services.storage_service import MANAGED_STORAGE_PREFIX, ManagedStorageService
 from flask_downloader.services.storage_backend_service import StorageBackendService
 from flask_downloader.services.system_service import SystemServiceHelper
 from flask_downloader.services.download_service import DownloadPathService
