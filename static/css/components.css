@@ -645,6 +645,9 @@
         .dlna-section-grid--stacked {
             grid-template-columns: minmax(0, 1fr);
         }
+        .dlna-panel[data-dlna-panel="dostep"] .dlna-section-grid {
+            grid-template-columns: minmax(0, 1fr);
+        }
         .dlna-subcard {
             display: grid;
             gap: 14px;
