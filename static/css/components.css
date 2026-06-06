@@ -629,6 +629,10 @@
             border-color: rgba(91, 156, 244, 0.55);
             color: var(--text);
         }
+        #dlnaPageRoot {
+            display: grid;
+            gap: 22px;
+        }
         .dlna-panel[hidden],
         .dlna-item-body[hidden] {
             display: none !important;
@@ -637,6 +641,9 @@
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 18px;
+        }
+        .dlna-section-grid--stacked {
+            grid-template-columns: minmax(0, 1fr);
         }
         .dlna-subcard {
             display: grid;
