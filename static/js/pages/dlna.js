@@ -667,7 +667,40 @@
         updateLibrarySelectionSummary();
     }
 
+    function renderIconState() {
+        const iconState = currentState.dlna_icon_state || {};
+        const previewImage = document.getElementById("dlnaIconPreviewImage");
+        const modeLabel = document.getElementById("dlnaIconModeLabel");
+        const sourceName = document.getElementById("dlnaIconSourceName");
+        const updatedAt = document.getElementById("dlnaIconUpdatedAt");
+        const resetButton = document.getElementById("dlnaIconResetButton");
+
+        if (previewImage) {
+            const nextSrc = String(iconState.preview_url || "/api/dlna/icon-preview");
+            if (previewImage.getAttribute("src") !== nextSrc) {
+                previewImage.setAttribute("src", nextSrc);
+            }
+        }
+        if (modeLabel) {
+            modeLabel.textContent = String(iconState.mode_label || "Domyślna ikona Gerbery");
+        }
+        if (sourceName) {
+            sourceName.textContent = iconState.source_name
+                ? ("Plik źródłowy: " + String(iconState.source_name))
+                : "Brak własnego pliku źródłowego.";
+        }
+        if (updatedAt) {
+            updatedAt.textContent = iconState.updated_at_text
+                ? ("Ostatnia zmiana: " + String(iconState.updated_at_text))
+                : "";
+        }
+        if (resetButton) {
+            resetButton.hidden = !(iconState.mode === "custom" || iconState.source_exists);
+        }
+    }
+
     function renderAllStaticSections() {
+        renderIconState();
         renderCollections();
         renderClients();
         renderMediaRules();
@@ -677,6 +710,7 @@
     function renderLiveSections() {
         renderMount();
         renderSummary(false);
+        renderIconState();
         renderPackageAndService();
     }
 
@@ -719,6 +753,25 @@
             },
             body: JSON.stringify(payload || {})
         });
+    }
+
+    async function postFormData(url, formData) {
+        const response = await fetch(url, {
+            method: "POST",
+            body: formData,
+            headers: {
+                "Accept": "application/json",
+                "X-Requested-With": "fetch"
+            }
+        });
+        const data = await response.json().catch(function() { return null; });
+        if (!response.ok || !data) {
+            throw new Error((data && (data.error || data.message)) || "Nie udało się wykonać operacji.");
+        }
+        if (data.ok === false) {
+            throw new Error(data.error || data.message || "Operacja zakończyła się błędem.");
+        }
+        return data;
     }
 
     async function refreshState(rerenderAll) {
@@ -873,6 +926,14 @@
             event.preventDefault();
             return performAction(resyncButton, "Synchronizacja...", function() {
                 return postJson("/api/dlna/resync");
+            });
+        }
+
+        const resetIconButton = event.target.closest("#dlnaIconResetButton");
+        if (resetIconButton) {
+            event.preventDefault();
+            return performAction(resetIconButton, "Przywracanie...", function() {
+                return postJson("/api/dlna/icon-reset");
             });
         }
 
@@ -1051,6 +1112,18 @@
                     bind_ip: form.bind_ip.value,
                     port: form.port.value
                 });
+            });
+        }
+
+        if (form.id === "dlnaIconUploadForm") {
+            event.preventDefault();
+            const button = form.querySelector("button[type='submit']");
+            return performAction(button, "Wgrywanie...", function() {
+                return postFormData("/api/dlna/icon-upload", new FormData(form));
+            }).then(function(ok) {
+                if (ok) {
+                    form.reset();
+                }
             });
         }
 

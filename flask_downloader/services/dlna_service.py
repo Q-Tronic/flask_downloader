@@ -37,6 +37,7 @@ class DlnaLibraryService:
         dlna_export_root,
         dlna_config_xml_file,
         dlna_service_unit_file,
+        get_dlna_icon_state,
     ):
         self._get_mount_info = get_mount_info
         self._get_server_files = get_server_files
@@ -67,6 +68,7 @@ class DlnaLibraryService:
         self._dlna_export_root = dlna_export_root
         self._dlna_config_xml_file = dlna_config_xml_file
         self._dlna_service_unit_file = dlna_service_unit_file
+        self._get_dlna_icon_state = get_dlna_icon_state
 
     @staticmethod
     def _parse_boolean_flag(value, default=False):
@@ -488,6 +490,7 @@ class DlnaLibraryService:
         return {
             "mount": mount,
             "dlna_config": dlna_config,
+            "dlna_icon_state": self._get_dlna_icon_state(dlna_config),
             "collections": self.get_collection_catalog(dlna_config),
             "available_users": self.get_available_users(),
             "media_rules": self.build_media_rule_summaries(dlna_config, files=files),

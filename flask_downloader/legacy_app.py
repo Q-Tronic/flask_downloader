@@ -220,6 +220,10 @@ DLNA_RUNTIME_ROOT = os.path.join(DLNA_TOOLS_ROOT, "runtime")
 DLNA_HOME_DIR = os.path.join(DLNA_RUNTIME_ROOT, "home")
 DLNA_LEGACY_EXPORT_ROOT = os.path.join(DLNA_RUNTIME_ROOT, "export")
 DLNA_EXPORT_ROOT = "/dlna" if os.name != "nt" else DLNA_LEGACY_EXPORT_ROOT
+DLNA_WEBROOT_DIR = os.path.join(DLNA_RUNTIME_ROOT, "web")
+DLNA_SYSTEM_WEBROOT_DIR = os.path.join("/usr", "share", "gerbera", "web")
+DLNA_ICONS_DIR = os.path.join(DLNA_WEBROOT_DIR, "icons")
+DLNA_CUSTOM_ASSETS_DIR = os.path.join(DLNA_RUNTIME_ROOT, "custom")
 DLNA_CONFIG_DIR = os.path.join(DLNA_RUNTIME_ROOT, "config")
 DLNA_SCRIPT_DIR = os.path.join(DLNA_CONFIG_DIR, "js")
 DLNA_COMMON_SCRIPT_DIR = os.path.join(DLNA_SCRIPT_DIR, "common")
@@ -236,6 +240,20 @@ DLNA_VIRTUAL_LAYOUT_SCRIPT_FILE = os.path.join(DLNA_CUSTOM_SCRIPT_DIR, "zz_flask
 DLNA_LEGACY_IMPORT_SCRIPT_FILE = os.path.join(DLNA_LEGACY_SCRIPT_DIR, "flask_dlna_import.js")
 DLNA_RESTART_GUARD_SCRIPT_FILE = os.path.join(DLNA_RUNTIME_BIN_DIR, "dlna_restart_guard.sh")
 DLNA_RESTART_STATE_FILE = os.path.join(DLNA_HOME_DIR, "restart_backoff.env")
+DLNA_CUSTOM_ICON_SOURCE_BASENAME = "dlna-custom-icon-source"
+DLNA_ALLOWED_ICON_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+DLNA_CUSTOM_ICON_MAX_BYTES = 10 * 1024 * 1024
+DLNA_ICON_VARIANTS = (
+    (120, "png", "image/png"),
+    (120, "bmp", "image/x-ms-bmp"),
+    (120, "jpg", "image/jpeg"),
+    (48, "png", "image/png"),
+    (48, "bmp", "image/x-ms-bmp"),
+    (48, "jpg", "image/jpeg"),
+    (32, "png", "image/png"),
+    (32, "bmp", "image/x-ms-bmp"),
+    (32, "jpg", "image/jpeg"),
+)
 GERBERA_SYSTEM_SCRIPT_DIR = os.path.join("/usr", "share", "gerbera", "js")
 DLNA_SERVICE_UNIT_FILE = os.path.join("/etc", "systemd", "system", "%s.service" % DLNA_SERVICE_NAME)
 DLNA_DEFAULT_PORT = CONFIG_DLNA_DEFAULT_PORT
@@ -818,6 +836,9 @@ def default_dlna_config():
         "server_name": "Flask Downloader DLNA",
         "bind_ip": "",
         "port": DLNA_DEFAULT_PORT,
+        "icon_mode": "default",
+        "icon_source_name": "",
+        "icon_updated_at": 0.0,
         "collections": [],
         "clients": [],
         "media_rules": [],
@@ -6163,6 +6184,9 @@ def ensure_dlna_runtime_dirs():
         DLNA_RUNTIME_ROOT,
         DLNA_HOME_DIR,
         DLNA_EXPORT_ROOT,
+        DLNA_WEBROOT_DIR,
+        DLNA_ICONS_DIR,
+        DLNA_CUSTOM_ASSETS_DIR,
         DLNA_CONFIG_DIR,
         DLNA_SCRIPT_DIR,
         DLNA_COMMON_SCRIPT_DIR,
@@ -6172,6 +6196,209 @@ def ensure_dlna_runtime_dirs():
         DLNA_LOG_DIR,
     ):
         ensure_directory(path)
+
+
+def get_dlna_custom_icon_source_file_candidates():
+    ensure_dlna_runtime_dirs()
+    candidates = []
+    for extension in sorted(DLNA_ALLOWED_ICON_EXTENSIONS):
+        candidates.append(os.path.join(DLNA_CUSTOM_ASSETS_DIR, "%s%s" % (DLNA_CUSTOM_ICON_SOURCE_BASENAME, extension)))
+    return candidates
+
+
+def get_dlna_custom_icon_source_file():
+    for candidate in get_dlna_custom_icon_source_file_candidates():
+        if os.path.isfile(candidate):
+            return candidate
+    return ""
+
+
+def get_dlna_default_icon_file(size=120, extension="png"):
+    return os.path.join(DLNA_SYSTEM_WEBROOT_DIR, "icons", "mt-icon%s.%s" % (int(size or 120), str(extension or "png").strip().lower()))
+
+
+def get_dlna_runtime_icon_file(size=120, extension="png"):
+    return os.path.join(DLNA_ICONS_DIR, "mt-icon%s.%s" % (int(size or 120), str(extension or "png").strip().lower()))
+
+
+def sync_path_as_symlink_or_copy(source_path, target_path):
+    if not os.path.exists(source_path):
+        raise FileNotFoundError(source_path)
+    remove_path_if_exists(target_path)
+    ensure_directory(os.path.dirname(target_path))
+    try:
+        os.symlink(source_path, target_path)
+    except Exception:
+        shutil.copy2(source_path, target_path)
+
+
+def build_dlna_icon_state(dlna_config=None):
+    config = dlna_config or get_dlna_config_snapshot()
+    icon_mode = "custom" if str(config.get("icon_mode") or "").strip().lower() == "custom" else "default"
+    source_name = str(config.get("icon_source_name") or "").strip()
+    try:
+        updated_at = float(config.get("icon_updated_at") or 0.0)
+    except Exception:
+        updated_at = 0.0
+    source_exists = bool(get_dlna_custom_icon_source_file())
+    runtime_preview = get_dlna_runtime_icon_file(120, "png")
+    preview_exists = os.path.isfile(runtime_preview)
+    return {
+        "mode": icon_mode,
+        "mode_label": "Własna ikona" if icon_mode == "custom" and source_exists else "Domyślna ikona Gerbery",
+        "source_name": source_name,
+        "updated_at": updated_at,
+        "updated_at_text": format_ts(updated_at) if updated_at else "",
+        "source_exists": source_exists,
+        "preview_exists": preview_exists,
+        "preview_url": "/api/dlna/icon-preview?v=%s" % (int(updated_at or 0) if updated_at else 0),
+    }
+
+
+def run_dlna_icon_ffmpeg(source_path, target_path, size, extension):
+    ffmpeg_binary, _ = resolve_ffmpeg_binary()
+    if not ffmpeg_binary:
+        raise RuntimeError("Brakuje ffmpeg potrzebnego do przygotowania ikon DLNA.")
+
+    normalized_extension = str(extension or "").strip().lower()
+    if normalized_extension == "png":
+        filter_chain = (
+            "scale=%(size)s:%(size)s:force_original_aspect_ratio=decrease,"
+            "pad=%(size)s:%(size)s:(ow-iw)/2:(oh-ih)/2:color=0x00000000"
+        ) % {"size": int(size)}
+        command = [
+            ffmpeg_binary,
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            source_path,
+            "-vf",
+            filter_chain,
+            "-frames:v",
+            "1",
+            target_path,
+        ]
+    else:
+        filter_chain = (
+            "scale=%(size)s:%(size)s:force_original_aspect_ratio=decrease,"
+            "pad=%(size)s:%(size)s:(ow-iw)/2:(oh-ih)/2:color=white"
+        ) % {"size": int(size)}
+        command = [
+            ffmpeg_binary,
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            source_path,
+            "-vf",
+            filter_chain,
+            "-frames:v",
+            "1",
+        ]
+        if normalized_extension == "jpg":
+            command.extend(["-q:v", "2"])
+        command.append(target_path)
+
+    result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    if result.returncode != 0 or not os.path.isfile(target_path):
+        raise RuntimeError(str(result.stderr or result.stdout or "Nie udało się przygotować wariantu ikony DLNA.").strip())
+
+
+def generate_dlna_icon_variants(source_path, target_dir):
+    ensure_directory(target_dir)
+    for size, extension, _mime in DLNA_ICON_VARIANTS:
+        target_path = os.path.join(target_dir, "mt-icon%s.%s" % (int(size), extension))
+        run_dlna_icon_ffmpeg(source_path, target_path, size, extension)
+
+
+def ensure_dlna_webroot_assets(dlna_config=None):
+    config = dlna_config or get_dlna_config_snapshot()
+    ensure_dlna_runtime_dirs()
+    ensure_directory(DLNA_WEBROOT_DIR)
+    if os.path.isdir(DLNA_SYSTEM_WEBROOT_DIR):
+        for entry in os.listdir(DLNA_SYSTEM_WEBROOT_DIR):
+            if entry == "icons":
+                continue
+            source_path = os.path.join(DLNA_SYSTEM_WEBROOT_DIR, entry)
+            target_path = os.path.join(DLNA_WEBROOT_DIR, entry)
+            sync_path_as_symlink_or_copy(source_path, target_path)
+
+    clear_directory_contents(DLNA_ICONS_DIR)
+    icon_mode = "custom" if str(config.get("icon_mode") or "").strip().lower() == "custom" else "default"
+    custom_source_path = get_dlna_custom_icon_source_file()
+    if icon_mode == "custom" and custom_source_path and os.path.isfile(custom_source_path):
+        generate_dlna_icon_variants(custom_source_path, DLNA_ICONS_DIR)
+        return
+
+    for size, extension, _mime in DLNA_ICON_VARIANTS:
+        source_path = get_dlna_default_icon_file(size, extension)
+        target_path = get_dlna_runtime_icon_file(size, extension)
+        sync_path_as_symlink_or_copy(source_path, target_path)
+
+
+def validate_dlna_icon_upload(file_storage):
+    if file_storage is None or not str(getattr(file_storage, "filename", "") or "").strip():
+        raise ValueError("Najpierw wybierz plik ikony DLNA.")
+    file_name = str(file_storage.filename or "").strip()
+    extension = os.path.splitext(file_name)[1].strip().lower()
+    if extension not in DLNA_ALLOWED_ICON_EXTENSIONS:
+        raise ValueError("Ikona DLNA musi być plikiem PNG, JPG, BMP albo WEBP.")
+    file_storage.stream.seek(0, os.SEEK_END)
+    file_size = int(file_storage.stream.tell() or 0)
+    file_storage.stream.seek(0)
+    if file_size <= 0:
+        raise ValueError("Wybrany plik ikony DLNA jest pusty.")
+    if file_size > DLNA_CUSTOM_ICON_MAX_BYTES:
+        raise ValueError("Ikona DLNA jest zbyt duża. Limit to 10 MB.")
+    return file_name, extension
+
+
+def store_dlna_custom_icon(file_storage):
+    file_name, extension = validate_dlna_icon_upload(file_storage)
+    ensure_dlna_runtime_dirs()
+    temp_root = tempfile.mkdtemp(prefix="dlna-icon-", dir=DLNA_RUNTIME_ROOT)
+    try:
+        temp_source_path = os.path.join(temp_root, "source%s" % extension)
+        file_storage.save(temp_source_path)
+        temp_icons_dir = os.path.join(temp_root, "icons")
+        generate_dlna_icon_variants(temp_source_path, temp_icons_dir)
+
+        for candidate in get_dlna_custom_icon_source_file_candidates():
+            remove_path_if_exists(candidate)
+
+        final_source_path = os.path.join(DLNA_CUSTOM_ASSETS_DIR, "%s%s" % (DLNA_CUSTOM_ICON_SOURCE_BASENAME, extension))
+        shutil.move(temp_source_path, final_source_path)
+
+        dlna_config = get_dlna_config_snapshot()
+        dlna_config["icon_mode"] = "custom"
+        dlna_config["icon_source_name"] = file_name[:160]
+        dlna_config["icon_updated_at"] = time.time()
+        set_dlna_config(dlna_config)
+        sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=False)
+        return build_dlna_icon_state(dlna_config)
+    finally:
+        remove_path_if_exists(temp_root)
+
+
+def reset_dlna_custom_icon():
+    ensure_dlna_runtime_dirs()
+    for candidate in get_dlna_custom_icon_source_file_candidates():
+        remove_path_if_exists(candidate)
+    dlna_config = get_dlna_config_snapshot()
+    dlna_config["icon_mode"] = "default"
+    dlna_config["icon_source_name"] = ""
+    dlna_config["icon_updated_at"] = time.time()
+    set_dlna_config(dlna_config)
+    sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=False)
+    return build_dlna_icon_state(dlna_config)
 
 
 def rebuild_dlna_export_tree(dlna_config=None, files=None):
@@ -6485,6 +6712,7 @@ def resolve_dlna_bind_interface_name(bind_ip):
 def write_dlna_gerbera_config(dlna_config=None):
     config = dlna_config or get_dlna_config_snapshot()
     ensure_dlna_runtime_dirs()
+    ensure_dlna_webroot_assets(config)
     ensure_dlna_export_root_directory()
     cleanup_dlna_legacy_export_root()
     export_state = rebuild_dlna_export_tree(config)
@@ -6503,6 +6731,7 @@ def write_dlna_gerbera_config(dlna_config=None):
     home_el = gerbera_ensure(server_el, "home")
     home_el.text = DLNA_HOME_DIR
     home_el.attrib.pop("override", None)
+    gerbera_ensure(server_el, "webroot").text = DLNA_WEBROOT_DIR
 
     bind_ip = config.get("bind_ip") or ""
     ip_el = gerbera_find(server_el, "ip")
@@ -7494,6 +7723,7 @@ DLNA_LIBRARY_SERVICE = DlnaLibraryService(
     dlna_export_root=DLNA_EXPORT_ROOT,
     dlna_config_xml_file=DLNA_CONFIG_XML_FILE,
     dlna_service_unit_file=DLNA_SERVICE_UNIT_FILE,
+    get_dlna_icon_state=build_dlna_icon_state,
 )
 
 

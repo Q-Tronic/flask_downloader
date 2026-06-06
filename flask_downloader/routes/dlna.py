@@ -1,4 +1,6 @@
-from flask import Response, jsonify, redirect, request, url_for
+import os
+
+from flask import Response, jsonify, redirect, request, send_file, url_for
 
 
 def register_dlna_routes(app, deps):
@@ -17,6 +19,10 @@ def register_dlna_routes(app, deps):
     DLNA_LOG_BROWSER_MAX_BYTES = deps["DLNA_LOG_BROWSER_MAX_BYTES"]
     build_dlna_collection_library_results = deps["build_dlna_collection_library_results"]
     update_dlna_general_settings = deps["update_dlna_general_settings"]
+    store_dlna_custom_icon = deps["store_dlna_custom_icon"]
+    reset_dlna_custom_icon = deps["reset_dlna_custom_icon"]
+    get_dlna_runtime_icon_file = deps["get_dlna_runtime_icon_file"]
+    get_dlna_default_icon_file = deps["get_dlna_default_icon_file"]
     build_dlna_json_response = deps["build_dlna_json_response"]
     refresh_dlna_package_state = deps["refresh_dlna_package_state"]
     sync_dlna_runtime_safe = deps["sync_dlna_runtime_safe"]
@@ -134,6 +140,47 @@ def register_dlna_routes(app, deps):
             return build_dlna_json_response(message="Ustawienia serwera DLNA zostały zapisane.", kind="success")
         except Exception as exc:
             return build_dlna_json_response(ok=False, message=str(exc), kind="error", status_code=400)
+
+    @app.route("/api/dlna/icon-upload", methods=["POST"])
+    def api_dlna_icon_upload():
+        auth_error = require_admin_json()
+        if auth_error:
+            return auth_error
+
+        uploaded_file = request.files.get("icon")
+        try:
+            store_dlna_custom_icon(uploaded_file)
+            return build_dlna_json_response(message="Zapisano własną ikonę serwera DLNA.", kind="success")
+        except Exception as exc:
+            return build_dlna_json_response(ok=False, message=str(exc), kind="error", status_code=400)
+
+    @app.route("/api/dlna/icon-reset", methods=["POST"])
+    def api_dlna_icon_reset():
+        auth_error = require_admin_json()
+        if auth_error:
+            return auth_error
+
+        try:
+            reset_dlna_custom_icon()
+            return build_dlna_json_response(message="Przywrócono domyślną ikonę Gerbery.", kind="success")
+        except Exception as exc:
+            return build_dlna_json_response(ok=False, message=str(exc), kind="error", status_code=400)
+
+    @app.route("/api/dlna/icon-preview", methods=["GET"])
+    def api_dlna_icon_preview():
+        auth_error = require_admin_json()
+        if auth_error:
+            return auth_error
+
+        preview_path = get_dlna_runtime_icon_file(120, "png")
+        if not os.path.isfile(preview_path):
+            preview_path = get_dlna_default_icon_file(120, "png")
+        if not preview_path or not os.path.isfile(preview_path):
+            return Response(status=404)
+
+        response = send_file(preview_path, mimetype="image/png", conditional=True, max_age=0)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.route("/api/dlna/package-check", methods=["POST"])
     def api_dlna_package_check():

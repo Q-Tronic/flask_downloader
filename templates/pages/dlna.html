@@ -51,6 +51,38 @@
         <h2 class="section-title">Pakiet i usługa</h2>
         <p class="muted">Panel utrzymuje <code>gerbera</code> przez <code>apt</code>, preferując oficjalne repo Gerbera zamiast starego pakietu systemowego Debiana.</p>
 
+        <div class="dlna-subcard" style="margin-bottom: 18px;">
+            <div class="card-heading">
+                <div class="card-title">Ikona serwera DLNA</div>
+                <div class="card-subtitle">Ta ikonka jest pokazywana klientom DLNA, np. telewizorom Samsung, zamiast domyślnego kwiatuszka Gerbery.</div>
+            </div>
+            <div class="dlna-icon-grid">
+                <div class="dlna-icon-preview-card">
+                    <img id="dlnaIconPreviewImage" class="dlna-icon-preview-image" src="{{ url_for('api_dlna_icon_preview') }}?v={{ asset_version }}" alt="Podgląd ikonki serwera DLNA">
+                    <div class="dlna-icon-preview-meta">
+                        <strong id="dlnaIconModeLabel">Domyślna ikona Gerbery</strong>
+                        <span id="dlnaIconSourceName" class="small">Brak własnego pliku źródłowego.</span>
+                        <span id="dlnaIconUpdatedAt" class="small"></span>
+                    </div>
+                </div>
+                <div class="dlna-icon-actions-wrap">
+                    <form id="dlnaIconUploadForm" class="auth-form">
+                        <div class="field-group">
+                            <label class="field-label" for="dlnaIconFile">Własna ikonka DLNA</label>
+                            <input id="dlnaIconFile" type="file" name="icon" accept=".png,.jpg,.jpeg,.bmp,.webp,image/png,image/jpeg,image/bmp,image/webp" required>
+                        </div>
+                        <div class="dlna-item-actions">
+                            <button type="submit" class="btn">Wgraj ikonę DLNA</button>
+                            <button id="dlnaIconResetButton" type="button" class="btn btn-secondary">Przywróć ikonę Gerbery</button>
+                        </div>
+                    </form>
+                    <div class="dlna-compact-note">
+                        Najlepiej użyć kwadratowego obrazka PNG, JPG, BMP albo WEBP. Panel przygotuje automatycznie wszystkie potrzebne rozmiary dla Gerbery.
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="dlna-section-grid dlna-section-grid--stacked" style="grid-template-columns: minmax(0, 1fr);">
             <div class="dlna-subcard">
                 <div class="card-heading">

@@ -274,6 +274,13 @@ class DlnaUpdateService:
         except Exception:
             port = state["port"]
 
+        icon_mode = "custom" if str(value.get("icon_mode") or state.get("icon_mode") or "").strip().lower() == "custom" else "default"
+        icon_source_name = self.normalize_description(value.get("icon_source_name"), max_len=160)
+        try:
+            icon_updated_at = float(value.get("icon_updated_at") or 0.0)
+        except Exception:
+            icon_updated_at = 0.0
+
         collection_items = []
         collection_ids = set()
         for raw in value.get("collections") or []:
@@ -323,6 +330,9 @@ class DlnaUpdateService:
             "server_name": server_name,
             "bind_ip": bind_ip,
             "port": port,
+            "icon_mode": icon_mode,
+            "icon_source_name": icon_source_name,
+            "icon_updated_at": icon_updated_at,
             "collections": collection_items,
             "clients": client_items,
             "media_rules": rule_items,
