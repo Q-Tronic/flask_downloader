@@ -128,13 +128,6 @@ async function resumeJob(jobId) {
 }
 
 async function retryJob(jobId, failureHint) {
-    const confirmMessage = failureHint
-        ? "Uruchomić to zadanie ponownie?\n\n" + failureHint
-        : "Uruchomić to zadanie ponownie z tymi samymi ustawieniami?";
-    if (!confirm(confirmMessage)) {
-        return;
-    }
-
     try {
         const response = await fetch("/api/jobs/" + encodeURIComponent(jobId) + "/retry", {
             method: "POST"
@@ -146,7 +139,10 @@ async function retryJob(jobId, failureHint) {
             return;
         }
 
-        showToast(data.message || "Dodano zadanie do kolejki ponownie.", "success");
+        const successMessage = failureHint
+            ? (data.message || "Ponowiono zadanie.") + " " + failureHint
+            : (data.message || "Ponowiono zadanie.");
+        showToast(successMessage.trim(), "success");
         refreshData();
     } catch (err) {
         showToast("Błąd ponawiania zadania: " + err, "error");
