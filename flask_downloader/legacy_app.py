@@ -3475,16 +3475,46 @@ def get_mount_info(auto_remount=True, viewer_username=None, is_admin=None):
     storage_config = get_storage_config_snapshot()
     active_backend = storage_config["active_backend"]
     active_root = get_storage_active_root(storage_config)
-    online, message = ensure_share_ready(auto_remount=auto_remount)
     admin_view = is_admin_authenticated() if is_admin is None else bool(is_admin)
     username = str(viewer_username or get_current_username() or "").strip()
     video_dir = get_daily_download_dir(owner_username=username or DEFAULT_ADMIN_USERNAME)
     audio_dir = get_daily_download_dir(media_kind="audio", owner_username=username or DEFAULT_ADMIN_USERNAME)
     active_network_mode = normalize_network_storage_mode(storage_config.get("network", {}).get("mode") or "managed_smb")
-    runtime_access = read_storage_runtime_access_state(
-        active_root,
-        require_mount=(active_backend == "network" and active_network_mode == "managed_smb"),
-    )
+
+    if auto_remount:
+        online, message = ensure_share_ready(auto_remount=True)
+        runtime_access = read_storage_runtime_access_state(
+            active_root,
+            require_mount=(active_backend == "network" and active_network_mode == "managed_smb"),
+        )
+    else:
+        cached_checked_at = float(LAST_MOUNT_STATUS.get("checked_at") or 0.0)
+        cached_online = bool(LAST_MOUNT_STATUS.get("online"))
+        cached_message = str(LAST_MOUNT_STATUS.get("message") or "").strip()
+
+        if cached_checked_at > 0:
+            online = cached_online
+            message = cached_message or "Używam ostatniego znanego stanu storage."
+        elif active_backend == "local":
+            online = True
+            message = "Stan lokalnego storage zostanie zweryfikowany przy operacji na plikach lub w konfiguracji."
+        elif active_network_mode == "external_path":
+            online = False
+            message = "Stan zewnętrznej ścieżki storage nie został jeszcze zweryfikowany."
+        else:
+            online = False
+            message = "Stan udziału sieciowego nie został jeszcze zweryfikowany."
+
+        runtime_access = {
+            "path": os.path.abspath(str(active_root or "").strip() or "."),
+            "exists": False,
+            "is_mount": False,
+            "read_ok": False,
+            "write_ok": False,
+            "execute_ok": False,
+            "message": "Szczegóły dostępu do storage zostaną sprawdzone przy operacji na plikach lub w konfiguracji.",
+        }
+
     public_message = message if admin_view else (
         "Przestrzeń użytkowników jest gotowa."
         if online else
