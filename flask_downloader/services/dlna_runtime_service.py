@@ -149,8 +149,9 @@ class DlnaRuntimeService:
                     else {}
                 )
                 service_was_active = current_service_state.get("active_state") == "active"
+                should_start_after_sync = bool(dlna_config.get("enabled")) and bool(package_state["installed"])
                 should_restart_after_sync = bool(restart_service_if_active) and service_was_active
-                next_phase = "starting" if not service_was_active and bool(dlna_config.get("enabled")) else "rebuilding"
+                next_phase = "starting" if not service_was_active and should_start_after_sync else "rebuilding"
                 phase_detail = (
                     "Uruchamiam serwer DLNA po zapisaniu zmian."
                     if next_phase == "starting"
@@ -181,11 +182,11 @@ class DlnaRuntimeService:
                 )
 
                 if package_state["installed"]:
-                    allow_runtime_probe = not should_restart_after_sync
+                    allow_runtime_probe = not should_start_after_sync
                     self._validate_dlna_gerbera_config(allow_runtime_probe=allow_runtime_probe)
                     self._write_dlna_service_unit()
                     self._run_systemctl_command("daemon-reload")
-                    if should_restart_after_sync:
+                    if should_start_after_sync and (should_restart_after_sync or not service_was_active):
                         self._set_dlna_runtime_phase("starting", "Uruchamiam serwer DLNA po przebudowie biblioteki.")
                         self.ensure_service_started(enable_unit=False, timeout=90, failure_label="restartu")
 

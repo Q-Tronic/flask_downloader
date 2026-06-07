@@ -246,12 +246,14 @@
                 ${lastItem ? `<div class="dlna-sync-toast-item">Ostatni plik: ${toastEscapeHtml(lastItem)}</div>` : ""}
                 <div class="dlna-sync-toast-actions">
                     <button type="button" class="btn btn-primary" data-dlna-sync-action ${dlnaManualSyncInFlight ? "disabled" : ""}>${toastEscapeHtml(buttonLabel)}</button>
+                    <button type="button" class="btn btn-secondary" data-dlna-sync-dismiss ${dlnaManualSyncInFlight ? "disabled" : ""}>Ukryj przypomnienie</button>
                 </div>
             </div>
         `;
 
         var button = host.querySelector("[data-dlna-sync-action]");
-        if (!button) {
+        var dismissButton = host.querySelector("[data-dlna-sync-dismiss]");
+        if (!button || !dismissButton) {
             return;
         }
         button.addEventListener("click", function() {
@@ -279,6 +281,36 @@
                 });
             }).catch(function(error) {
                 showUiToast(error && error.message ? error.message : "Nie udało się zaktualizować biblioteki DLNA.", "error");
+            }).finally(function() {
+                dlnaManualSyncInFlight = false;
+                renderDlnaSyncNotice(dlnaManualSyncNoticeState);
+            });
+        });
+        dismissButton.addEventListener("click", function() {
+            if (dlnaManualSyncInFlight) {
+                return;
+            }
+            dlnaManualSyncInFlight = true;
+            renderDlnaSyncNotice(dlnaManualSyncNoticeState);
+            fetch("/api/dlna/pending-dismiss", {
+                method: "POST",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({}),
+            }).then(function(response) {
+                return response.json().catch(function() {
+                    return {};
+                }).then(function(payload) {
+                    if (!response.ok || payload.ok === false) {
+                        throw new Error(String(payload.message || "Nie udało się ukryć przypomnienia DLNA."));
+                    }
+                    showUiToast(String(payload.message || "Przypomnienie DLNA zostało ukryte."), "success");
+                    return refreshDownloadToasts();
+                });
+            }).catch(function(error) {
+                showUiToast(error && error.message ? error.message : "Nie udało się ukryć przypomnienia DLNA.", "error");
             }).finally(function() {
                 dlnaManualSyncInFlight = false;
                 renderDlnaSyncNotice(dlnaManualSyncNoticeState);

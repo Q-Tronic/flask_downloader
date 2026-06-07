@@ -33,6 +33,7 @@ def register_dlna_routes(app, deps):
     set_dlna_service_enabled = deps["set_dlna_service_enabled"]
     restart_dlna_service_now = deps["restart_dlna_service_now"]
     sync_dlna_runtime = deps["sync_dlna_runtime"]
+    dismiss_dlna_manual_sync_notice = deps["dismiss_dlna_manual_sync_notice"]
     create_dlna_collection = deps["create_dlna_collection"]
     update_dlna_collection = deps["update_dlna_collection"]
     delete_dlna_collection = deps["delete_dlna_collection"]
@@ -252,6 +253,18 @@ def register_dlna_routes(app, deps):
         try:
             sync_dlna_runtime(restart_service_if_active=True, force_full_rescan=True)
             return build_dlna_json_response(message="Biblioteka DLNA została zsynchronizowana.", kind="success")
+        except Exception as exc:
+            return build_dlna_json_response(ok=False, message=str(exc), kind="error", status_code=500)
+
+    @app.route("/api/dlna/pending-dismiss", methods=["POST"])
+    def api_dlna_pending_dismiss():
+        auth_error = require_admin_json()
+        if auth_error:
+            return auth_error
+
+        try:
+            dismiss_dlna_manual_sync_notice()
+            return build_dlna_json_response(message="Ukryto przypomnienie o oczekujących plikach DLNA.", kind="success")
         except Exception as exc:
             return build_dlna_json_response(ok=False, message=str(exc), kind="error", status_code=500)
 

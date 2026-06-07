@@ -179,6 +179,7 @@ def register_application_routes(app, context):
         "set_dlna_service_enabled": context["set_dlna_service_enabled"],
         "restart_dlna_service_now": context["restart_dlna_service_now"],
         "sync_dlna_runtime": context["sync_dlna_runtime"],
+        "dismiss_dlna_manual_sync_notice": context["dismiss_dlna_manual_sync_notice"],
         "create_dlna_collection": context["create_dlna_collection"],
         "update_dlna_collection": context["update_dlna_collection"],
         "delete_dlna_collection": context["delete_dlna_collection"],

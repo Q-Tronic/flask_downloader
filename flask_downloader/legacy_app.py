@@ -106,7 +106,12 @@ from flask_downloader.services.ffmpeg_service import FfmpegMaintenanceService
 from flask_downloader.services.ytdlp_service import YtDlpMaintenanceService
 from flask_downloader.services.calendar_service import CalendarService
 from flask_downloader.services.app_update_service import AppUpdateService
-from flask_downloader.services.dlna_service import DlnaLibraryService
+from flask_downloader.services.dlna_service import (
+    DLNA_LIBRARY_ROOT_NAME,
+    DLNA_SUPPORTED_IMAGE_EXTENSIONS,
+    DLNA_SUPPORTED_VIDEO_EXTENSIONS,
+    DlnaLibraryService,
+)
 from flask_downloader.services.dlna_runtime_service import DlnaRuntimeService
 from flask_downloader.services.dlna_update_service import DlnaUpdateService
 from flask_downloader.services.page_state_service import PageStateService
@@ -853,6 +858,7 @@ def default_dlna_config():
         "pending_manual_sync_paths": [],
         "pending_manual_sync_since": 0.0,
         "pending_manual_sync_last_item": "",
+        "pending_manual_sync_dismissed_at": 0.0,
     }
 
 
@@ -1685,17 +1691,71 @@ def normalize_dlna_pending_manual_sync_paths(paths):
     return normalized_paths
 
 
+def sanitize_dlna_manual_sync_notice_config(dlna_config):
+    config = normalize_dlna_config(dlna_config if isinstance(dlna_config, dict) else {})
+    original_paths = normalize_dlna_pending_manual_sync_paths(config.get("pending_manual_sync_paths") or [])
+    known_paths = set()
+    for entry in config.get("entries") or []:
+        source_relative_path = canonicalize_managed_relative_path(
+            entry.get("source_relative_path") or "",
+            owner_username=entry.get("owner_username") or DEFAULT_ADMIN_USERNAME,
+            storage_kind=normalize_storage_kind(entry.get("source_storage_kind") or "video"),
+        ) or safe_relative_download_path(entry.get("source_relative_path") or "")
+        current_relative_path = safe_relative_download_path(entry.get("current_relative_path") or "")
+        if source_relative_path:
+            known_paths.add(source_relative_path)
+        if current_relative_path:
+            known_paths.add(current_relative_path)
+
+    sanitized_paths = [
+        item
+        for item in original_paths
+        if item in known_paths
+    ]
+    changed = sanitized_paths != original_paths
+    config["pending_manual_sync_paths"] = sanitized_paths
+    if sanitized_paths:
+        if not float(config.get("pending_manual_sync_since") or 0.0):
+            config["pending_manual_sync_since"] = time.time()
+            changed = True
+    else:
+        if float(config.get("pending_manual_sync_since") or 0.0):
+            config["pending_manual_sync_since"] = 0.0
+            changed = True
+        if str(config.get("pending_manual_sync_last_item") or "").strip():
+            config["pending_manual_sync_last_item"] = ""
+            changed = True
+        if float(config.get("pending_manual_sync_dismissed_at") or 0.0):
+            config["pending_manual_sync_dismissed_at"] = 0.0
+            changed = True
+    return config, changed
+
+
 def get_dlna_manual_sync_notice_state(dlna_config=None):
     config = normalize_dlna_config(dlna_config if dlna_config is not None else get_dlna_config_snapshot())
+    config, sanitized = sanitize_dlna_manual_sync_notice_config(config)
+    if dlna_config is None and sanitized:
+        with APP_CONFIG_LOCK:
+            latest_dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
+            latest_dlna_config, latest_changed = sanitize_dlna_manual_sync_notice_config(latest_dlna_config)
+            if latest_changed:
+                APP_CONFIG["dlna"] = latest_dlna_config
+                write_app_config_locked()
+                config = copy.deepcopy(latest_dlna_config)
     pending_paths = normalize_dlna_pending_manual_sync_paths(config.get("pending_manual_sync_paths") or [])
     try:
         pending_since = float(config.get("pending_manual_sync_since") or 0.0)
     except Exception:
         pending_since = 0.0
+    try:
+        dismissed_at = float(config.get("pending_manual_sync_dismissed_at") or 0.0)
+    except Exception:
+        dismissed_at = 0.0
     last_item = str(config.get("pending_manual_sync_last_item") or "").strip()
     pending_count = len(pending_paths)
+    visible_pending = bool(pending_count and pending_since > dismissed_at)
     return {
-        "pending": bool(pending_count),
+        "pending": visible_pending,
         "count": pending_count,
         "since": pending_since,
         "since_text": format_ts(pending_since) if pending_since else "",
@@ -1723,6 +1783,9 @@ def mark_dlna_manual_sync_needed(relative_path="", item_label=""):
             changed = True
         if item_label_text and item_label_text != str(dlna_config.get("pending_manual_sync_last_item") or ""):
             dlna_config["pending_manual_sync_last_item"] = item_label_text[:200]
+            changed = True
+        if float(dlna_config.get("pending_manual_sync_dismissed_at") or 0.0):
+            dlna_config["pending_manual_sync_dismissed_at"] = 0.0
             changed = True
         dlna_config["pending_manual_sync_paths"] = pending_paths
         if changed:
@@ -1756,6 +1819,22 @@ def clear_dlna_manual_sync_needed():
         dlna_config["pending_manual_sync_paths"] = []
         dlna_config["pending_manual_sync_since"] = 0.0
         dlna_config["pending_manual_sync_last_item"] = ""
+        dlna_config["pending_manual_sync_dismissed_at"] = 0.0
+        APP_CONFIG["dlna"] = normalize_dlna_config(dlna_config)
+        write_app_config_locked()
+        return get_dlna_manual_sync_notice_state(dlna_config)
+
+
+def dismiss_dlna_manual_sync_notice():
+    with APP_CONFIG_LOCK:
+        dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
+        pending_paths = normalize_dlna_pending_manual_sync_paths(dlna_config.get("pending_manual_sync_paths") or [])
+        if not pending_paths:
+            return get_dlna_manual_sync_notice_state(dlna_config)
+        dlna_config["pending_manual_sync_dismissed_at"] = max(
+            time.time(),
+            float(dlna_config.get("pending_manual_sync_since") or 0.0),
+        )
         APP_CONFIG["dlna"] = normalize_dlna_config(dlna_config)
         write_app_config_locked()
         return get_dlna_manual_sync_notice_state(dlna_config)
@@ -2232,6 +2311,173 @@ def migrate_legacy_dlna_rules(config, default_storage_id="local"):
             "is_legacy": False,
         }
 
+    def detect_legacy_dlna_media_kind(path):
+        extension = os.path.splitext(str(path or "").strip())[1].strip().lower()
+        if extension in DLNA_SUPPORTED_IMAGE_EXTENSIONS:
+            return "image"
+        if extension in DLNA_SUPPORTED_VIDEO_EXTENSIONS:
+            return "video"
+        return ""
+
+    def normalize_legacy_dlna_file_name(value):
+        text = re.sub(r'[<>:"/\\\\|?*\x00-\x1f]+', " ", str(value or "").strip())
+        text = re.sub(r"\s+", " ", text).strip().rstrip(". ")
+        return text[:240] or "plik"
+
+    def get_legacy_dlna_collection_root(storage_id):
+        user_storage_base_root = os.path.abspath(get_user_storage_base_root(storage_id))
+        storage_root = os.path.abspath(os.path.dirname(user_storage_base_root))
+        return os.path.join(storage_root, DLNA_LIBRARY_ROOT_NAME)
+
+    def build_legacy_dlna_target_relative_path(collection, file_name):
+        folder_name = safe_relative_download_path(
+            str(collection.get("folder_name") or collection.get("name") or "Bukiet").strip()
+        ) or "Bukiet"
+        return "%s/%s" % (folder_name, normalize_legacy_dlna_file_name(file_name))
+
+    def build_legacy_dlna_target_path(storage_id, collection, file_name):
+        relative_path = build_legacy_dlna_target_relative_path(collection, file_name)
+        target_root = os.path.abspath(get_legacy_dlna_collection_root(storage_id))
+        candidate = os.path.abspath(os.path.join(target_root, relative_path))
+        try:
+            if os.path.commonpath([target_root, candidate]) != target_root:
+                return "", ""
+        except Exception:
+            return "", ""
+        return relative_path, candidate
+
+    def pick_legacy_dlna_unique_target(storage_id, collection, file_name, used_target_paths, source_path=""):
+        normalized_file_name = normalize_legacy_dlna_file_name(file_name)
+        preferred_relative_path, preferred_absolute_path = build_legacy_dlna_target_path(
+            storage_id,
+            collection,
+            normalized_file_name,
+        )
+        normalized_source_path = os.path.abspath(str(source_path or "")) if source_path else ""
+        if preferred_absolute_path:
+            if normalized_source_path and normalized_source_path == os.path.abspath(preferred_absolute_path):
+                return normalized_file_name, preferred_relative_path, preferred_absolute_path
+            if not normalized_source_path and os.path.isfile(preferred_absolute_path):
+                return normalized_file_name, preferred_relative_path, preferred_absolute_path
+
+        stem, extension = os.path.splitext(normalized_file_name)
+        stem = stem.strip() or "plik"
+        suffix = 1
+        existing_paths = used_target_paths.setdefault(normalize_storage_id(storage_id, default="local"), set())
+        candidate_name = normalized_file_name
+        while True:
+            candidate_relative_path, candidate_absolute_path = build_legacy_dlna_target_path(
+                storage_id,
+                collection,
+                candidate_name,
+            )
+            if not candidate_relative_path or not candidate_absolute_path:
+                suffix += 1
+                candidate_name = "%s (%s)%s" % (stem, suffix, extension)
+                continue
+            candidate_key = candidate_relative_path.lower()
+            target_taken = candidate_key in existing_paths
+            file_exists_elsewhere = (
+                os.path.exists(candidate_absolute_path)
+                and (not normalized_source_path or normalized_source_path != os.path.abspath(candidate_absolute_path))
+            )
+            if not target_taken and not file_exists_elsewhere:
+                return candidate_name, candidate_relative_path, candidate_absolute_path
+            suffix += 1
+            candidate_name = "%s (%s)%s" % (stem, suffix, extension)
+
+    def iter_rule_source_items(rule, collection):
+        relative_path = safe_relative_download_path(rule.get("relative_path") or "")
+        storage_kind = normalize_storage_kind(rule.get("storage_kind") or "video")
+        parsed_relative = parse_managed_relative_path_legacy(relative_path) if relative_path.startswith("@") else None
+        owner_username = normalize_username(
+            (parsed_relative or {}).get("owner_username")
+            or collection.get("owner_username")
+            or DEFAULT_ADMIN_USERNAME
+        )
+        storage_id = normalize_storage_id(
+            (parsed_relative or {}).get("storage_id") or normalized_default_storage_id,
+            default=normalized_default_storage_id,
+        )
+        if parsed_relative and not parsed_relative.get("is_legacy"):
+            source_relative_path = build_managed_relative_path(
+                owner_username,
+                (parsed_relative or {}).get("storage_kind") or storage_kind,
+                (parsed_relative or {}).get("user_relative_path") or "",
+                storage_id=storage_id,
+            )
+        else:
+            source_relative_path = build_managed_relative_path(
+                owner_username,
+                storage_kind,
+                relative_path,
+                storage_id=storage_id,
+            )
+        source_absolute_path = resolve_download_path(
+            source_relative_path,
+            storage_kind,
+            owner_username=owner_username,
+            storage_id=storage_id,
+        )
+
+        if str(rule.get("kind") or "").strip().lower() == "folder":
+            if not source_absolute_path or not os.path.isdir(source_absolute_path):
+                return
+            for current_root, _, file_names in os.walk(source_absolute_path):
+                for file_name in sorted(file_names, key=build_natural_sort_key):
+                    current_file_path = os.path.join(current_root, file_name)
+                    if is_temporary_download_artifact_name(file_name):
+                        continue
+                    media_kind = detect_legacy_dlna_media_kind(current_file_path)
+                    if not media_kind:
+                        continue
+                    managed_info = get_managed_path_info(current_file_path)
+                    if not managed_info:
+                        continue
+                    yield {
+                        "storage_id": normalize_storage_id(
+                            managed_info.get("storage_id") or storage_id,
+                            default=storage_id,
+                        ),
+                        "owner_username": normalize_username(
+                            managed_info.get("owner_username") or owner_username
+                        ),
+                        "storage_kind": normalize_storage_kind(
+                            managed_info.get("storage_kind") or storage_kind
+                        ),
+                        "relative_path": str(managed_info.get("relative_path") or "").strip(),
+                        "absolute_path": current_file_path,
+                        "file_name": file_name,
+                        "media_kind": media_kind,
+                    }
+            return
+
+        if source_absolute_path and os.path.isfile(source_absolute_path):
+            media_kind = detect_legacy_dlna_media_kind(source_absolute_path)
+            if not media_kind:
+                return
+            yield {
+                "storage_id": storage_id,
+                "owner_username": owner_username,
+                "storage_kind": storage_kind,
+                "relative_path": source_relative_path,
+                "absolute_path": source_absolute_path,
+                "file_name": os.path.basename(source_absolute_path),
+                "media_kind": media_kind,
+            }
+            return
+
+        if detect_legacy_dlna_media_kind(relative_path):
+            yield {
+                "storage_id": storage_id,
+                "owner_username": owner_username,
+                "storage_kind": storage_kind,
+                "relative_path": source_relative_path,
+                "absolute_path": "",
+                "file_name": os.path.basename(relative_path),
+                "media_kind": detect_legacy_dlna_media_kind(relative_path),
+            }
+
     changed = False
     normalized_default_storage_id = normalize_storage_id(default_storage_id or "local", default="local")
     media_rules = []
@@ -2266,6 +2512,104 @@ def migrate_legacy_dlna_rules(config, default_storage_id="local"):
 
     if media_rules != list(config.get("media_rules") or []):
         config["media_rules"] = media_rules
+
+    current_entries = list(config.get("entries") or [])
+    if current_entries:
+        if media_rules:
+            config["media_rules"] = []
+            changed = True
+        return config, changed
+
+    collection_map = {
+        str(item.get("id") or "").strip(): item
+        for item in (config.get("collections") or [])
+        if str(item.get("id") or "").strip()
+    }
+    if not collection_map or not media_rules:
+        return config, changed
+
+    migrated_entries = []
+    source_keys = set()
+    used_target_paths = {}
+    created_entries = 0
+
+    for rule in media_rules:
+        if not bool(rule.get("enabled", True)):
+            continue
+        collection_id = next(
+            (
+                str(item or "").strip()
+                for item in (rule.get("collection_ids") or [])
+                if str(item or "").strip() in collection_map
+            ),
+            "",
+        )
+        if not collection_id:
+            continue
+        collection = collection_map.get(collection_id)
+        if not collection:
+            continue
+
+        for source_item in iter_rule_source_items(rule, collection) or []:
+            storage_kind = normalize_storage_kind(source_item.get("storage_kind") or "video")
+            if storage_kind == "audio":
+                continue
+            source_relative_path = str(source_item.get("relative_path") or "").strip()
+            source_storage_id = normalize_storage_id(
+                source_item.get("storage_id") or normalized_default_storage_id,
+                default=normalized_default_storage_id,
+            )
+            source_key = (source_storage_id, source_relative_path)
+            if not source_relative_path or source_key in source_keys:
+                continue
+
+            source_path = os.path.abspath(str(source_item.get("absolute_path") or "")) if source_item.get("absolute_path") else ""
+            source_exists = bool(source_path and os.path.isfile(source_path))
+            candidate_name, target_relative_path, target_path = pick_legacy_dlna_unique_target(
+                source_storage_id,
+                collection,
+                source_item.get("file_name") or os.path.basename(source_relative_path),
+                used_target_paths,
+                source_path=source_path,
+            )
+            if not target_relative_path or not target_path:
+                continue
+
+            target_exists = bool(target_path and os.path.isfile(target_path))
+            if source_exists:
+                if os.path.abspath(source_path) != os.path.abspath(target_path):
+                    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                    shutil.move(source_path, target_path)
+                    changed = True
+            elif not target_exists:
+                continue
+
+            used_target_paths.setdefault(source_storage_id, set()).add(target_relative_path.lower())
+            source_keys.add(source_key)
+            migrated_entries.append({
+                "id": uuid.uuid4().hex,
+                "collection_id": collection_id,
+                "owner_username": normalize_username(
+                    source_item.get("owner_username") or collection.get("owner_username") or DEFAULT_ADMIN_USERNAME
+                ),
+                "source_storage_id": source_storage_id,
+                "source_storage_kind": storage_kind,
+                "source_relative_path": source_relative_path,
+                "current_relative_path": target_relative_path,
+                "file_name": candidate_name,
+                "media_kind": str(source_item.get("media_kind") or "video").strip().lower() or "video",
+                "added_at": time.time(),
+            })
+            created_entries += 1
+
+    if created_entries:
+        config["entries"] = migrated_entries
+        config["media_rules"] = []
+        config["layout_version"] = max(
+            int(config.get("layout_version") or 0),
+            DLNA_VIRTUAL_LAYOUT_VERSION,
+        )
+        changed = True
 
     return config, changed
 
@@ -6616,6 +6960,7 @@ def filter_dlna_export_files(files, dlna_config=None, include_pending_downloads=
         return items
 
     config = normalize_dlna_config(dlna_config if dlna_config is not None else get_dlna_config_snapshot())
+    config, _ = sanitize_dlna_manual_sync_notice_config(config)
     pending_paths = set(normalize_dlna_pending_manual_sync_paths(config.get("pending_manual_sync_paths") or []))
     if not pending_paths:
         return items

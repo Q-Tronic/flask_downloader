@@ -455,6 +455,10 @@ class DlnaUpdateService:
         except Exception:
             pending_manual_sync_since = 0.0
         pending_manual_sync_last_item = self.normalize_description(value.get("pending_manual_sync_last_item"), max_len=200)
+        try:
+            pending_manual_sync_dismissed_at = float(value.get("pending_manual_sync_dismissed_at") or 0.0)
+        except Exception:
+            pending_manual_sync_dismissed_at = 0.0
 
         return {
             "enabled": bool(value.get("enabled", state["enabled"])),
@@ -477,6 +481,7 @@ class DlnaUpdateService:
             "pending_manual_sync_paths": pending_manual_sync_paths,
             "pending_manual_sync_since": pending_manual_sync_since,
             "pending_manual_sync_last_item": pending_manual_sync_last_item,
+            "pending_manual_sync_dismissed_at": pending_manual_sync_dismissed_at,
         }
 
     @staticmethod

@@ -23,6 +23,8 @@
     let liveSubscription = null;
     let activeTab = availableTabs.has("bukiety") ? "bukiety" : (Array.from(availableTabs)[0] || "");
     let activeCollectionId = "";
+    let librarySelectionDirty = false;
+    let librarySelectionDirtyCollectionId = "";
 
     try {
         const storedTab = window.sessionStorage ? String(window.sessionStorage.getItem("dlnaActiveTab") || "") : "";
@@ -117,6 +119,21 @@
         if (!exists) {
             activeCollectionId = String((manageableCollections[0] || {}).id || "");
         }
+    }
+
+    function isLibrarySelectionDirtyForActiveCollection() {
+        return !!librarySelectionDirty && String(librarySelectionDirtyCollectionId || "") === String(activeCollectionId || "");
+    }
+
+    function markLibrarySelectionDirty() {
+        librarySelectionDirty = true;
+        librarySelectionDirtyCollectionId = String(activeCollectionId || "");
+        renderLibrarySelectionSummary();
+    }
+
+    function clearLibrarySelectionDirty() {
+        librarySelectionDirty = false;
+        librarySelectionDirtyCollectionId = "";
     }
 
     function setActiveTab(nextTab, persist) {
@@ -379,7 +396,8 @@
             summaryNode.textContent = 'Brak widocznych pozycji dla bukietu "' + collection.name + '".';
             return;
         }
-        summaryNode.textContent = checkedCount + " z " + items.length + ' widocznych pozycji należy teraz do bukietu "' + collection.name + '".';
+        summaryNode.textContent = checkedCount + " z " + items.length + ' widocznych pozycji należy teraz do bukietu "' + collection.name + '".'
+            + (isLibrarySelectionDirtyForActiveCollection() ? " Masz niezapisane zmiany wyboru." : "");
     }
 
     function renderLibraryResults() {
@@ -711,6 +729,10 @@
         renderPackageAndService();
         setActiveTab(activeTab, false);
         persistUiState();
+        if (isLibrarySelectionDirtyForActiveCollection()) {
+            renderLibrarySelectionSummary();
+            return;
+        }
         if (rerenderAll || String(currentLibraryResults.collection_id || "") !== String(activeCollectionId || "")) {
             refreshLibraryResults();
         } else {
@@ -729,6 +751,7 @@
     }
 
     async function refreshLibraryResults() {
+        clearLibrarySelectionDirty();
         renderCollectionEditorSelect();
         const queryInput = document.getElementById("dlnaLibraryQuery");
         const query = queryInput ? String(queryInput.value || "") : "";
@@ -764,7 +787,11 @@
         renderLibraryResults();
     }
 
-    async function performAction(button, busyLabel, action) {
+    async function performAction(button, busyLabel, action, options) {
+        const opts = options || {};
+        const preserveDirtyLibrary = Object.prototype.hasOwnProperty.call(opts, "preserveDirtyLibrarySelection")
+            ? !!opts.preserveDirtyLibrarySelection
+            : isLibrarySelectionDirtyForActiveCollection();
         setButtonBusy(button, true, busyLabel);
         try {
             const data = await action();
@@ -774,7 +801,13 @@
             if (data && data.message) {
                 showToast(data.message, data.kind || "success");
             }
-            await refreshLibraryResults();
+            if (opts.refreshLibrary !== false) {
+                if (preserveDirtyLibrary) {
+                    renderLibrarySelectionSummary();
+                } else {
+                    await refreshLibraryResults();
+                }
+            }
             return true;
         } catch (err) {
             showToast(String(err || "Operacja zakończyła się błędem."), "error");
@@ -808,6 +841,7 @@
         if (selectCollectionButton) {
             event.preventDefault();
             activeCollectionId = String(selectCollectionButton.dataset.collectionId || "");
+            clearLibrarySelectionDirty();
             persistUiState();
             renderCollections();
             await refreshLibraryResults();
@@ -899,6 +933,7 @@
                     row.classList.add("is-selected");
                 }
             });
+            markLibrarySelectionDirty();
             renderLibrarySelectionSummary();
             return;
         }
@@ -913,6 +948,7 @@
                     row.classList.remove("is-selected");
                 }
             });
+            markLibrarySelectionDirty();
             renderLibrarySelectionSummary();
             return;
         }
@@ -931,7 +967,7 @@
                     collection_id: activeCollectionId,
                     items: items,
                 });
-            });
+            }, {preserveDirtyLibrarySelection: false});
             return;
         }
 
@@ -1067,6 +1103,7 @@
         }
         if (target.matches("#dlnaCollectionEditorSelect")) {
             activeCollectionId = String(target.value || "");
+            clearLibrarySelectionDirty();
             persistUiState();
             renderCollections();
             refreshLibraryResults();
@@ -1077,6 +1114,7 @@
             if (row) {
                 row.classList.toggle("is-selected", !!target.checked);
             }
+            markLibrarySelectionDirty();
             renderLibrarySelectionSummary();
         }
     }
