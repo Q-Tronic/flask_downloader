@@ -6711,8 +6711,12 @@ def resolve_dlna_rule_matches(rule, files=None):
     return DLNA_LIBRARY_SERVICE.resolve_rule_matches(rule, files=files)
 
 
-def get_dlna_effective_file_map(dlna_config=None, files=None):
-    return DLNA_LIBRARY_SERVICE.get_effective_file_map(dlna_config, files=files)
+def get_dlna_effective_file_map(dlna_config=None, files=None, include_pending_downloads=False):
+    return DLNA_LIBRARY_SERVICE.get_effective_file_map(
+        dlna_config,
+        files=files,
+        include_pending_downloads=include_pending_downloads,
+    )
 
 
 def get_dlna_client_visible_collection_ids(client, dlna_config=None):
