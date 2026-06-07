@@ -36,7 +36,7 @@ def register_main_routes(app, deps):
         error = None
         result = None
         input_url = ""
-        mount = get_mount_info(auto_remount=True)
+        mount = get_mount_info(auto_remount=False)
 
         if request.method == "POST":
             auth_error = require_authenticated_page("Zaloguj się, aby pobierać dane źródeł i dodawać zadania.")
@@ -83,7 +83,7 @@ def register_main_routes(app, deps):
             "Pobrane pliki",
             "downloads",
             DOWNLOADS_CONTENT_TEMPLATE,
-            mount=get_mount_info(auto_remount=True),
+            mount=get_mount_info(auto_remount=False),
         )
 
     @app.route("/jobs", methods=["GET"])
@@ -95,7 +95,7 @@ def register_main_routes(app, deps):
             "Zadania pobierania",
             "jobs",
             JOBS_CONTENT_TEMPLATE,
-            mount=get_mount_info(auto_remount=True),
+            mount=get_mount_info(auto_remount=False),
         )
 
     @app.route("/services", methods=["GET"])

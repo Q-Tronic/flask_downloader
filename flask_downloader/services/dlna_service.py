@@ -476,7 +476,7 @@ class DlnaLibraryService:
         }
 
     def get_page_state(self):
-        mount = self._get_mount_info(auto_remount=True)
+        mount = self._get_mount_info(auto_remount=False)
         files = self._get_server_files()
         prune_result = self._prune_missing_dlna_media_rules(
             files=files,

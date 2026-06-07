@@ -48,7 +48,7 @@ class PageStateService:
 
     def get_settings_page_state(self, include_user_rows=False):
         state = {
-            "mount": self._get_mount_info(auto_remount=True),
+            "mount": self._get_mount_info(auto_remount=False),
             "config": self._get_config_snapshot(),
             "today_download_dir": self._get_daily_download_dir(),
             "today_audio_download_dir": self._get_daily_download_dir(media_kind="audio"),

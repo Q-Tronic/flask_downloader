@@ -684,7 +684,7 @@ class RadioService:
             "station_exists": bool(station),
             "station": station,
             "mount": self._get_mount_info(
-                auto_remount=True,
+                auto_remount=False,
                 viewer_username=target_owner,
                 is_admin=self._is_admin_authenticated(),
             ),

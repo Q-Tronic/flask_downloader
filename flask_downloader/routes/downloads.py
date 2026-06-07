@@ -74,7 +74,7 @@ def register_download_routes(app, deps):
             "admin_logged_in": is_admin_authenticated(),
             "available_users": available_users,
             "scope_username": scope_username,
-            "mount": get_mount_info(auto_remount=True, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
+            "mount": get_mount_info(auto_remount=False, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
             "files": get_server_files(scope_username=scope_username),
             "jobs": filtered_jobs,
             "dlna_manual_sync_notice": get_dlna_manual_sync_notice_state() if is_admin_authenticated() else {"pending": False},
@@ -88,7 +88,7 @@ def register_download_routes(app, deps):
             "admin_logged_in": is_admin_authenticated(),
             "available_users": available_users,
             "scope_username": scope_username,
-            "mount": get_mount_info(auto_remount=True, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
+            "mount": get_mount_info(auto_remount=False, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
             "jobs": filter_jobs_for_viewer(get_jobs_snapshot(), scope_username=scope_username),
             "dlna_manual_sync_notice": get_dlna_manual_sync_notice_state() if is_admin_authenticated() else {"pending": False},
         }
@@ -227,7 +227,7 @@ def register_download_routes(app, deps):
             "admin_logged_in": is_admin_authenticated(),
             "available_users": available_users,
             "scope_username": scope_username,
-            "mount": get_mount_info(auto_remount=True, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
+            "mount": get_mount_info(auto_remount=False, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
             "jobs": filter_jobs_for_viewer(get_jobs_snapshot(), scope_username=scope_username),
             "files": get_server_files(scope_username=scope_username),
         })
