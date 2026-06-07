@@ -780,7 +780,25 @@
             border: 1px solid var(--border);
             background: rgba(255, 255, 255, 0.025);
         }
+        .dlna-card {
+            display: grid;
+            gap: 12px;
+            padding: 16px;
+            border-radius: 18px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.025);
+        }
+        .dlna-card.is-selected {
+            border-color: rgba(91, 156, 244, 0.45);
+            background: rgba(91, 156, 244, 0.08);
+        }
         .dlna-item-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .dlna-item-header {
             display: flex;
             align-items: flex-start;
             justify-content: space-between;
@@ -856,6 +874,14 @@
         .dlna-library-row.is-selected {
             border-color: rgba(91, 156, 244, 0.45);
             background: rgba(91, 156, 244, 0.08);
+        }
+        .dlna-library-row.is-disabled {
+            opacity: 0.7;
+        }
+        .dlna-library-row-body {
+            display: grid;
+            gap: 4px;
+            min-width: 0;
         }
         .dlna-library-check {
             margin-top: 3px;
@@ -1733,6 +1759,9 @@
                 grid-template-columns: 1fr;
             }
             .dlna-item-head {
+                flex-direction: column;
+            }
+            .dlna-item-header {
                 flex-direction: column;
             }
             .dlna-item-head-actions {

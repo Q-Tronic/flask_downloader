@@ -149,6 +149,8 @@ def register_application_routes(app, context):
     })
 
     register_dlna_routes(app, {
+        "require_authenticated_page": context["require_authenticated_page"],
+        "require_authenticated_json": context["require_authenticated_json"],
         "is_admin_authenticated": context["is_admin_authenticated"],
         "wants_json_response": context["wants_json_response"],
         "require_admin_json": context["require_admin_json"],

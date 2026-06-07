@@ -842,10 +842,14 @@ def default_dlna_config():
         "icon_updated_at": 0.0,
         "collections": [],
         "clients": [],
+        "entries": [],
         "media_rules": [],
         "layout_version": 0,
         "last_sync_at": 0.0,
         "last_sync_error": "",
+        "runtime_phase": "idle",
+        "runtime_phase_detail": "",
+        "runtime_phase_started_at": 0.0,
         "pending_manual_sync_paths": [],
         "pending_manual_sync_since": 0.0,
         "pending_manual_sync_last_item": "",
@@ -1651,6 +1655,21 @@ def save_dlna_runtime_status(last_sync_at=None, last_sync_error=None):
     return copy.deepcopy(dlna_config)
 
 
+def set_dlna_runtime_phase(phase, detail="", started_at=None):
+    normalized_phase = str(phase or "").strip().lower()
+    if normalized_phase not in ("idle", "starting", "rebuilding", "running", "error"):
+        normalized_phase = "idle"
+    started_ts = float(started_at if started_at is not None else time.time())
+    with APP_CONFIG_LOCK:
+        dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
+        dlna_config["runtime_phase"] = normalized_phase
+        dlna_config["runtime_phase_detail"] = str(detail or "").strip()[:240]
+        dlna_config["runtime_phase_started_at"] = started_ts if normalized_phase in ("starting", "rebuilding") else 0.0
+        APP_CONFIG["dlna"] = dlna_config
+        write_app_config_locked()
+    return copy.deepcopy(dlna_config)
+
+
 def normalize_dlna_pending_manual_sync_paths(paths):
     normalized_paths = []
     seen = set()
@@ -1975,6 +1994,9 @@ def normalize_saved_job_record(raw):
         "overwrite_existing": bool(raw.get("overwrite_existing")),
         "replace_paths": [str(path) for path in (raw.get("replace_paths") or []) if path],
         "auto_dlna_collection_id": str(raw.get("auto_dlna_collection_id") or "").strip(),
+        "dlna_current_relative_path": safe_relative_download_path(raw.get("dlna_current_relative_path") or ""),
+        "dlna_collection_id": str(raw.get("dlna_collection_id") or "").strip(),
+        "dlna_collection_name": str(raw.get("dlna_collection_name") or "").strip(),
         "is_live_capture": bool(raw.get("is_live_capture")),
         "live_status": str(raw.get("live_status") or ""),
         "processing_stage": str(raw.get("processing_stage") or "").strip(),
@@ -2038,6 +2060,9 @@ def serialize_job_for_storage(job):
         "overwrite_existing": bool(job.get("overwrite_existing")),
         "replace_paths": [str(path) for path in (job.get("replace_paths") or []) if path],
         "auto_dlna_collection_id": str(job.get("auto_dlna_collection_id") or "").strip(),
+        "dlna_current_relative_path": safe_relative_download_path(job.get("dlna_current_relative_path") or ""),
+        "dlna_collection_id": str(job.get("dlna_collection_id") or "").strip(),
+        "dlna_collection_name": str(job.get("dlna_collection_name") or "").strip(),
         "is_live_capture": bool(job.get("is_live_capture")),
         "live_status": str(job.get("live_status") or ""),
         "processing_stage": str(job.get("processing_stage") or "").strip(),
@@ -4173,23 +4198,43 @@ def download_worker(job_id):
         auto_dlna_collection_id = str(job.get("auto_dlna_collection_id") or "").strip()
         if auto_dlna_collection_id and relative_path:
             try:
-                assign_file_to_dlna_collection(
+                assignment_result = assign_file_to_dlna_collection(
                     storage_kind,
                     relative_path,
                     auto_dlna_collection_id,
                     sync_runtime=False,
+                    return_details=True,
                 )
+                assigned_entry = dict((assignment_result or {}).get("entry") or {})
+                assigned_collection = dict((assignment_result or {}).get("collection") or {})
+                assigned_target_path = str((assignment_result or {}).get("target_path") or "").strip()
+                assigned_relative_path = safe_relative_download_path(assigned_entry.get("current_relative_path") or "")
+                assigned_filename = str(assigned_entry.get("file_name") or "").strip()
+                if assigned_target_path or assigned_relative_path or assigned_filename:
+                    if assigned_target_path:
+                        target_path = assigned_target_path
+                    if assigned_filename:
+                        filename = assigned_filename
+                    update_job(
+                        job_id,
+                        filepath=target_path,
+                        filename=assigned_filename or os.path.basename(target_path) or filename,
+                        dlna_current_relative_path=assigned_relative_path,
+                        dlna_collection_id=str(assigned_entry.get("collection_id") or auto_dlna_collection_id or "").strip(),
+                        dlna_collection_name=str(assigned_collection.get("name") or "").strip(),
+                        persist=True,
+                    )
+                if assigned_relative_path:
+                    mark_dlna_manual_sync_needed(
+                        relative_path=assigned_relative_path,
+                        item_label=os.path.basename(target_path) or filename or result["title"],
+                    )
             except Exception as exc:
                 update_job(
                     job_id,
                     error="Pobrano plik, ale nie udało się dodać go automatycznie do DLNA: %s" % exc,
                     persist=True,
                 )
-        if relative_path:
-            mark_dlna_manual_sync_needed(
-                relative_path=relative_path,
-                item_label=os.path.basename(target_path) or filename or result["title"],
-            )
 
     except DownloadInterruptedError as exc:
         if exc.action == "pause":
@@ -4441,8 +4486,11 @@ def delete_managed_download_file(relative_path, storage_kind="video", owner_user
     return ok, message, status_code
 
 
-def get_server_files(scope_username=""):
-    return STORAGE_SERVICE.get_server_files(scope_username=scope_username)
+def get_server_files(scope_username="", allow_auto_remount=False):
+    return STORAGE_SERVICE.get_server_files(
+        scope_username=scope_username,
+        allow_auto_remount=allow_auto_remount,
+    )
 
 
 RADIO_STORE = radios_store_load_radio_store(
@@ -5117,20 +5165,17 @@ def get_dlna_referenced_usernames(dlna_config=None):
     config = dlna_config or get_dlna_config_snapshot()
     usernames = []
     seen = set()
-    for client in config.get("clients") or []:
-        for username in get_dlna_client_assigned_usernames(client):
-            if username in seen:
-                continue
-            seen.add(username)
-            usernames.append(username)
+    for item in config.get("collections") or []:
+        username = normalize_username(item.get("owner_username") or DEFAULT_ADMIN_USERNAME)
+        if username in seen:
+            continue
+        seen.add(username)
+        usernames.append(username)
     return usernames
 
 
 def build_dlna_client_visible_root_ids(client, dlna_config=None):
-    visible_root_ids = set(get_dlna_client_visible_collection_ids(client, dlna_config))
-    for username in get_dlna_client_assigned_usernames(client):
-        visible_root_ids.add(build_dlna_user_root_id(username))
-    return visible_root_ids
+    return set(get_dlna_client_visible_collection_ids(client, dlna_config))
 
 
 def build_dlna_root_entry_map(dlna_config=None):
@@ -5138,8 +5183,11 @@ def build_dlna_root_entry_map(dlna_config=None):
     result = {}
     used_names = set()
 
-    def add_root(root_id, title, kind, username=""):
-        base_name = dlna_safe_dir_segment(title, default="kolekcja" if kind == "collection" else "uzytkownik")
+    def add_root(root_id, title, kind, username="", dir_name_override=""):
+        base_name = dlna_safe_dir_segment(
+            dir_name_override or title,
+            default="kolekcja" if kind == "collection" else "uzytkownik",
+        )
         candidate = base_name
         suffix = 1
         while candidate.lower() in used_names:
@@ -5154,11 +5202,14 @@ def build_dlna_root_entry_map(dlna_config=None):
             "username": str(username or "").strip(),
         }
 
-    add_root(DLNA_ALL_COLLECTION_ID, DLNA_ALL_COLLECTION_NAME, "collection")
     for item in config.get("collections") or []:
-        add_root(item["id"], item["name"], "collection")
-    for username in get_dlna_referenced_usernames(config):
-        add_root(build_dlna_user_root_id(username), username, "user", username=username)
+        add_root(
+            item["id"],
+            item["name"],
+            "collection",
+            username=item.get("owner_username") or DEFAULT_ADMIN_USERNAME,
+            dir_name_override=item.get("folder_name") or item["name"],
+        )
     return result
 
 
@@ -6162,10 +6213,6 @@ def prune_missing_dlna_media_rules(files=None, sync_runtime=True, restart_servic
             "config": get_dlna_config_snapshot(),
         }
 
-    files = files if files is not None else get_server_files()
-    presence_index = build_dlna_library_presence_index(files=files)
-    file_keys = presence_index["file_keys"]
-    folder_keys = presence_index["folder_keys"]
     available_storage_ids = set()
     for candidate_storage_id in iter_storage_ids():
         candidate_root = os.path.abspath(get_user_storage_base_root(candidate_storage_id))
@@ -6173,50 +6220,58 @@ def prune_missing_dlna_media_rules(files=None, sync_runtime=True, restart_servic
             available_storage_ids.add(candidate_storage_id)
 
     with APP_CONFIG_LOCK:
-        dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
-        current_rules = list(dlna_config.get("media_rules") or [])
-        kept_rules = []
-        removed_rules = []
+        dlna_config = copy.deepcopy(normalize_dlna_config(APP_CONFIG.get("dlna")))
+        current_entries = list(dlna_config.get("entries") or [])
 
-        for rule in current_rules:
-            kind = str(rule.get("kind") or "").strip().lower()
-            storage_kind = normalize_storage_kind(rule.get("storage_kind") or "video")
-            relative_path = safe_relative_download_path(rule.get("relative_path") or "")
-            relative_parts = relative_path.split("/") if relative_path else []
-            inferred_storage_id = ""
-            if relative_parts and str(relative_parts[0] or "").startswith(MANAGED_STORAGE_PREFIX):
-                inferred_storage_id = str(relative_parts[0] or "")[1:]
-            rule_storage_id = normalize_storage_id(
-                rule.get("storage_id") or inferred_storage_id or "local",
-                default="local",
-            )
-            if rule_storage_id not in available_storage_ids:
-                kept_rules.append(rule)
-                continue
-            exists = (storage_kind, relative_path) in (folder_keys if kind == "folder" else file_keys)
-            if exists:
-                kept_rules.append(rule)
-                continue
-
+    kept_entries = []
+    removed_rules = []
+    for entry in current_entries:
+        source_storage_id = normalize_storage_id(entry.get("source_storage_id") or "local", default="local")
+        if source_storage_id not in available_storage_ids:
+            kept_entries.append(entry)
+            continue
+        current_relative_path = safe_relative_download_path(entry.get("current_relative_path") or "")
+        if not current_relative_path:
             removed_rules.append({
-                "id": str(rule.get("id") or "").strip(),
-                "kind": kind,
-                "storage_kind": storage_kind,
-                "relative_path": relative_path,
+                "id": str(entry.get("id") or "").strip(),
+                "kind": "file",
+                "storage_kind": normalize_storage_kind(entry.get("source_storage_kind") or "video"),
+                "relative_path": safe_relative_download_path(entry.get("source_relative_path") or ""),
+                "current_relative_path": "",
             })
+            continue
+        current_path = DLNA_LIBRARY_SERVICE.get_collection_storage_path(source_storage_id, current_relative_path)
+        if current_path and os.path.isfile(current_path):
+            kept_entries.append(entry)
+            continue
 
-        if not removed_rules:
-            return {
-                "changed": False,
-                "removed_count": 0,
-                "removed_rules": [],
-                "skipped": False,
-                "reason": "",
-                "config": copy.deepcopy(dlna_config),
-            }
+        removed_rules.append({
+            "id": str(entry.get("id") or "").strip(),
+            "kind": "file",
+            "storage_kind": normalize_storage_kind(entry.get("source_storage_kind") or "video"),
+            "relative_path": safe_relative_download_path(entry.get("source_relative_path") or ""),
+            "current_relative_path": current_relative_path,
+        })
 
-        dlna_config["media_rules"] = kept_rules
-        APP_CONFIG["dlna"] = normalize_dlna_config(dlna_config)
+    if not removed_rules:
+        return {
+            "changed": False,
+            "removed_count": 0,
+            "removed_rules": [],
+            "skipped": False,
+            "reason": "",
+            "config": copy.deepcopy(dlna_config),
+        }
+
+    with APP_CONFIG_LOCK:
+        latest_dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
+        removed_ids = {str(item.get("id") or "").strip() for item in removed_rules}
+        latest_dlna_config["entries"] = [
+            item
+            for item in (latest_dlna_config.get("entries") or [])
+            if str(item.get("id") or "").strip() not in removed_ids
+        ]
+        APP_CONFIG["dlna"] = normalize_dlna_config(latest_dlna_config)
         write_app_config_locked()
         updated_config = copy.deepcopy(APP_CONFIG["dlna"])
 
@@ -6574,10 +6629,14 @@ def filter_dlna_export_files(files, dlna_config=None, include_pending_downloads=
     return filtered_items
 
 
-def rebuild_dlna_export_tree(dlna_config=None, files=None):
+def rebuild_dlna_export_tree(dlna_config=None, files=None, include_pending_downloads=False):
     config = dlna_config or get_dlna_config_snapshot()
     files = files if files is not None else get_server_files()
-    effective_map = get_dlna_effective_file_map(config, files=files)
+    effective_map = get_dlna_effective_file_map(
+        config,
+        files=files,
+        include_pending_downloads=include_pending_downloads,
+    )
     root_entry_map = build_dlna_root_entry_map(config)
     package_state = get_dlna_package_state_snapshot()
     feature_support = get_dlna_feature_support(package_state.get("current_version_raw"))
@@ -6589,11 +6648,6 @@ def rebuild_dlna_export_tree(dlna_config=None, files=None):
     used_names_by_export_dir = {}
     for absolute_path, item in effective_map.items():
         collection_ids = set(item.get("collection_ids") or set())
-        if feature_support["supports_groups"]:
-            collection_ids.add(DLNA_ALL_COLLECTION_ID)
-        elif not collection_ids:
-            collection_ids.add(DLNA_ALL_COLLECTION_ID)
-
         for collection_id in collection_ids:
             export_entry = root_entry_map.get(collection_id) or {}
             export_dir_name = export_entry.get("dir_name")
@@ -6611,47 +6665,6 @@ def rebuild_dlna_export_tree(dlna_config=None, files=None):
 
             os.symlink(absolute_path, export_path)
             created_links += 1
-
-    referenced_usernames = get_dlna_referenced_usernames(config)
-    for username in referenced_usernames:
-        root_entry = root_entry_map.get(build_dlna_user_root_id(username)) or {}
-        root_dir_name = str(root_entry.get("dir_name") or "").strip()
-        if not root_dir_name:
-            continue
-
-        user_files = [
-            item for item in files
-            if normalize_username(item.get("owner_username") or DEFAULT_ADMIN_USERNAME) == username
-            and not is_temporary_download_artifact_name(item.get("name") or "")
-        ]
-
-        for item in user_files:
-            storage_kind = normalize_storage_kind(item.get("storage_kind") or "video")
-            storage_dir_name = "Audio" if storage_kind == "audio" else "Video"
-            user_relative_path = safe_relative_download_path(item.get("user_relative_path") or "")
-            bucket_names = ["Wszystkie Pliki"]
-            if user_relative_path:
-                first_segment = user_relative_path.split("/", 1)[0]
-                if re.match(r"^\d{4}-\d{2}-\d{2}$", first_segment):
-                    bucket_names.append(first_segment)
-            for bucket_name in bucket_names:
-                export_dir_key = "%s/%s/%s" % (root_dir_name, storage_dir_name, bucket_name)
-                used_names = used_names_by_export_dir.setdefault(export_dir_key.lower(), set())
-                export_file_name = build_dlna_export_link_name(item, used_names)
-                export_relative_path = os.path.join(root_dir_name, storage_dir_name, bucket_name, export_file_name)
-                export_path = os.path.abspath(os.path.join(DLNA_EXPORT_ROOT, export_relative_path))
-                ensure_directory(os.path.dirname(export_path))
-                if os.path.lexists(export_path):
-                    remove_path_if_exists(export_path)
-                absolute_path = resolve_download_path(
-                    item.get("relative_path") or "",
-                    storage_kind,
-                    owner_username=username,
-                )
-                if not absolute_path or not os.path.isfile(absolute_path):
-                    continue
-                os.symlink(absolute_path, export_path)
-                created_links += 1
 
     return {
         "effective_media_count": len(effective_map),
@@ -6882,13 +6895,17 @@ def resolve_dlna_bind_interface_name(bind_ip):
     return ""
 
 
-def write_dlna_gerbera_config(dlna_config=None, files=None):
+def write_dlna_gerbera_config(dlna_config=None, files=None, include_pending_downloads=False):
     config = dlna_config or get_dlna_config_snapshot()
     ensure_dlna_runtime_dirs()
     ensure_dlna_webroot_assets(config)
     ensure_dlna_export_root_directory()
     cleanup_dlna_legacy_export_root()
-    export_state = rebuild_dlna_export_tree(config, files=files)
+    export_state = rebuild_dlna_export_tree(
+        config,
+        files=files,
+        include_pending_downloads=include_pending_downloads,
+    )
     root_entry_map = export_state["root_entry_map"]
     package_state = get_dlna_package_state_snapshot()
     package_version = package_state.get("current_version_raw")
@@ -7581,6 +7598,7 @@ DLNA_RUNTIME_SERVICE = DlnaRuntimeService(
     dlna_config_xml_file=DLNA_CONFIG_XML_FILE,
     dlna_export_root=DLNA_EXPORT_ROOT,
     dlna_service_unit_file=DLNA_SERVICE_UNIT_FILE,
+    set_dlna_runtime_phase=set_dlna_runtime_phase,
 )
 
 
@@ -7894,6 +7912,10 @@ DLNA_LIBRARY_SERVICE = DlnaLibraryService(
     normalize_dlna_description=normalize_dlna_description,
     sync_dlna_runtime_safe=sync_dlna_runtime_safe,
     get_users_snapshot=get_users_snapshot,
+    get_current_username=get_current_username,
+    is_admin_authenticated=is_admin_authenticated,
+    can_access_owner=can_access_owner,
+    get_storage_root=get_storage_root,
     default_admin_username=DEFAULT_ADMIN_USERNAME,
     dlna_all_collection_id=DLNA_ALL_COLLECTION_ID,
     dlna_all_collection_name=DLNA_ALL_COLLECTION_NAME,
@@ -7911,7 +7933,7 @@ def get_assignable_dlna_collections_for_current_user():
     )
 
 
-def assign_file_to_dlna_collection(storage_kind, relative_path, collection_id, sync_runtime=True):
+def assign_file_to_dlna_collection(storage_kind, relative_path, collection_id, sync_runtime=True, return_details=False):
     parsed_relative = parse_managed_relative_path(relative_path)
     effective_relative_path = safe_relative_download_path(
         (parsed_relative or {}).get("user_relative_path") or relative_path
@@ -7923,6 +7945,8 @@ def assign_file_to_dlna_collection(storage_kind, relative_path, collection_id, s
         relative_path,
         collection_id,
         sync_runtime=sync_runtime,
+        allow_background=not has_request_context(),
+        return_details=return_details,
     )
 
 PAGE_STATE_SERVICE = PageStateService(

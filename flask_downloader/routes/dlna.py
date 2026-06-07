@@ -4,6 +4,8 @@ from flask import Response, jsonify, redirect, request, send_file, url_for
 
 
 def register_dlna_routes(app, deps):
+    require_authenticated_page = deps["require_authenticated_page"]
+    require_authenticated_json = deps["require_authenticated_json"]
     is_admin_authenticated = deps["is_admin_authenticated"]
     wants_json_response = deps["wants_json_response"]
     require_admin_json = deps["require_admin_json"]
@@ -13,7 +15,6 @@ def register_dlna_routes(app, deps):
     DLNA_CONTENT_TEMPLATE = deps["DLNA_CONTENT_TEMPLATE"]
     get_dlna_page_state = deps["get_dlna_page_state"]
     DLNA_SERVICE_NAME = deps["DLNA_SERVICE_NAME"]
-    DLNA_ALL_COLLECTION_NAME = deps["DLNA_ALL_COLLECTION_NAME"]
     read_text_log_file_for_browser = deps["read_text_log_file_for_browser"]
     DLNA_LOG_FILE = deps["DLNA_LOG_FILE"]
     DLNA_LOG_BROWSER_MAX_BYTES = deps["DLNA_LOG_BROWSER_MAX_BYTES"]
@@ -38,18 +39,18 @@ def register_dlna_routes(app, deps):
     create_dlna_client = deps["create_dlna_client"]
     update_dlna_client = deps["update_dlna_client"]
     delete_dlna_client = deps["delete_dlna_client"]
-    create_dlna_media_rule = deps["create_dlna_media_rule"]
-    update_dlna_media_rule = deps["update_dlna_media_rule"]
     bulk_assign_dlna_collection_items = deps["bulk_assign_dlna_collection_items"]
-    delete_dlna_media_rule = deps["delete_dlna_media_rule"]
+
+    def build_auth_error_message():
+        return "Zaloguj się, aby wejść do panelu DLNA."
 
     @app.route("/dlna", methods=["GET"])
     def dlna_page():
-        if not is_admin_authenticated():
+        auth_error = require_authenticated_page(build_auth_error_message())
+        if auth_error:
             if wants_json_response():
-                return require_admin_json()
-            set_ui_flash("Zaloguj się jako administrator, aby wejść do konfiguracji DLNA.", "error")
-            return redirect(url_for("index"))
+                return jsonify({"ok": False, "error": build_auth_error_message()}), 401
+            return auth_error
 
         return render_page(
             "DLNA",
@@ -57,7 +58,6 @@ def register_dlna_routes(app, deps):
             DLNA_CONTENT_TEMPLATE,
             dlna_initial_state=get_dlna_page_state(),
             dlna_service_name=DLNA_SERVICE_NAME,
-            dlna_all_collection_name=DLNA_ALL_COLLECTION_NAME,
         )
 
     @app.route("/logs-dlna", methods=["GET"])
@@ -75,7 +75,7 @@ def register_dlna_routes(app, deps):
 
     @app.route("/api/dlna/state", methods=["GET"])
     def api_dlna_state():
-        auth_error = require_admin_json()
+        auth_error = require_authenticated_json()
         if auth_error:
             return auth_error
 
@@ -86,7 +86,7 @@ def register_dlna_routes(app, deps):
 
     @app.route("/api/dlna/stream", methods=["GET"])
     def api_dlna_stream():
-        auth_error = require_admin_json()
+        auth_error = require_authenticated_json()
         if auth_error:
             return auth_error
 
@@ -95,13 +95,13 @@ def register_dlna_routes(app, deps):
                 "ok": True,
                 "state": get_dlna_page_state(),
             },
-            interval_seconds=1.5,
-            retry_ms=2500,
+            interval_seconds=2.0,
+            retry_ms=3000,
         )
 
     @app.route("/api/dlna/library", methods=["GET"])
     def api_dlna_library():
-        auth_error = require_admin_json()
+        auth_error = require_authenticated_json()
         if auth_error:
             return auth_error
 
@@ -112,12 +112,15 @@ def register_dlna_routes(app, deps):
             limit = max(20, min(500, int(str(request.args.get("limit") or "200").strip())))
         except Exception:
             limit = 200
-        results = build_dlna_collection_library_results(
-            collection_id=collection_id,
-            query=query,
-            mode=mode,
-            limit=limit,
-        )
+        try:
+            results = build_dlna_collection_library_results(
+                collection_id=collection_id,
+                query=query,
+                mode=mode,
+                limit=limit,
+            )
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
 
         return jsonify({
             "ok": True,
@@ -254,7 +257,7 @@ def register_dlna_routes(app, deps):
 
     @app.route("/api/dlna/collections", methods=["POST"])
     def api_dlna_collections():
-        auth_error = require_admin_json()
+        auth_error = require_authenticated_json()
         if auth_error:
             return auth_error
 
@@ -264,14 +267,14 @@ def register_dlna_routes(app, deps):
         try:
             if action == "create":
                 create_dlna_collection(payload.get("name"), payload.get("description"))
-                return build_dlna_json_response(message="Dodano kolekcję DLNA.", kind="success")
+                return build_dlna_json_response(message="Dodano nowy bukiet DLNA.", kind="success")
             if action == "update":
                 update_dlna_collection(payload.get("collection_id"), payload.get("name"), payload.get("description"))
-                return build_dlna_json_response(message="Zapisano kolekcję DLNA.", kind="success")
+                return build_dlna_json_response(message="Zapisano bukiet DLNA.", kind="success")
             if action == "delete":
                 delete_dlna_collection(payload.get("collection_id"))
-                return build_dlna_json_response(message="Usunięto kolekcję DLNA.", kind="success")
-            return build_dlna_json_response(ok=False, message="Nieobsługiwana akcja dla kolekcji DLNA.", kind="error", status_code=400)
+                return build_dlna_json_response(message="Usunięto bukiet DLNA.", kind="success")
+            return build_dlna_json_response(ok=False, message="Nieobsługiwana akcja dla bukietu DLNA.", kind="error", status_code=400)
         except Exception as exc:
             return build_dlna_json_response(ok=False, message=str(exc), kind="error", status_code=400)
 
@@ -291,7 +294,7 @@ def register_dlna_routes(app, deps):
                     description=payload.get("description"),
                     enabled=parse_boolean_flag(payload.get("enabled"), default=True),
                     collection_ids=payload.get("collection_ids") or [],
-                    usernames=payload.get("usernames") or [],
+                    usernames=[],
                 )
                 return build_dlna_json_response(message="Dodano klienta DLNA do whitelisty.", kind="success")
             if action == "update":
@@ -301,7 +304,7 @@ def register_dlna_routes(app, deps):
                     description=payload.get("description"),
                     enabled=parse_boolean_flag(payload.get("enabled"), default=True),
                     collection_ids=payload.get("collection_ids") or [],
-                    usernames=payload.get("usernames") or [],
+                    usernames=[],
                 )
                 return build_dlna_json_response(message="Zapisano klienta DLNA.", kind="success")
             if action == "delete":
@@ -313,7 +316,7 @@ def register_dlna_routes(app, deps):
 
     @app.route("/api/dlna/media", methods=["POST"])
     def api_dlna_media():
-        auth_error = require_admin_json()
+        auth_error = require_authenticated_json()
         if auth_error:
             return auth_error
 
@@ -321,35 +324,16 @@ def register_dlna_routes(app, deps):
         action = str(payload.get("action") or "").strip().lower()
 
         try:
-            if action == "create":
-                create_dlna_media_rule(
-                    kind=payload.get("kind"),
-                    storage_kind=payload.get("storage_kind"),
-                    relative_path=payload.get("relative_path"),
-                    collection_ids=payload.get("collection_ids") or [],
-                    enabled=True,
-                )
-                return build_dlna_json_response(message="Dodano medium do aktywnej biblioteki DLNA.", kind="success")
-            if action == "update":
-                update_dlna_media_rule(
-                    rule_id=payload.get("rule_id"),
-                    collection_ids=payload.get("collection_ids") or [],
-                    enabled=parse_boolean_flag(payload.get("enabled"), default=True),
-                )
-                return build_dlna_json_response(message="Zapisano wpis DLNA.", kind="success")
             if action == "bulk_assign_collection":
                 summary = bulk_assign_dlna_collection_items(
                     collection_id=payload.get("collection_id"),
                     items=payload.get("items") or [],
                 )
                 return build_dlna_json_response(
-                    message="Zapisano zmiany widocznych pozycji w bukiecie DLNA." if summary.get("changed") else "Brak zmian do zapisania w tym bukiecie.",
+                    message="Zapisano zmiany plików w bukiecie DLNA." if summary.get("changed") else "Brak zmian do zapisania w tym bukiecie.",
                     kind="success",
                     bulk_summary=summary,
                 )
-            if action == "delete":
-                delete_dlna_media_rule(payload.get("rule_id"))
-                return build_dlna_json_response(message="Usunięto wpis DLNA.", kind="success")
-            return build_dlna_json_response(ok=False, message="Nieobsługiwana akcja dla mediów DLNA.", kind="error", status_code=400)
+            return build_dlna_json_response(ok=False, message="Nieobsługiwana akcja dla plików DLNA.", kind="error", status_code=400)
         except Exception as exc:
             return build_dlna_json_response(ok=False, message=str(exc), kind="error", status_code=400)

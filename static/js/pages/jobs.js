@@ -285,9 +285,12 @@ function renderJobs(jobs, adminLoggedIn) {
             ? '<div class="small" style="margin-top:6px;">' + escapeHtml(job.failure_hint) + '</div>'
             : "";
 
+        const fileLabel = escapeHtml(job.file_display_name || job.relative_path || job.filename || "");
         const fileHtml = job.file_url
-            ? '<div class="row"><div class="label">Plik</div><div class="value"><a class="file-link" href="' + escapeHtml(job.file_url) + '" target="_blank" rel="noopener">' + escapeHtml(job.file_display_name || job.relative_path || job.filename || "") + '</a></div></div>'
-            : '';
+            ? '<div class="row"><div class="label">Plik</div><div class="value"><a class="file-link" href="' + escapeHtml(job.file_url) + '" target="_blank" rel="noopener">' + fileLabel + '</a></div></div>'
+            : (fileLabel
+                ? '<div class="row"><div class="label">Plik</div><div class="value">' + fileLabel + '</div></div>'
+                : '');
         const ownerHtml = adminLoggedIn
             ? '<div class="row"><div class="label">Właściciel</div><div class="value">' + escapeHtml(job.owner_username || "-") + '</div></div>'
             : '';

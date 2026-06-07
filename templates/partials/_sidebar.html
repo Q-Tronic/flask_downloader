@@ -18,9 +18,9 @@
             <a class="side-link {% if active_page == 'downloads' %}is-active{% endif %}" href="/downloads" data-shell-nav="true">Pobrane pliki</a>
             <a class="side-link {% if active_page == 'radio' %}is-active{% endif %}" href="/radio" data-shell-nav="true">Moje radio</a>
             <a class="side-link {% if active_page == 'services' %}is-active{% endif %}" href="/services" data-shell-nav="true">Lista Serwisów</a>
+            <a class="side-link {% if active_page == 'dlna' %}is-active{% endif %}" href="/dlna" data-shell-nav="true">DLNA</a>
             {% endif %}
             {% if admin_logged_in %}
-            <a class="side-link {% if active_page == 'dlna' %}is-active{% endif %}" href="/dlna" data-shell-nav="true">DLNA</a>
             <a class="side-link {% if active_page == 'settings' %}is-active{% endif %}" href="/settings" data-shell-nav="true">Konfiguracja</a>
             {% endif %}
         </div>

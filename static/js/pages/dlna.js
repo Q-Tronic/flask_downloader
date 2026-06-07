@@ -1,41 +1,37 @@
-(function() {
-    const pageData = window.pageBootstrapData || {};
+(function () {
     const root = document.getElementById("dlnaPageRoot");
     if (!root) {
         return;
     }
 
+    const pageData = window.pageBootstrapData || {};
+    const tabButtons = Array.from(root.querySelectorAll("[data-dlna-tab-button]"));
+    const availableTabs = new Set(tabButtons.map(function (button) {
+        return String(button.dataset.dlnaTabButton || "").trim();
+    }).filter(Boolean));
+
     let currentState = pageData.initialState || {};
-    let currentLibraryResults = {items: [], total_items: 0, shown_items: 0, collection_id: "", collection_name: "", mode: "files"};
+    let currentLibraryResults = {
+        items: [],
+        total_items: 0,
+        shown_items: 0,
+        collection_id: "",
+        collection_name: "",
+        mode: "files",
+    };
     let searchTimer = null;
     let liveSubscription = null;
-    let activeTab = "serwer";
+    let activeTab = availableTabs.has("bukiety") ? "bukiety" : (Array.from(availableTabs)[0] || "");
     let activeCollectionId = "";
-    let libraryMode = "files";
-    const expandedState = {
-        collections: new Set(),
-        clients: new Set(),
-        rules: new Set()
-    };
 
     try {
-        const storedTab = window.sessionStorage ? window.sessionStorage.getItem("dlnaActiveTab") : "";
-        if (storedTab === "serwer" || storedTab === "dostep" || storedTab === "biblioteka") {
+        const storedTab = window.sessionStorage ? String(window.sessionStorage.getItem("dlnaActiveTab") || "") : "";
+        if (availableTabs.has(storedTab)) {
             activeTab = storedTab;
         }
-    } catch (err) {
-        activeTab = "serwer";
-    }
-
-    try {
         activeCollectionId = window.sessionStorage ? String(window.sessionStorage.getItem("dlnaActiveCollectionId") || "") : "";
-        const storedLibraryMode = window.sessionStorage ? String(window.sessionStorage.getItem("dlnaLibraryMode") || "") : "";
-        if (storedLibraryMode === "folders" || storedLibraryMode === "all" || storedLibraryMode === "files") {
-            libraryMode = storedLibraryMode;
-        }
     } catch (err) {
         activeCollectionId = "";
-        libraryMode = "files";
     }
 
     function escapeHtml(value) {
@@ -52,10 +48,10 @@
             window.appUi.showToast(message, kind);
             return;
         }
-        alert(message);
+        alert(String(message || ""));
     }
 
-    function setButtonBusy(button, busy, label) {
+    function setButtonBusy(button, busy, busyLabel) {
         if (!button) {
             return;
         }
@@ -63,232 +59,116 @@
             button.dataset.idleLabel = String(button.textContent || "").trim();
         }
         button.disabled = !!busy;
-        button.textContent = busy ? String(label || "Trwa...") : (button.dataset.idleLabel || button.textContent);
+        button.textContent = busy ? String(busyLabel || "Trwa...") : button.dataset.idleLabel;
     }
 
-    function getNamedCollections() {
-        return (currentState.collections || []).filter(function(item) {
-            return item && !item.builtin;
+    function getPermissions() {
+        return currentState.permissions || {logged_in: false, is_admin: false, current_username: ""};
+    }
+
+    function isAdmin() {
+        return !!getPermissions().is_admin;
+    }
+
+    function getCollections() {
+        return Array.isArray(currentState.collections) ? currentState.collections : [];
+    }
+
+    function getManageableCollections() {
+        return getCollections().filter(function (item) {
+            return !!item && !!item.can_manage;
         });
     }
 
-    function getAllCollections() {
-        return currentState.collections || [];
+    function getCollectionById(collectionId) {
+        const normalizedId = String(collectionId || "");
+        return getCollections().find(function (item) {
+            return String((item && item.id) || "") === normalizedId;
+        }) || null;
     }
 
-    function renderTokenList(names, emptyLabel) {
-        const values = (names || []).filter(Boolean);
-        if (!values.length) {
-            return `<span class="dlna-token">${escapeHtml(emptyLabel || "Brak")}</span>`;
-        }
-        return values.map(function(name) {
-            return `<span class="dlna-token">${escapeHtml(name)}</span>`;
-        }).join("");
-    }
-
-    function setMetaText(elementId, value) {
-        const node = document.getElementById(elementId);
-        if (!node) {
-            return;
-        }
-        node.textContent = String(value || "");
-    }
-
-    function isExpanded(scope, itemId) {
-        return !!(expandedState[scope] && expandedState[scope].has(String(itemId || "")));
-    }
-
-    function toggleExpanded(scope, itemId) {
-        const normalizedId = String(itemId || "");
-        const stateSet = expandedState[scope];
-        if (!stateSet || !normalizedId) {
-            return;
-        }
-        if (stateSet.has(normalizedId)) {
-            stateSet.delete(normalizedId);
-        } else {
-            stateSet.add(normalizedId);
-        }
-    }
-
-    function rerenderScope(scope) {
-        if (scope === "collections") {
-            renderCollections();
-            return;
-        }
-        if (scope === "clients") {
-            renderClients();
-            return;
-        }
-        if (scope === "rules") {
-            renderMediaRules();
-        }
-    }
-
-    function setActiveTab(nextTab, persist) {
-        const allowedTabs = new Set(["serwer", "dostep", "biblioteka"]);
-        activeTab = allowedTabs.has(String(nextTab || "")) ? String(nextTab) : "serwer";
-
-        root.querySelectorAll("[data-dlna-tab-button]").forEach(function(button) {
-            const isActive = button.dataset.dlnaTabButton === activeTab;
-            button.classList.toggle("is-active", isActive);
-        });
-        root.querySelectorAll("[data-dlna-panel]").forEach(function(panel) {
-            panel.hidden = panel.dataset.dlnaPanel !== activeTab;
-        });
-
-        if (persist !== false) {
-            try {
-                if (window.sessionStorage) {
-                    window.sessionStorage.setItem("dlnaActiveTab", activeTab);
-                }
-            } catch (err) {
-                // Ignorujemy błędy storage; panel nadal działa lokalnie.
-            }
-        }
-    }
-
-    function persistLibraryPreferences() {
+    function persistUiState() {
         try {
             if (!window.sessionStorage) {
                 return;
             }
-            window.sessionStorage.setItem("dlnaActiveCollectionId", activeCollectionId);
-            window.sessionStorage.setItem("dlnaLibraryMode", libraryMode);
+            if (activeTab) {
+                window.sessionStorage.setItem("dlnaActiveTab", activeTab);
+            }
+            if (activeCollectionId) {
+                window.sessionStorage.setItem("dlnaActiveCollectionId", activeCollectionId);
+            } else {
+                window.sessionStorage.removeItem("dlnaActiveCollectionId");
+            }
         } catch (err) {
-            // Ignorujemy błędy storage; stan pozostaje lokalny dla bieżącego widoku.
+            // Pomijamy błędy sessionStorage.
         }
     }
 
     function ensureActiveCollectionId() {
-        const namedCollections = getNamedCollections();
-        if (!namedCollections.length) {
+        const manageableCollections = getManageableCollections();
+        if (!manageableCollections.length) {
             activeCollectionId = "";
             return;
         }
-
-        const exists = namedCollections.some(function(item) {
+        const exists = manageableCollections.some(function (item) {
             return String(item.id || "") === String(activeCollectionId || "");
         });
         if (!exists) {
-            activeCollectionId = String((namedCollections[0] || {}).id || "");
+            activeCollectionId = String((manageableCollections[0] || {}).id || "");
         }
     }
 
-    function syncLibraryControlValues() {
-        ensureActiveCollectionId();
-        const select = document.getElementById("dlnaCollectionEditorSelect");
-        const modeSelect = document.getElementById("dlnaLibraryMode");
-        const namedCollections = getNamedCollections();
-
-        if (select) {
-            select.innerHTML = namedCollections.length
-                ? namedCollections.map(function(item) {
-                    return `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`;
-                }).join("")
-                : '<option value="">Brak bukietów</option>';
-            select.disabled = !namedCollections.length;
-            select.value = activeCollectionId;
+    function setActiveTab(nextTab, persist) {
+        const desiredTab = String(nextTab || "");
+        activeTab = availableTabs.has(desiredTab) ? desiredTab : (availableTabs.has("bukiety") ? "bukiety" : (Array.from(availableTabs)[0] || ""));
+        root.querySelectorAll("[data-dlna-tab-button]").forEach(function (button) {
+            button.classList.toggle("is-active", String(button.dataset.dlnaTabButton || "") === activeTab);
+        });
+        root.querySelectorAll("[data-dlna-panel]").forEach(function (panel) {
+            panel.hidden = String(panel.dataset.dlnaPanel || "") !== activeTab;
+        });
+        if (persist !== false) {
+            persistUiState();
         }
-
-        if (modeSelect) {
-            modeSelect.value = libraryMode;
-            modeSelect.disabled = !namedCollections.length;
-        }
-
-        persistLibraryPreferences();
     }
 
-    function readVisibleLibraryItems() {
-        return Array.from(root.querySelectorAll(".js-dlna-library-checkbox")).map(function(input) {
-            return {
-                kind: String(input.dataset.itemKind || ""),
-                storage_kind: String(input.dataset.storageKind || "video"),
-                relative_path: String(input.dataset.relativePath || ""),
-                checked: !!input.checked
-            };
+    async function fetchJson(url, options) {
+        const response = await fetch(url, Object.assign({
+            headers: {
+                "Accept": "application/json",
+                "X-Requested-With": "fetch",
+            },
+            credentials: "same-origin",
+        }, options || {}));
+        const data = await response.json().catch(function () { return null; });
+        if (!response.ok || !data) {
+            throw new Error((data && (data.error || data.message)) || ("Błąd HTTP " + response.status));
+        }
+        if (data.ok === false) {
+            throw new Error(data.error || data.message || "Operacja zakończyła się błędem.");
+        }
+        return data;
+    }
+
+    async function postJson(url, payload) {
+        return fetchJson(url, {
+            method: "POST",
+            body: JSON.stringify(payload || {}),
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-Requested-With": "fetch",
+            },
+            credentials: "same-origin",
         });
     }
 
-    function updateLibrarySelectionSummary() {
-        const summaryNode = document.getElementById("dlnaLibrarySelectionSummary");
-        const saveButton = document.getElementById("dlnaSaveVisibleSelectionButton");
-        const selectVisibleButton = document.getElementById("dlnaSelectVisibleButton");
-        const unselectVisibleButton = document.getElementById("dlnaUnselectVisibleButton");
-        const items = readVisibleLibraryItems();
-        const checkedCount = items.filter(function(item) { return !!item.checked; }).length;
-        const collectionLabel = String(currentLibraryResults.collection_name || "");
-        const hasCollection = !!activeCollectionId;
-
-        if (summaryNode) {
-            if (!getNamedCollections().length) {
-                summaryNode.textContent = "Najpierw utwórz bukiet DLNA. Po jego dodaniu lista poniżej zacznie działać od razu, bez przeładowania strony.";
-            } else if (!hasCollection) {
-                summaryNode.textContent = "Wybierz bukiet, żeby zaznaczać widoczne pozycje checkboxami.";
-            } else if (!items.length) {
-                summaryNode.textContent = collectionLabel
-                    ? ('Brak widocznych pozycji dla bukietu "' + collectionLabel + '".')
-                    : "Brak widocznych pozycji dla wybranego bukietu.";
-            } else {
-                summaryNode.textContent = checkedCount + " z " + items.length + ' widocznych pozycji należy teraz do bukietu "' + collectionLabel + '". Zapis obejmie tylko bieżącą listę.';
-            }
-        }
-
-        [saveButton, selectVisibleButton, unselectVisibleButton].forEach(function(button) {
-            if (!button) {
-                return;
-            }
-            button.disabled = !hasCollection || !items.length;
-        });
-    }
-
-    function renderCollectionCheckboxes(selectedIds, includeBuiltinAll, scopeName) {
-        const selectedSet = new Set((selectedIds || []).map(function(item) { return String(item || ""); }));
-        return getAllCollections().filter(function(item) {
-            return includeBuiltinAll || !item.builtin;
-        }).map(function(item) {
-            const checked = selectedSet.has(String(item.id || ""));
-            const itemDescription = item.description || (item.builtin ? "Ta kolekcja oznacza pełny dostęp do wszystkich aktywnych mediów." : "Brak dodatkowego opisu.");
-            return `
-                <label class="dlna-checkbox">
-                    <input type="checkbox" value="${escapeHtml(item.id)}" data-checkbox-scope="${escapeHtml(scopeName)}" ${checked ? "checked" : ""}>
-                    <span class="dlna-checkbox-text">
-                        <strong>${escapeHtml(item.name)}</strong>
-                        <span class="small">${escapeHtml(itemDescription)}</span>
-                    </span>
-                </label>
-            `;
-        }).join("");
-    }
-
-    function renderUserCheckboxes(selectedUsernames, scopeName) {
-        const selectedSet = new Set((selectedUsernames || []).map(function(item) { return String(item || ""); }));
-        const availableUsers = currentState.available_users || [];
-        if (!availableUsers.length) {
-            return '<div class="dlna-empty">Brak użytkowników do przypisania.</div>';
-        }
-        return availableUsers.map(function(item) {
-            const username = String(item.username || "");
-            const checked = selectedSet.has(username);
-            const roleLabel = item.role === "admin" ? "Administrator" : "Użytkownik";
-            const detail = item.enabled === false
-                ? (roleLabel + " • konto wyłączone")
-                : roleLabel;
-            return `
-                <label class="dlna-checkbox">
-                    <input type="checkbox" value="${escapeHtml(username)}" data-checkbox-scope="${escapeHtml(scopeName)}" ${checked ? "checked" : ""}>
-                    <span class="dlna-checkbox-text">
-                        <strong>${escapeHtml(username)}</strong>
-                        <span class="small">${escapeHtml(detail)}</span>
-                    </span>
-                </label>
-            `;
-        }).join("");
-    }
-
-    function readCheckboxScope(scopeName, container) {
-        return Array.from((container || root).querySelectorAll('input[data-checkbox-scope="' + scopeName + '"]:checked')).map(function(input) {
-            return String(input.value || "");
+    async function postFormData(url, formData) {
+        return fetchJson(url, {
+            method: "POST",
+            body: formData,
+            credentials: "same-origin",
         });
     }
 
@@ -310,25 +190,29 @@
         `;
     }
 
-    function renderSummary(updateFormValues) {
+    function renderSummary() {
         const summary = currentState.summary || {};
         const grid = document.getElementById("dlnaSummaryGrid");
+        if (!grid) {
+            return;
+        }
         grid.innerHTML = `
             <div class="overview-tile">
-                <span>Aktywne media</span>
+                <span>Aktywne pliki w bukietach</span>
                 <strong>${escapeHtml(summary.effective_media_count || 0)}</strong>
             </div>
             <div class="overview-tile">
-                <span>Wpisy DLNA</span>
-                <strong>${escapeHtml(summary.media_rule_count || 0)}</strong>
-            </div>
-            <div class="overview-tile">
-                <span>Kolekcje użytkownika</span>
+                <span>Liczba bukietów</span>
                 <strong>${escapeHtml(summary.named_collection_count || 0)}</strong>
             </div>
             <div class="overview-tile">
                 <span>Klienci whitelisty</span>
                 <strong>${escapeHtml(summary.active_client_count || 0)} / ${escapeHtml(summary.client_count || 0)}</strong>
+            </div>
+            <div class="overview-tile">
+                <span>Stan runtime</span>
+                <strong>${escapeHtml(summary.runtime_phase_label || "Nieznany")}</strong>
+                <div class="inline-note">${escapeHtml(summary.runtime_phase_detail || "")}</div>
             </div>
             <div class="overview-tile">
                 <span>Ostatnia synchronizacja</span>
@@ -337,464 +221,517 @@
             <div class="overview-tile">
                 <span>Status synchronizacji</span>
                 <strong>${summary.last_sync_error ? "Błąd" : "OK"}</strong>
-                <div class="inline-note">${escapeHtml(summary.last_sync_error || "Eksport DLNA jest zsynchronizowany z konfiguracją.")}</div>
+                <div class="inline-note">${escapeHtml(summary.last_sync_error || "Eksport DLNA jest gotowy.")}</div>
             </div>
         `;
-
-        if (updateFormValues) {
-            document.getElementById("dlnaServerName").value = String((currentState.dlna_config || {}).server_name || "");
-            document.getElementById("dlnaBindIp").value = String((currentState.dlna_config || {}).bind_ip || "");
-            document.getElementById("dlnaPort").value = String((currentState.dlna_config || {}).port || "");
-        }
     }
 
-    function taskBarClass(task) {
-        if (!task) {
-            return "queued";
-        }
-        if (task.active) {
-            return "downloading";
-        }
-        if (task.status === "success") {
-            return "completed";
-        }
-        if (task.status === "error") {
-            return "error";
-        }
-        return "queued";
-    }
-
-    function renderTaskPanel() {
-        const task = ((currentState.maintenance_tasks || {}).dlna_install) || null;
-        const panel = document.getElementById("dlnaTaskPanel");
-        if (!task || !task.visible) {
-            panel.hidden = true;
+    function renderCollectionEditorSelect() {
+        ensureActiveCollectionId();
+        const select = document.getElementById("dlnaCollectionEditorSelect");
+        const collections = getManageableCollections();
+        if (!select) {
             return;
         }
-
-        panel.hidden = false;
-        document.getElementById("dlnaTaskStatusPill").className = "service-status-pill " + String(task.status_kind || "muted");
-        document.getElementById("dlnaTaskStatusPill").textContent = String(task.status_label || "...");
-        document.getElementById("dlnaTaskLabel").textContent = String(task.title || "Instalacja serwera DLNA");
-        document.getElementById("dlnaTaskPercent").textContent = task.progress_percent === null || task.progress_percent === undefined ? "..." : Number(task.progress_percent).toFixed(1) + "%";
-        document.getElementById("dlnaTaskDetail").textContent = String(task.detail || task.message || "");
-        document.getElementById("dlnaTaskTime").textContent = task.active && task.started_at_text
-            ? "Start: " + task.started_at_text
-            : (task.finished_at_text ? "Zakończono: " + task.finished_at_text : "");
-
-        const progress = document.getElementById("dlnaTaskProgress");
-        const bar = document.getElementById("dlnaTaskBar");
-        if (task.progress_percent === null || task.progress_percent === undefined) {
-            progress.classList.add("is-indeterminate");
-            bar.style.width = "38%";
-        } else {
-            progress.classList.remove("is-indeterminate");
-            bar.style.width = Math.max(0, Math.min(100, Number(task.progress_percent) || 0)) + "%";
-        }
-        bar.className = "progress-bar " + taskBarClass(task);
-    }
-
-    function renderPackageAndService() {
-        const packageState = currentState.dlna_package_state || {};
-        const serviceState = currentState.dlna_service_state || {};
-        const task = ((currentState.maintenance_tasks || {}).dlna_install) || null;
-        const taskActive = !!(task && task.active);
-
-        const packagePill = document.getElementById("dlnaPackageStatusPill");
-        packagePill.className = "service-status-pill " + String(taskActive ? "queued" : (packageState.status_pill_kind || "muted"));
-        packagePill.textContent = String(taskActive ? "Trwa instalacja serwera DLNA" : (packageState.status_pill_label || "..."));
-        document.getElementById("dlnaPackageCheckedAt").textContent = "Ostatnie sprawdzenie: " + String(packageState.checked_at_text || "jeszcze nie sprawdzano");
-        document.getElementById("dlnaPackageCurrentVersion").textContent = String(packageState.current_version || "brak");
-        document.getElementById("dlnaPackageLatestVersion").textContent = String(packageState.latest_version || "brak danych");
-        document.getElementById("dlnaPackageSource").textContent = String(packageState.source_label || "Pakiet Debian / apt");
-
-        const packageErrorBox = document.getElementById("dlnaPackageErrorBox");
-        packageErrorBox.hidden = !packageState.check_error;
-        packageErrorBox.textContent = packageState.check_error ? ("Ostatnia próba sprawdzenia pakietu zakończyła się błędem: " + packageState.check_error) : "";
-
-        const actionButton = document.getElementById("dlnaPackageActionButton");
-        actionButton.hidden = !taskActive && !packageState.action_needed;
-        actionButton.textContent = String(packageState.action_button_label || "Zainstaluj serwer DLNA");
-        actionButton.dataset.idleLabel = actionButton.textContent;
-        document.getElementById("dlnaPackageActionNote").hidden = taskActive || !!packageState.action_needed;
-
-        const servicePill = document.getElementById("dlnaServiceStatusPill");
-        servicePill.className = "service-status-pill " + String(serviceState.status_kind || "muted");
-        servicePill.textContent = String(serviceState.status_label || "Nieznany");
-        document.getElementById("dlnaServicePidText").textContent = serviceState.main_pid
-            ? ("PID: " + String(serviceState.main_pid) + (serviceState.sub_state ? " | " + String(serviceState.sub_state) : ""))
-            : (serviceState.sub_state ? String(serviceState.sub_state) : "Brak PID");
-        document.getElementById("dlnaServiceUnitState").textContent = String(serviceState.unit_file_label || "nieznany");
-        document.getElementById("dlnaServiceUptime").textContent = String(serviceState.service_uptime_text || "nieznany");
-        document.getElementById("dlnaServiceLastRestart").textContent = String(serviceState.last_restart_text || "nieznany");
-        document.getElementById("dlnaServiceName").textContent = String(serviceState.service_name || pageData.serviceName || "");
-        document.getElementById("dlnaExportRoot").textContent = String(serviceState.export_root || "");
-        document.getElementById("dlnaConfigFile").textContent = String(serviceState.config_file || "");
-
-        const serviceErrorBox = document.getElementById("dlnaServiceErrorBox");
-        serviceErrorBox.hidden = !serviceState.error;
-        serviceErrorBox.textContent = serviceState.error ? ("Nie udało się odczytać pełnego statusu usługi DLNA: " + serviceState.error) : "";
-
-        const diagnosticsBox = document.getElementById("dlnaServiceDiagnostics");
-        const diagnosticParts = [];
-        if (serviceState.diagnostic_text) {
-            diagnosticParts.push(String(serviceState.diagnostic_text));
-        }
-        ((serviceState.feature_support || {}).notes || []).forEach(function(note) {
-            if (note) {
-                diagnosticParts.push(String(note));
-            }
-        });
-        diagnosticsBox.hidden = !diagnosticParts.length;
-        diagnosticsBox.textContent = diagnosticParts.join(" | ");
-
-        const logBox = document.getElementById("dlnaServiceLogBox");
-        const shouldShowLog = !!serviceState.recent_log_excerpt && (
-            !!serviceState.result
-            || !!serviceState.restart_count
-            || serviceState.active_state === "failed"
-            || serviceState.active_state === "inactive"
-        );
-        logBox.hidden = !shouldShowLog;
-        logBox.textContent = shouldShowLog ? ("Ostatni log usługi: " + String(serviceState.recent_log_excerpt || "")) : "";
-
-        document.getElementById("dlnaServiceToggleButton").textContent = String(serviceState.toggle_button_label || "Włącz serwer DLNA");
-        document.getElementById("dlnaServiceToggleButton").dataset.idleLabel = document.getElementById("dlnaServiceToggleButton").textContent;
-        renderTaskPanel();
-    }
-
-    function renderCollections() {
-        document.getElementById("dlnaNewClientCollections").innerHTML = renderCollectionCheckboxes([], true, "new-client");
-        document.getElementById("dlnaNewClientUsers").innerHTML = renderUserCheckboxes([], "new-client-user");
-        syncLibraryControlValues();
-
-        const list = document.getElementById("dlnaCollectionsList");
-        const namedCollections = getNamedCollections();
-        setMetaText("dlnaCollectionsMeta", namedCollections.length ? (namedCollections.length + " zapisane") : "0 zapisanych");
-        if (!namedCollections.length) {
-            list.innerHTML = '<div class="dlna-empty">Nie masz jeszcze własnych kolekcji. Aktywne media nadal mogą być widoczne przez wbudowaną kolekcję String(pageData.allCollectionName || "Wszystkie aktywne media").</div>';
+        if (!collections.length) {
+            select.innerHTML = '<option value="">Brak bukietów</option>';
+            select.disabled = true;
             return;
         }
-
-        list.innerHTML = namedCollections.map(function(item) {
-            const expanded = isExpanded("collections", item.id);
-            return `
-                <div class="dlna-item" data-collection-id="${escapeHtml(item.id)}">
-                    <div class="dlna-item-head">
-                        <div>
-                            <div class="dlna-item-title">${escapeHtml(item.name)}</div>
-                            <div class="dlna-item-meta">${escapeHtml(item.description || "Brak opisu")} • ID: ${escapeHtml(item.id)}</div>
-                        </div>
-                        <div class="dlna-item-head-actions">
-                            <button type="button" class="dlna-plain-button js-dlna-toggle-item" data-toggle-scope="collections">${expanded ? "Zwiń" : "Edytuj"}</button>
-                            <button type="button" class="btn btn-delete js-dlna-delete-collection">Usuń</button>
-                        </div>
-                    </div>
-                    <div class="dlna-item-body" ${expanded ? "" : "hidden"}>
-                        <div class="auth-form">
-                            <label class="field-label">Nazwa kolekcji</label>
-                            <input type="text" data-collection-field="name" value="${escapeHtml(item.name)}">
-                            <label class="field-label">Opis</label>
-                            <input type="text" data-collection-field="description" value="${escapeHtml(item.description || "")}">
-                        </div>
-                        <div class="dlna-item-actions">
-                            <button type="button" class="btn js-dlna-save-collection">Zapisz kolekcję</button>
-                        </div>
-                    </div>
-                </div>
-            `;
+        select.innerHTML = collections.map(function (item) {
+            return `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`;
         }).join("");
+        select.disabled = false;
+        select.value = activeCollectionId;
     }
 
-    function renderClients() {
-        const list = document.getElementById("dlnaClientsList");
-        const clients = currentState.clients || [];
-        setMetaText("dlnaClientsMeta", clients.length ? ((clients.filter(function(client) { return !!client.enabled; }).length) + " aktywnych z " + clients.length) : "0 klientów");
-        if (!clients.length) {
-            list.innerHTML = '<div class="dlna-empty">Brak klientów na whiteliście. Domyślnie nikt nie dostaje dostępu do serwera DLNA.</div>';
-            return;
+    function renderCollectionCheckboxGrid(selectedIds, scopeName) {
+        const selectedSet = new Set((selectedIds || []).map(function (item) { return String(item || ""); }));
+        const collections = getCollections();
+        if (!collections.length) {
+            return '<div class="dlna-empty">Najpierw utwórz bukiet DLNA.</div>';
         }
-
-        list.innerHTML = clients.map(function(client) {
-            const expanded = isExpanded("clients", client.id);
-            const userLabels = client.user_labels || client.usernames || [];
+        return collections.map(function (item) {
+            const checked = selectedSet.has(String(item.id || ""));
+            const ownerInfo = isAdmin() ? ("Właściciel: " + String(item.owner_username || "")) : "";
             return `
-                <div class="dlna-item" data-client-id="${escapeHtml(client.id)}">
-                    <div class="dlna-item-head">
-                        <div>
-                            <div class="dlna-item-title">${escapeHtml(client.ip)}</div>
-                            <div class="dlna-item-meta">${escapeHtml(client.description || "Brak opisu")} • Widoczne media: ${escapeHtml(client.visible_media_count || 0)}</div>
-                            <div class="dlna-token-list" style="margin-top: 8px;">${renderTokenList(client.collection_names || [], "Brak kolekcji")}</div>
-                            <div class="dlna-token-list" style="margin-top: 8px;">${renderTokenList(userLabels, "Brak użytkowników")}</div>
-                        </div>
-                        <div class="dlna-item-head-actions">
-                            <span class="status ${client.enabled ? "completed" : "canceled"}">${client.enabled ? "Aktywny" : "Wyłączony"}</span>
-                            <button type="button" class="dlna-plain-button js-dlna-toggle-item" data-toggle-scope="clients">${expanded ? "Zwiń" : "Edytuj"}</button>
-                            <button type="button" class="btn btn-delete js-dlna-delete-client">Usuń</button>
-                        </div>
-                    </div>
-                    <div class="dlna-item-body" ${expanded ? "" : "hidden"}>
-                        <div class="auth-form">
-                            <label class="field-label">Adres IP</label>
-                            <input type="text" data-client-field="ip" value="${escapeHtml(client.ip)}">
-                            <label class="field-label">Opis urządzenia</label>
-                            <input type="text" data-client-field="description" value="${escapeHtml(client.description || "")}">
-                            <label class="dlna-checkbox">
-                                <input type="checkbox" data-client-field="enabled" ${client.enabled ? "checked" : ""}>
-                                <span class="dlna-checkbox-text">
-                                    <strong>Klient aktywny</strong>
-                                    <span class="small">Po odznaczeniu wpis IP zostaje zachowany, ale dostęp i autostart dla tego klienta są blokowane.</span>
-                                </span>
-                            </label>
-                            <div>
-                                <div class="field-label">Kolekcje widoczne dla klienta</div>
-                                <div class="dlna-checkbox-grid">${renderCollectionCheckboxes(client.collection_ids || [], true, "client-" + client.id)}</div>
-                            </div>
-                            <div>
-                                <div class="field-label">Użytkownicy widoczni dla klienta</div>
-                                <div class="dlna-checkbox-grid">${renderUserCheckboxes(client.usernames || [], "client-user-" + client.id)}</div>
-                            </div>
-                        </div>
-                        <div class="dlna-item-actions">
-                            <button type="button" class="btn js-dlna-save-client">Zapisz klienta</button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }).join("");
-    }
-
-    function renderMediaRules() {
-        const list = document.getElementById("dlnaMediaRulesList");
-        const rules = currentState.media_rules || [];
-        setMetaText("dlnaMediaRulesMeta", rules.length ? (rules.length + " wpisów") : "0 wpisów");
-        if (!rules.length) {
-            list.innerHTML = '<div class="dlna-empty">Nie zaznaczono jeszcze żadnych folderów ani plików dla DLNA.</div>';
-            return;
-        }
-
-        list.innerHTML = rules.map(function(rule) {
-            const tags = [];
-            tags.push(rule.kind === "folder" ? "Folder" : "Plik");
-            tags.push(rule.storage_kind === "audio" ? "Audio" : "Wideo");
-            if (rule.enabled) {
-                tags.push("Aktywny");
-            }
-            if (rule.collection_names && rule.collection_names.length) {
-                tags.push("Bukiety: " + rule.collection_names.join(", "));
-            } else {
-                tags.push("Tylko " + String(pageData.allCollectionName || "Wszystkie aktywne media"));
-            }
-            return `
-                <div class="dlna-library-row ${rule.enabled ? "is-selected" : ""}" data-rule-id="${escapeHtml(rule.id)}">
-                    <label class="dlna-library-check">
-                        <input type="checkbox" data-rule-field="enabled" ${rule.enabled ? "checked" : ""}>
-                    </label>
-                    <div class="dlna-library-copy">
-                        <div class="dlna-library-name">${escapeHtml(rule.display_path)}</div>
-                        <div class="dlna-library-meta">${escapeHtml(tags.join(" • ") + " • Dopasowane pliki: " + String(rule.matched_files || 0) + (rule.exists ? "" : " • źródło zniknęło"))}</div>
-                    </div>
-                    <div class="dlna-library-flags">
-                        <button type="button" class="dlna-plain-button js-dlna-save-rule">Zapisz</button>
-                        <button type="button" class="btn btn-delete js-dlna-delete-rule">Usuń</button>
-                    </div>
-                </div>
-            `;
-        }).join("");
-    }
-
-    function renderLibraryResults() {
-        syncLibraryControlValues();
-        const container = document.getElementById("dlnaLibraryResults");
-        const metaNode = document.getElementById("dlnaLibraryResultsMeta");
-        const items = currentLibraryResults.items || [];
-
-        if (!getNamedCollections().length) {
-            if (metaNode) {
-                metaNode.textContent = "";
-            }
-            container.innerHTML = '<div class="dlna-empty">Najpierw utwórz bukiet DLNA w zakładce kolekcji.</div>';
-            updateLibrarySelectionSummary();
-            return;
-        }
-
-        if (metaNode) {
-            const totalText = currentLibraryResults.total_items
-                ? (String(currentLibraryResults.shown_items || items.length) + " / " + String(currentLibraryResults.total_items))
-                : String(currentLibraryResults.shown_items || items.length || 0);
-            const collectionLabel = currentLibraryResults.collection_name ? ('Bukiet: ' + String(currentLibraryResults.collection_name)) : "";
-            metaNode.textContent = collectionLabel ? (totalText + " • " + collectionLabel) : totalText;
-        }
-
-        if (!items.length) {
-            const hasQuery = !!String((document.getElementById("dlnaLibraryQuery") || {}).value || "").trim();
-            container.innerHTML = '<div class="dlna-empty">' + escapeHtml(hasQuery ? "Brak pozycji pasujących do tego filtra." : "Brak pozycji do pokazania w tym widoku.") + '</div>';
-            updateLibrarySelectionSummary();
-            return;
-        }
-
-        container.innerHTML = items.map(function(item) {
-            const tags = [];
-            tags.push(`<span class="dlna-mini-tag">${escapeHtml(item.storage_label || (item.storage_kind === "audio" ? "Audio" : "Wideo"))}</span>`);
-            if (item.kind === "folder") {
-                tags.push('<span class="dlna-mini-tag">Folder</span>');
-            }
-            if (item.selected_via === "inherited") {
-                tags.push('<span class="dlna-mini-tag is-inherited">z folderu</span>');
-            }
-            if (item.active_in_dlna) {
-                tags.push('<span class="dlna-mini-tag is-active">DLNA</span>');
-            }
-            const rowClass = item.selected ? "dlna-library-row is-selected" : "dlna-library-row";
-            return `
-                <label class="${rowClass}">
-                    <input
-                        type="checkbox"
-                        class="dlna-library-check js-dlna-library-checkbox"
-                        data-item-kind="${escapeHtml(item.kind || "file")}"
-                        data-storage-kind="${escapeHtml(item.storage_kind || "video")}"
-                        data-relative-path="${escapeHtml(item.relative_path || "")}"
-                        ${item.selected ? "checked" : ""}
-                    >
-                    <span class="dlna-library-copy">
-                        <span class="dlna-library-name">${escapeHtml(item.title || item.display_path || "")}</span>
-                        <span class="dlna-library-meta">${escapeHtml((item.display_path || "") + " • " + (item.detail_text || ""))}</span>
+                <label class="dlna-checkbox">
+                    <input type="checkbox" value="${escapeHtml(item.id)}" data-checkbox-scope="${escapeHtml(scopeName)}" ${checked ? "checked" : ""}>
+                    <span class="dlna-checkbox-text">
+                        <strong>${escapeHtml(item.name)}</strong>
+                        <span class="small">${escapeHtml(item.description || ownerInfo || "Brak dodatkowego opisu.")}</span>
                     </span>
-                    <span class="dlna-library-flags">${tags.join("")}</span>
                 </label>
             `;
         }).join("");
-        updateLibrarySelectionSummary();
     }
 
-    function renderIconState() {
-        const iconState = currentState.dlna_icon_state || {};
-        const previewImage = document.getElementById("dlnaIconPreviewImage");
-        const modeLabel = document.getElementById("dlnaIconModeLabel");
-        const sourceName = document.getElementById("dlnaIconSourceName");
-        const updatedAt = document.getElementById("dlnaIconUpdatedAt");
-        const resetButton = document.getElementById("dlnaIconResetButton");
+    function readCheckboxScope(scopeName, container) {
+        return Array.from((container || root).querySelectorAll('input[data-checkbox-scope="' + scopeName + '"]:checked')).map(function (input) {
+            return String(input.value || "");
+        });
+    }
 
-        if (previewImage) {
-            const nextSrc = String(iconState.preview_url || "/api/dlna/icon-preview");
-            if (previewImage.getAttribute("src") !== nextSrc) {
-                previewImage.setAttribute("src", nextSrc);
+    function renderCollections() {
+        const list = document.getElementById("dlnaCollectionsList");
+        const meta = document.getElementById("dlnaCollectionsMeta");
+        const collections = getCollections();
+        if (meta) {
+            meta.textContent = collections.length ? (collections.length + " bukietów") : "Brak bukietów";
+        }
+        if (!list) {
+            return;
+        }
+        if (!collections.length) {
+            list.innerHTML = '<div class="dlna-empty">Nie ma jeszcze żadnych bukietów DLNA.</div>';
+            return;
+        }
+        list.innerHTML = collections.map(function (item) {
+            const selected = String(item.id || "") === String(activeCollectionId || "");
+            const ownerLine = isAdmin() ? ('<div class="small">Właściciel: ' + escapeHtml(item.owner_username || "") + '</div>') : "";
+            const canManage = !!item.can_manage;
+            const actions = canManage ? `
+                <div class="dlna-item-actions">
+                    <button type="button" class="btn btn-secondary js-dlna-select-collection" data-collection-id="${escapeHtml(item.id)}">${selected ? "Edytujesz ten bukiet" : "Edytuj pliki"}</button>
+                    <button type="button" class="btn js-dlna-save-collection" data-collection-id="${escapeHtml(item.id)}">Zapisz bukiet</button>
+                    <button type="button" class="btn btn-stop js-dlna-delete-collection" data-collection-id="${escapeHtml(item.id)}">Usuń bukiet</button>
+                </div>
+            ` : "";
+            return `
+                <article class="dlna-card ${selected ? "is-selected" : ""}" data-collection-id="${escapeHtml(item.id)}">
+                    <div class="dlna-item-header">
+                        <div>
+                            <div class="dlna-item-title">${escapeHtml(item.name)}</div>
+                            <div class="small">${escapeHtml(item.item_count || 0)} plików</div>
+                            ${ownerLine}
+                        </div>
+                    </div>
+                    <div class="dlna-inline-form is-wide">
+                        <div class="field-group">
+                            <label class="field-label" for="dlnaCollectionName-${escapeHtml(item.id)}">Nazwa bukietu</label>
+                            <input id="dlnaCollectionName-${escapeHtml(item.id)}" data-collection-field="name" type="text" value="${escapeHtml(item.name)}" ${canManage ? "" : "disabled"}>
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="dlnaCollectionDescription-${escapeHtml(item.id)}">Opis bukietu</label>
+                            <input id="dlnaCollectionDescription-${escapeHtml(item.id)}" data-collection-field="description" type="text" value="${escapeHtml(item.description || "")}" ${canManage ? "" : "disabled"}>
+                        </div>
+                    </div>
+                    ${actions || '<div class="inline-note">Ten bukiet należy do innego użytkownika. Możesz go tylko przeglądać.</div>'}
+                </article>
+            `;
+        }).join("");
+    }
+
+    function renderMediaEntries() {
+        const list = document.getElementById("dlnaMediaRulesList");
+        const meta = document.getElementById("dlnaMediaRulesMeta");
+        const entries = Array.isArray(currentState.media_rules) ? currentState.media_rules : [];
+        if (meta) {
+            meta.textContent = entries.length ? (entries.length + " plików w bukietach") : "Brak plików w bukietach";
+        }
+        if (!list) {
+            return;
+        }
+        if (!entries.length) {
+            list.innerHTML = '<div class="dlna-empty">Żaden plik nie został jeszcze przypisany do bukietu DLNA.</div>';
+            return;
+        }
+        list.innerHTML = entries.map(function (entry) {
+            const pendingPublication = !!entry.pending_publication;
+            const statusLabel = pendingPublication
+                ? "Czeka na publikację"
+                : (entry.current_exists ? "W bukiecie" : "Brak na dysku");
+            const statusClass = pendingPublication ? "queued" : (entry.current_exists ? "success" : "error");
+            const collectionText = Array.isArray(entry.collection_names) && entry.collection_names.length
+                ? entry.collection_names.join(", ")
+                : "bez bukietu";
+            const ownerLine = isAdmin() ? ('<div class="small">Właściciel: ' + escapeHtml(entry.owner_username || "") + '</div>') : "";
+            return `
+                <article class="dlna-card">
+                    <div class="dlna-item-header">
+                        <div>
+                            <div class="dlna-item-title">${escapeHtml(entry.file_name || entry.display_path || "plik")}</div>
+                            <div class="small">${escapeHtml(collectionText)}</div>
+                            ${ownerLine}
+                        </div>
+                        <span class="service-status-pill ${statusClass}">${escapeHtml(statusLabel)}</span>
+                    </div>
+                    <div class="small">Źródło: ${escapeHtml(entry.display_path || entry.relative_path || "")}</div>
+                    <div class="small">Folder bukietu: ${escapeHtml(entry.current_relative_path || "")}</div>
+                </article>
+            `;
+        }).join("");
+    }
+
+    function renderLibrarySelectionSummary() {
+        const summaryNode = document.getElementById("dlnaLibrarySelectionSummary");
+        if (!summaryNode) {
+            return;
+        }
+        const items = Array.from(root.querySelectorAll(".js-dlna-library-checkbox"));
+        const checkedCount = items.filter(function (input) { return !!input.checked; }).length;
+        const collection = getCollectionById(activeCollectionId);
+        if (!collection) {
+            summaryNode.textContent = "Najpierw wybierz lub utwórz bukiet DLNA. Lista pokaże wtedy pliki właściciela bukietu.";
+            return;
+        }
+        if (!items.length) {
+            summaryNode.textContent = 'Brak widocznych pozycji dla bukietu "' + collection.name + '".';
+            return;
+        }
+        summaryNode.textContent = checkedCount + " z " + items.length + ' widocznych pozycji należy teraz do bukietu "' + collection.name + '".';
+    }
+
+    function renderLibraryResults() {
+        const list = document.getElementById("dlnaLibraryResults");
+        const meta = document.getElementById("dlnaLibraryResultsMeta");
+        const selectButton = document.getElementById("dlnaSelectVisibleButton");
+        const unselectButton = document.getElementById("dlnaUnselectVisibleButton");
+        const saveButton = document.getElementById("dlnaSaveVisibleSelectionButton");
+        const collection = getCollectionById(activeCollectionId);
+        if (!list) {
+            return;
+        }
+        if (meta) {
+            if (currentLibraryResults.total_items) {
+                meta.textContent = currentLibraryResults.shown_items + " z " + currentLibraryResults.total_items + " pozycji";
+            } else {
+                meta.textContent = "";
             }
         }
-        if (modeLabel) {
-            modeLabel.textContent = String(iconState.mode_label || "Domyślna ikona Gerbery");
+        if (!collection) {
+            list.innerHTML = '<div class="dlna-empty">Najpierw wybierz bukiet DLNA do edycji.</div>';
+            if (selectButton) selectButton.disabled = true;
+            if (unselectButton) unselectButton.disabled = true;
+            if (saveButton) saveButton.disabled = true;
+            renderLibrarySelectionSummary();
+            return;
         }
-        if (sourceName) {
-            sourceName.textContent = iconState.source_name
+        const items = Array.isArray(currentLibraryResults.items) ? currentLibraryResults.items : [];
+        if (!items.length) {
+            list.innerHTML = '<div class="dlna-empty">Brak pasujących plików dla tego bukietu.</div>';
+            if (selectButton) selectButton.disabled = true;
+            if (unselectButton) unselectButton.disabled = true;
+            if (saveButton) saveButton.disabled = true;
+            renderLibrarySelectionSummary();
+            return;
+        }
+        list.innerHTML = items.map(function (item) {
+            const checked = !!item.selected;
+            const disabled = !!item.blocked_by_other_collection;
+            const note = item.blocked_by_other_collection
+                ? ('Plik znajduje się już w bukiecie "' + (item.blocked_collection_name || "innego użytkownika") + '".')
+                : (item.missing ? "Plik zniknął z dysku i zniknie przy najbliższym czyszczeniu." : item.detail_text || "");
+            return `
+                <label class="dlna-library-row ${checked ? "is-selected" : ""} ${disabled ? "is-disabled" : ""}">
+                    <input
+                        class="js-dlna-library-checkbox"
+                        type="checkbox"
+                        data-entry-id="${escapeHtml(item.entry_id || "")}"
+                        data-storage-id="${escapeHtml(item.storage_id || "local")}"
+                        data-storage-kind="${escapeHtml(item.storage_kind || "video")}"
+                        data-relative-path="${escapeHtml(item.relative_path || "")}"
+                        ${checked ? "checked" : ""}
+                        ${disabled ? "disabled" : ""}
+                    >
+                    <span class="dlna-library-row-body">
+                        <strong>${escapeHtml(item.title || item.display_path || "plik")}</strong>
+                        <span class="small">${escapeHtml(item.display_path || "")}</span>
+                        <span class="small">${escapeHtml(note || "")}</span>
+                    </span>
+                </label>
+            `;
+        }).join("");
+        if (selectButton) selectButton.disabled = false;
+        if (unselectButton) unselectButton.disabled = false;
+        if (saveButton) saveButton.disabled = false;
+        renderLibrarySelectionSummary();
+    }
+
+    function renderClients() {
+        if (!isAdmin()) {
+            return;
+        }
+        const newClientCollections = document.getElementById("dlnaNewClientCollections");
+        if (newClientCollections) {
+            newClientCollections.innerHTML = renderCollectionCheckboxGrid([], "new-client");
+        }
+
+        const list = document.getElementById("dlnaClientsList");
+        const meta = document.getElementById("dlnaClientsMeta");
+        const clients = Array.isArray(currentState.clients) ? currentState.clients : [];
+        if (meta) {
+            meta.textContent = clients.length ? (clients.filter(function (item) { return !!item.enabled; }).length + " aktywnych z " + clients.length) : "Brak klientów";
+        }
+        if (!list) {
+            return;
+        }
+        if (!clients.length) {
+            list.innerHTML = '<div class="dlna-empty">Nie dodano jeszcze żadnych klientów DLNA.</div>';
+            return;
+        }
+        list.innerHTML = clients.map(function (client) {
+            return `
+                <article class="dlna-card" data-client-id="${escapeHtml(client.id)}">
+                    <div class="dlna-item-header">
+                        <div>
+                            <div class="dlna-item-title">${escapeHtml(client.ip || "")}</div>
+                            <div class="small">${escapeHtml(client.description || "Brak opisu urządzenia.")}</div>
+                            <div class="small">Widoczne pliki: ${escapeHtml(client.visible_media_count || 0)}</div>
+                        </div>
+                        <span class="service-status-pill ${client.enabled ? "success" : "muted"}">${client.enabled ? "Aktywny" : "Wyłączony"}</span>
+                    </div>
+                    <div class="dlna-inline-form is-wide">
+                        <div class="field-group">
+                            <label class="field-label" for="dlnaClientIp-${escapeHtml(client.id)}">Adres IP</label>
+                            <input id="dlnaClientIp-${escapeHtml(client.id)}" data-client-field="ip" type="text" value="${escapeHtml(client.ip || "")}">
+                        </div>
+                        <div class="field-group">
+                            <label class="field-label" for="dlnaClientDescription-${escapeHtml(client.id)}">Opis urządzenia</label>
+                            <input id="dlnaClientDescription-${escapeHtml(client.id)}" data-client-field="description" type="text" value="${escapeHtml(client.description || "")}">
+                        </div>
+                    </div>
+                    <label class="dlna-checkbox" style="margin-top: 12px;">
+                        <input type="checkbox" data-client-field="enabled" ${client.enabled ? "checked" : ""}>
+                        <span class="dlna-checkbox-text">
+                            <strong>Klient aktywny</strong>
+                            <span class="small">Wyłącz klienta bez kasowania wpisu IP.</span>
+                        </span>
+                    </label>
+                    <div style="margin-top: 12px;">
+                        <div class="field-label">Bukiety widoczne dla klienta</div>
+                        <div class="dlna-checkbox-grid">${renderCollectionCheckboxGrid(client.collection_ids || [], "client-" + client.id)}</div>
+                    </div>
+                    <div class="dlna-item-actions">
+                        <button type="button" class="btn js-dlna-save-client" data-client-id="${escapeHtml(client.id)}">Zapisz klienta</button>
+                        <button type="button" class="btn btn-stop js-dlna-delete-client" data-client-id="${escapeHtml(client.id)}">Usuń klienta</button>
+                    </div>
+                </article>
+            `;
+        }).join("");
+    }
+
+    function renderPackageAndService() {
+        if (!isAdmin()) {
+            return;
+        }
+        const packageState = currentState.dlna_package_state || {};
+        const serviceState = currentState.dlna_service_state || {};
+        const maintenanceTasks = currentState.maintenance_tasks || {};
+        const task = maintenanceTasks.dlna_install || null;
+        const taskPanel = document.getElementById("dlnaTaskPanel");
+        const busy = !!serviceState.operation_busy;
+
+        const packageStatusPill = document.getElementById("dlnaPackageStatusPill");
+        if (packageStatusPill) {
+            packageStatusPill.className = "service-status-pill " + String(packageState.status_pill_kind || "muted");
+            packageStatusPill.textContent = String(packageState.status_pill_label || "Nieznany");
+        }
+        const checkedAt = document.getElementById("dlnaPackageCheckedAt");
+        if (checkedAt) {
+            checkedAt.textContent = "Ostatnie sprawdzenie: " + String(packageState.checked_at_text || "jeszcze nie sprawdzano");
+        }
+        const currentVersion = document.getElementById("dlnaPackageCurrentVersion");
+        if (currentVersion) {
+            currentVersion.textContent = String(packageState.current_version || "brak");
+        }
+        const latestVersion = document.getElementById("dlnaPackageLatestVersion");
+        if (latestVersion) {
+            latestVersion.textContent = String(packageState.latest_version || "brak danych");
+        }
+        const packageSource = document.getElementById("dlnaPackageSource");
+        if (packageSource) {
+            packageSource.textContent = String(packageState.source_label || "Pakiet Debian / apt");
+        }
+        const packageError = document.getElementById("dlnaPackageErrorBox");
+        if (packageError) {
+            packageError.hidden = !packageState.check_error;
+            packageError.textContent = packageState.check_error ? ("Błąd sprawdzania pakietu: " + packageState.check_error) : "";
+        }
+        const packageActionButton = document.getElementById("dlnaPackageActionButton");
+        if (packageActionButton) {
+            packageActionButton.hidden = !packageState.action_needed;
+            packageActionButton.textContent = String(packageState.action_button_label || "Zainstaluj lub zaktualizuj DLNA");
+            packageActionButton.dataset.idleLabel = packageActionButton.textContent;
+            packageActionButton.disabled = !!(task && task.active);
+        }
+        const packageActionNote = document.getElementById("dlnaPackageActionNote");
+        if (packageActionNote) {
+            packageActionNote.hidden = !!packageState.action_needed;
+            packageActionNote.textContent = packageState.action_needed ? "" : "Pakiet Gerbera jest już aktualny.";
+        }
+
+        if (taskPanel) {
+            if (!task || !task.visible) {
+                taskPanel.hidden = true;
+            } else {
+                taskPanel.hidden = false;
+                const taskPill = document.getElementById("dlnaTaskStatusPill");
+                const taskLabel = document.getElementById("dlnaTaskLabel");
+                const taskPercent = document.getElementById("dlnaTaskPercent");
+                const taskBar = document.getElementById("dlnaTaskBar");
+                const taskProgress = document.getElementById("dlnaTaskProgress");
+                const taskDetail = document.getElementById("dlnaTaskDetail");
+                const taskTime = document.getElementById("dlnaTaskTime");
+                if (taskPill) {
+                    taskPill.className = "service-status-pill " + String(task.status_kind || "muted");
+                    taskPill.textContent = String(task.status_label || "...");
+                }
+                if (taskLabel) taskLabel.textContent = String(task.title || "Instalacja serwera DLNA");
+                if (taskPercent) taskPercent.textContent = task.progress_percent === null || task.progress_percent === undefined ? "..." : (Number(task.progress_percent).toFixed(1) + "%");
+                if (taskBar) {
+                    taskBar.className = "progress-bar " + (task.status === "error" ? "error" : (task.status === "success" ? "completed" : "downloading"));
+                    taskBar.style.width = task.progress_percent === null || task.progress_percent === undefined
+                        ? "38%"
+                        : (Math.max(0, Math.min(100, Number(task.progress_percent) || 0)) + "%");
+                }
+                if (taskProgress) {
+                    taskProgress.classList.toggle("is-indeterminate", task.progress_percent === null || task.progress_percent === undefined);
+                }
+                if (taskDetail) taskDetail.textContent = String(task.detail || task.message || "");
+                if (taskTime) {
+                    taskTime.textContent = task.active
+                        ? ("Start: " + String(task.started_at_text || ""))
+                        : (task.finished_at_text ? ("Zakończono: " + String(task.finished_at_text || "")) : "");
+                }
+            }
+        }
+
+        const servicePill = document.getElementById("dlnaServiceStatusPill");
+        if (servicePill) {
+            servicePill.className = "service-status-pill " + String(serviceState.status_kind || "muted");
+            servicePill.textContent = String(serviceState.status_label || "Nieznany");
+        }
+        const servicePid = document.getElementById("dlnaServicePidText");
+        if (servicePid) {
+            servicePid.textContent = serviceState.main_pid
+                ? ("PID: " + String(serviceState.main_pid) + (serviceState.sub_state ? " | " + String(serviceState.sub_state) : ""))
+                : String(serviceState.sub_state || "Brak PID");
+        }
+        const serviceUnitState = document.getElementById("dlnaServiceUnitState");
+        if (serviceUnitState) {
+            serviceUnitState.textContent = String(serviceState.unit_file_label || "nieznany");
+        }
+        const serviceUptime = document.getElementById("dlnaServiceUptime");
+        if (serviceUptime) {
+            serviceUptime.textContent = String(serviceState.service_uptime_text || "nieznany");
+        }
+        const serviceLastRestart = document.getElementById("dlnaServiceLastRestart");
+        if (serviceLastRestart) {
+            serviceLastRestart.textContent = String(serviceState.last_restart_text || "nieznany");
+        }
+        const exportRoot = document.getElementById("dlnaExportRoot");
+        if (exportRoot) {
+            exportRoot.textContent = String(serviceState.export_root || "");
+        }
+        const configFile = document.getElementById("dlnaConfigFile");
+        if (configFile) {
+            configFile.textContent = String(serviceState.config_file || "");
+        }
+        const diagnostics = document.getElementById("dlnaServiceDiagnostics");
+        if (diagnostics) {
+            const message = String(serviceState.operation_busy_label || serviceState.runtime_phase_detail || "");
+            diagnostics.hidden = !message;
+            diagnostics.textContent = message;
+        }
+        const serviceError = document.getElementById("dlnaServiceErrorBox");
+        if (serviceError) {
+            const errorText = String(serviceState.error || "");
+            serviceError.hidden = !errorText;
+            serviceError.textContent = errorText;
+        }
+        const serviceLogBox = document.getElementById("dlnaServiceLogBox");
+        if (serviceLogBox) {
+            const logSnippet = String(serviceState.last_log_excerpt || "");
+            serviceLogBox.hidden = !logSnippet;
+            serviceLogBox.textContent = logSnippet;
+        }
+        const toggleButton = document.getElementById("dlnaServiceToggleButton");
+        if (toggleButton) {
+            toggleButton.textContent = String(serviceState.toggle_button_label || "Zmień stan usługi");
+            toggleButton.dataset.idleLabel = toggleButton.textContent;
+            toggleButton.disabled = !serviceState.allow_toggle;
+        }
+        const restartButton = document.getElementById("dlnaServiceRestartButton");
+        if (restartButton) {
+            restartButton.textContent = String(serviceState.restart_button_label || "Uruchom ponownie serwer DLNA");
+            restartButton.dataset.idleLabel = restartButton.textContent;
+            restartButton.disabled = !serviceState.allow_restart;
+        }
+        const resyncButton = document.getElementById("dlnaResyncButton");
+        if (resyncButton) {
+            resyncButton.disabled = !serviceState.allow_resync;
+        }
+
+        const serverName = document.getElementById("dlnaServerName");
+        if (serverName && document.activeElement !== serverName) {
+            serverName.value = String((currentState.dlna_config || {}).server_name || "");
+        }
+        const bindIp = document.getElementById("dlnaBindIp");
+        if (bindIp && document.activeElement !== bindIp) {
+            bindIp.value = String((currentState.dlna_config || {}).bind_ip || "");
+        }
+        const port = document.getElementById("dlnaPort");
+        if (port && document.activeElement !== port) {
+            port.value = String((currentState.dlna_config || {}).port || "");
+        }
+
+        const iconState = currentState.dlna_icon_state || {};
+        const iconImage = document.getElementById("dlnaIconPreviewImage");
+        if (iconImage) {
+            iconImage.src = "/api/dlna/icon-preview?v=" + encodeURIComponent(String(iconState.updated_at || Date.now()));
+        }
+        const iconModeLabel = document.getElementById("dlnaIconModeLabel");
+        if (iconModeLabel) {
+            iconModeLabel.textContent = iconState.mode === "custom" ? "Własna ikona DLNA" : "Domyślna ikona Gerbery";
+        }
+        const iconSourceName = document.getElementById("dlnaIconSourceName");
+        if (iconSourceName) {
+            iconSourceName.textContent = iconState.source_name
                 ? ("Plik źródłowy: " + String(iconState.source_name))
                 : "Brak własnego pliku źródłowego.";
         }
-        if (updatedAt) {
-            updatedAt.textContent = iconState.updated_at_text
+        const iconUpdatedAt = document.getElementById("dlnaIconUpdatedAt");
+        if (iconUpdatedAt) {
+            iconUpdatedAt.textContent = iconState.updated_at_text
                 ? ("Ostatnia zmiana: " + String(iconState.updated_at_text))
                 : "";
         }
-        if (resetButton) {
-            resetButton.hidden = !(iconState.mode === "custom" || iconState.source_exists);
-        }
     }
 
-    function renderAllStaticSections() {
-        renderIconState();
-        renderCollections();
-        renderClients();
-        renderMediaRules();
-        renderLibraryResults();
-    }
-
-    function renderLiveSections() {
+    function applyState(nextState, rerenderAll) {
+        currentState = nextState || {};
+        ensureActiveCollectionId();
         renderMount();
-        renderSummary(false);
-        renderIconState();
+        renderSummary();
+        renderCollectionEditorSelect();
+        renderCollections();
+        renderMediaEntries();
+        renderClients();
         renderPackageAndService();
-    }
-
-    function applyState(state, rerenderAll) {
-        if (!state) {
-            return;
+        setActiveTab(activeTab, false);
+        persistUiState();
+        if (rerenderAll || String(currentLibraryResults.collection_id || "") !== String(activeCollectionId || "")) {
+            refreshLibraryResults();
+        } else {
+            renderLibraryResults();
         }
-        currentState = state;
-        renderLiveSections();
-        if (rerenderAll) {
-            renderSummary(true);
-            renderAllStaticSections();
-        }
-    }
-
-    async function fetchJson(url, options) {
-        const response = await fetch(url, Object.assign({
-            headers: {
-                "Accept": "application/json",
-                "X-Requested-With": "fetch"
-            }
-        }, options || {}));
-        const data = await response.json().catch(function() { return null; });
-        if (!response.ok || !data) {
-            throw new Error((data && (data.error || data.message)) || "Nie udało się wykonać operacji.");
-        }
-        if (data.ok === false) {
-            throw new Error(data.error || data.message || "Operacja zakończyła się błędem.");
-        }
-        return data;
-    }
-
-    async function postJson(url, payload) {
-        return fetchJson(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "X-Requested-With": "fetch"
-            },
-            body: JSON.stringify(payload || {})
-        });
-    }
-
-    async function postFormData(url, formData) {
-        const response = await fetch(url, {
-            method: "POST",
-            body: formData,
-            headers: {
-                "Accept": "application/json",
-                "X-Requested-With": "fetch"
-            }
-        });
-        const data = await response.json().catch(function() { return null; });
-        if (!response.ok || !data) {
-            throw new Error((data && (data.error || data.message)) || "Nie udało się wykonać operacji.");
-        }
-        if (data.ok === false) {
-            throw new Error(data.error || data.message || "Operacja zakończyła się błędem.");
-        }
-        return data;
     }
 
     async function refreshState(rerenderAll) {
         try {
             const data = await fetchJson("/api/dlna/state");
-            applyState(data.state, !!rerenderAll);
+            applyState(data.state || {}, !!rerenderAll);
             return data;
         } catch (err) {
-            // Tło tylko odświeża stan. Przy chwilowym błędzie po prostu próbujemy ponownie później.
             return null;
         }
     }
 
-    function applyLiveDlnaPayload(data) {
-        if (!data || !data.state) {
-            return;
-        }
-        applyState(data.state, false);
-    }
-
     async function refreshLibraryResults() {
-        const query = String(document.getElementById("dlnaLibraryQuery").value || "");
-        syncLibraryControlValues();
+        renderCollectionEditorSelect();
+        const queryInput = document.getElementById("dlnaLibraryQuery");
+        const query = queryInput ? String(queryInput.value || "") : "";
         if (!activeCollectionId) {
             currentLibraryResults = {
                 items: [],
@@ -802,38 +739,29 @@
                 shown_items: 0,
                 collection_id: "",
                 collection_name: "",
-                mode: libraryMode
+                mode: "files",
             };
             renderLibraryResults();
             return;
         }
         try {
             const data = await fetchJson(
-                "/api/dlna/library?query=" + encodeURIComponent(query)
-                + "&collection_id=" + encodeURIComponent(activeCollectionId)
-                + "&mode=" + encodeURIComponent(libraryMode)
-                + "&limit=200"
+                "/api/dlna/library?collection_id=" + encodeURIComponent(activeCollectionId)
+                + "&query=" + encodeURIComponent(query)
+                + "&mode=files&limit=300"
             );
-            currentLibraryResults = data.results || {
-                items: [],
-                total_items: 0,
-                shown_items: 0,
-                collection_id: activeCollectionId,
-                collection_name: "",
-                mode: libraryMode
-            };
-            renderLibraryResults();
+            currentLibraryResults = data.results || currentLibraryResults;
         } catch (err) {
             currentLibraryResults = {
                 items: [],
                 total_items: 0,
                 shown_items: 0,
                 collection_id: activeCollectionId,
-                collection_name: "",
-                mode: libraryMode
+                collection_name: (getCollectionById(activeCollectionId) || {}).name || "",
+                mode: "files",
             };
-            renderLibraryResults();
         }
+        renderLibraryResults();
     }
 
     async function performAction(button, busyLabel, action) {
@@ -849,194 +777,143 @@
             await refreshLibraryResults();
             return true;
         } catch (err) {
-            showToast(String(err), "error");
+            showToast(String(err || "Operacja zakończyła się błędem."), "error");
             return false;
         } finally {
             setButtonBusy(button, false);
         }
     }
 
+    function readVisibleLibraryItems() {
+        return Array.from(root.querySelectorAll(".js-dlna-library-checkbox")).map(function (input) {
+            return {
+                entry_id: String(input.dataset.entryId || ""),
+                storage_id: String(input.dataset.storageId || "local"),
+                storage_kind: String(input.dataset.storageKind || "video"),
+                relative_path: String(input.dataset.relativePath || ""),
+                checked: !!input.checked,
+            };
+        });
+    }
+
     async function handleRootClick(event) {
         const tabButton = event.target.closest("[data-dlna-tab-button]");
         if (tabButton) {
             event.preventDefault();
-            setActiveTab(tabButton.dataset.dlnaTabButton || "serwer");
+            setActiveTab(tabButton.dataset.dlnaTabButton || "bukiety");
             return;
         }
 
-        const toggleItemButton = event.target.closest(".js-dlna-toggle-item");
-        if (toggleItemButton) {
+        const selectCollectionButton = event.target.closest(".js-dlna-select-collection");
+        if (selectCollectionButton) {
             event.preventDefault();
-            const scope = String(toggleItemButton.dataset.toggleScope || "");
-            if (scope === "collections") {
-                const card = toggleItemButton.closest("[data-collection-id]");
-                toggleExpanded(scope, card ? card.dataset.collectionId : "");
-                renderCollections();
-                return;
-            }
-            if (scope === "clients") {
-                const card = toggleItemButton.closest("[data-client-id]");
-                toggleExpanded(scope, card ? card.dataset.clientId : "");
-                renderClients();
-                return;
-            }
-            if (scope === "rules") {
-                const card = toggleItemButton.closest("[data-rule-id]");
-                toggleExpanded(scope, card ? card.dataset.ruleId : "");
-                renderMediaRules();
-                return;
-            }
-        }
-
-        const packageCheckButton = event.target.closest("#dlnaPackageCheckButton");
-        if (packageCheckButton) {
-            event.preventDefault();
-            return performAction(packageCheckButton, "Sprawdzanie...", function() {
-                return postJson("/api/dlna/package-check");
-            });
-        }
-
-        const packageActionButton = event.target.closest("#dlnaPackageActionButton");
-        if (packageActionButton) {
-            event.preventDefault();
-            return performAction(packageActionButton, "Uruchamianie...", function() {
-                return postJson("/api/dlna/package-install");
-            });
-        }
-
-        const serviceToggleButton = event.target.closest("#dlnaServiceToggleButton");
-        if (serviceToggleButton) {
-            event.preventDefault();
-            const enabled = !((currentState.dlna_service_state || {}).desired_enabled);
-            return performAction(serviceToggleButton, enabled ? "Włączanie..." : "Wyłączanie...", function() {
-                return postJson("/api/dlna/service-toggle", {enabled: enabled});
-            });
-        }
-
-        const serviceRestartButton = event.target.closest("#dlnaServiceRestartButton");
-        if (serviceRestartButton) {
-            event.preventDefault();
-            return performAction(serviceRestartButton, "Restartowanie...", function() {
-                return postJson("/api/dlna/service-restart");
-            });
-        }
-
-        const resyncButton = event.target.closest("#dlnaResyncButton");
-        if (resyncButton) {
-            event.preventDefault();
-            return performAction(resyncButton, "Synchronizacja...", function() {
-                return postJson("/api/dlna/resync");
-            });
-        }
-
-        const resetIconButton = event.target.closest("#dlnaIconResetButton");
-        if (resetIconButton) {
-            event.preventDefault();
-            return performAction(resetIconButton, "Przywracanie...", function() {
-                return postJson("/api/dlna/icon-reset");
-            });
+            activeCollectionId = String(selectCollectionButton.dataset.collectionId || "");
+            persistUiState();
+            renderCollections();
+            await refreshLibraryResults();
+            return;
         }
 
         const saveCollectionButton = event.target.closest(".js-dlna-save-collection");
         if (saveCollectionButton) {
             event.preventDefault();
+            const collectionId = String(saveCollectionButton.dataset.collectionId || "");
             const card = saveCollectionButton.closest("[data-collection-id]");
-            if (!card) {
+            if (!collectionId || !card) {
                 return;
             }
-            return performAction(saveCollectionButton, "Zapisywanie...", function() {
+            await performAction(saveCollectionButton, "Zapisywanie...", function () {
                 return postJson("/api/dlna/collections", {
                     action: "update",
-                    collection_id: card.dataset.collectionId || "",
-                    name: (card.querySelector('[data-collection-field="name"]') || {}).value || "",
-                    description: (card.querySelector('[data-collection-field="description"]') || {}).value || ""
+                    collection_id: collectionId,
+                    name: String((card.querySelector('[data-collection-field="name"]') || {}).value || ""),
+                    description: String((card.querySelector('[data-collection-field="description"]') || {}).value || ""),
                 });
             });
+            return;
         }
 
         const deleteCollectionButton = event.target.closest(".js-dlna-delete-collection");
         if (deleteCollectionButton) {
             event.preventDefault();
-            if (!confirm("Usunąć tę kolekcję? Zostanie też odpięta od klientów i mediów.")) {
+            if (!confirm("Usunąć ten bukiet? Wszystkie jego pliki wrócą do oryginalnych lokalizacji.")) {
                 return;
             }
-            const card = deleteCollectionButton.closest("[data-collection-id]");
-            if (!card) {
-                return;
-            }
-            expandedState.collections.delete(String(card.dataset.collectionId || ""));
-            return performAction(deleteCollectionButton, "Usuwanie...", function() {
+            const collectionId = String(deleteCollectionButton.dataset.collectionId || "");
+            await performAction(deleteCollectionButton, "Usuwanie...", function () {
                 return postJson("/api/dlna/collections", {
                     action: "delete",
-                    collection_id: card.dataset.collectionId || ""
+                    collection_id: collectionId,
                 });
             });
+            if (String(activeCollectionId || "") === collectionId) {
+                activeCollectionId = "";
+            }
+            return;
         }
 
         const saveClientButton = event.target.closest(".js-dlna-save-client");
         if (saveClientButton) {
             event.preventDefault();
             const card = saveClientButton.closest("[data-client-id]");
-            if (!card) {
+            const clientId = card ? String(card.dataset.clientId || "") : "";
+            if (!card || !clientId) {
                 return;
             }
-            return performAction(saveClientButton, "Zapisywanie...", function() {
+            await performAction(saveClientButton, "Zapisywanie...", function () {
                 return postJson("/api/dlna/clients", {
                     action: "update",
-                    client_id: card.dataset.clientId || "",
-                    ip: (card.querySelector('[data-client-field="ip"]') || {}).value || "",
-                    description: (card.querySelector('[data-client-field="description"]') || {}).value || "",
+                    client_id: clientId,
+                    ip: String((card.querySelector('[data-client-field="ip"]') || {}).value || ""),
+                    description: String((card.querySelector('[data-client-field="description"]') || {}).value || ""),
                     enabled: !!((card.querySelector('[data-client-field="enabled"]') || {}).checked),
-                    collection_ids: readCheckboxScope("client-" + (card.dataset.clientId || ""), card),
-                    usernames: readCheckboxScope("client-user-" + (card.dataset.clientId || ""), card)
+                    collection_ids: readCheckboxScope("client-" + clientId, card),
                 });
             });
+            return;
         }
 
         const deleteClientButton = event.target.closest(".js-dlna-delete-client");
         if (deleteClientButton) {
             event.preventDefault();
-            if (!confirm("Usunąć tego klienta z whitelisty DLNA?")) {
+            if (!confirm("Usunąć tego klienta DLNA z whitelisty?")) {
                 return;
             }
-            const card = deleteClientButton.closest("[data-client-id]");
-            if (!card) {
-                return;
-            }
-            expandedState.clients.delete(String(card.dataset.clientId || ""));
-            return performAction(deleteClientButton, "Usuwanie...", function() {
+            const clientId = String(deleteClientButton.dataset.clientId || "");
+            await performAction(deleteClientButton, "Usuwanie...", function () {
                 return postJson("/api/dlna/clients", {
                     action: "delete",
-                    client_id: card.dataset.clientId || ""
+                    client_id: clientId,
                 });
             });
+            return;
         }
 
         const selectVisibleButton = event.target.closest("#dlnaSelectVisibleButton");
         if (selectVisibleButton) {
             event.preventDefault();
-            root.querySelectorAll(".js-dlna-library-checkbox").forEach(function(input) {
+            root.querySelectorAll(".js-dlna-library-checkbox:not([disabled])").forEach(function (input) {
                 input.checked = true;
                 const row = input.closest(".dlna-library-row");
                 if (row) {
                     row.classList.add("is-selected");
                 }
             });
-            updateLibrarySelectionSummary();
+            renderLibrarySelectionSummary();
             return;
         }
 
         const unselectVisibleButton = event.target.closest("#dlnaUnselectVisibleButton");
         if (unselectVisibleButton) {
             event.preventDefault();
-            root.querySelectorAll(".js-dlna-library-checkbox").forEach(function(input) {
+            root.querySelectorAll(".js-dlna-library-checkbox:not([disabled])").forEach(function (input) {
                 input.checked = false;
                 const row = input.closest(".dlna-library-row");
                 if (row) {
                     row.classList.remove("is-selected");
                 }
             });
-            updateLibrarySelectionSummary();
+            renderLibrarySelectionSummary();
             return;
         }
 
@@ -1048,51 +925,67 @@
                 return;
             }
             const items = readVisibleLibraryItems();
-            return performAction(saveVisibleSelectionButton, "Zapisywanie...", function() {
+            await performAction(saveVisibleSelectionButton, "Zapisywanie...", function () {
                 return postJson("/api/dlna/media", {
                     action: "bulk_assign_collection",
                     collection_id: activeCollectionId,
-                    items: items
+                    items: items,
                 });
             });
+            return;
         }
 
-        const saveRuleButton = event.target.closest(".js-dlna-save-rule");
-        if (saveRuleButton) {
+        const packageCheckButton = event.target.closest("#dlnaPackageCheckButton");
+        if (packageCheckButton) {
             event.preventDefault();
-            const card = saveRuleButton.closest("[data-rule-id]");
-            if (!card) {
-                return;
-            }
-            const existingRule = (currentState.media_rules || []).find(function(rule) {
-                return String(rule.id || "") === String(card.dataset.ruleId || "");
-            }) || {};
-            return performAction(saveRuleButton, "Zapisywanie...", function() {
-                return postJson("/api/dlna/media", {
-                    action: "update",
-                    rule_id: card.dataset.ruleId || "",
-                    enabled: !!((card.querySelector('[data-rule-field="enabled"]') || {}).checked),
-                    collection_ids: existingRule.collection_ids || []
-                });
+            await performAction(packageCheckButton, "Sprawdzanie...", function () {
+                return postJson("/api/dlna/package-check");
             });
+            return;
         }
 
-        const deleteRuleButton = event.target.closest(".js-dlna-delete-rule");
-        if (deleteRuleButton) {
+        const packageActionButton = event.target.closest("#dlnaPackageActionButton");
+        if (packageActionButton) {
             event.preventDefault();
-            if (!confirm("Usunąć ten wpis z listy aktywnych mediów DLNA?")) {
-                return;
-            }
-            const card = deleteRuleButton.closest("[data-rule-id]");
-            if (!card) {
-                return;
-            }
-            expandedState.rules.delete(String(card.dataset.ruleId || ""));
-            return performAction(deleteRuleButton, "Usuwanie...", function() {
-                return postJson("/api/dlna/media", {
-                    action: "delete",
-                    rule_id: card.dataset.ruleId || ""
-                });
+            await performAction(packageActionButton, "Uruchamianie...", function () {
+                return postJson("/api/dlna/package-install");
+            });
+            return;
+        }
+
+        const toggleButton = event.target.closest("#dlnaServiceToggleButton");
+        if (toggleButton) {
+            event.preventDefault();
+            const enabled = !((currentState.dlna_service_state || {}).desired_enabled);
+            await performAction(toggleButton, enabled ? "Włączanie..." : "Wyłączanie...", function () {
+                return postJson("/api/dlna/service-toggle", {enabled: enabled});
+            });
+            return;
+        }
+
+        const restartButton = event.target.closest("#dlnaServiceRestartButton");
+        if (restartButton) {
+            event.preventDefault();
+            await performAction(restartButton, "Restartowanie...", function () {
+                return postJson("/api/dlna/service-restart");
+            });
+            return;
+        }
+
+        const resyncButton = event.target.closest("#dlnaResyncButton");
+        if (resyncButton) {
+            event.preventDefault();
+            await performAction(resyncButton, "Synchronizacja...", function () {
+                return postJson("/api/dlna/resync");
+            });
+            return;
+        }
+
+        const resetIconButton = event.target.closest("#dlnaIconResetButton");
+        if (resetIconButton) {
+            event.preventDefault();
+            await performAction(resetIconButton, "Przywracanie...", function () {
+                return postJson("/api/dlna/icon-reset");
             });
         }
     }
@@ -1103,75 +996,68 @@
             return;
         }
 
-        if (form.id === "dlnaServerSettingsForm") {
-            event.preventDefault();
-            const button = form.querySelector("button[type='submit']");
-            return performAction(button, "Zapisywanie...", function() {
-                return postJson("/api/dlna/settings", {
-                    server_name: form.server_name.value,
-                    bind_ip: form.bind_ip.value,
-                    port: form.port.value
-                });
-            });
-        }
-
-        if (form.id === "dlnaIconUploadForm") {
-            event.preventDefault();
-            const button = form.querySelector("button[type='submit']");
-            return performAction(button, "Wgrywanie...", function() {
-                return postFormData("/api/dlna/icon-upload", new FormData(form));
-            }).then(function(ok) {
-                if (ok) {
-                    form.reset();
-                }
-            });
-        }
-
         if (form.id === "dlnaCreateCollectionForm") {
             event.preventDefault();
-            const button = form.querySelector("button[type='submit']");
-            return performAction(button, "Dodawanie...", function() {
+            const button = form.querySelector('button[type="submit"]');
+            const ok = await performAction(button, "Dodawanie...", function () {
                 return postJson("/api/dlna/collections", {
                     action: "create",
-                    name: form.name.value,
-                    description: form.description.value
+                    name: String(form.name.value || ""),
+                    description: String(form.description.value || ""),
                 });
-            }).then(function(ok) {
-                if (ok) {
-                    form.reset();
-                }
             });
+            if (ok) {
+                form.reset();
+            }
+            return;
         }
 
         if (form.id === "dlnaCreateClientForm") {
             event.preventDefault();
-            const button = form.querySelector("button[type='submit']");
-            return performAction(button, "Dodawanie...", function() {
+            const button = form.querySelector('button[type="submit"]');
+            const ok = await performAction(button, "Dodawanie...", function () {
                 return postJson("/api/dlna/clients", {
                     action: "create",
-                    ip: form.ip.value,
-                    description: form.description.value,
+                    ip: String(form.ip.value || ""),
+                    description: String(form.description.value || ""),
                     enabled: !!form.enabled.checked,
                     collection_ids: readCheckboxScope("new-client"),
-                    usernames: readCheckboxScope("new-client-user")
                 });
-            }).then(function(ok) {
-                if (ok) {
-                    form.reset();
-                    const newClientUsers = document.getElementById("dlnaNewClientUsers");
-                    if (newClientUsers) {
-                        newClientUsers.innerHTML = renderUserCheckboxes([], "new-client-user");
-                    }
-                }
             });
+            if (ok) {
+                form.reset();
+                const enabledInput = form.querySelector("#dlnaNewClientEnabled");
+                if (enabledInput) {
+                    enabledInput.checked = true;
+                }
+                renderClients();
+            }
+            return;
         }
-    }
 
-    function handleSearchInput() {
-        clearTimeout(searchTimer);
-        searchTimer = setTimeout(function() {
-            refreshLibraryResults();
-        }, 260);
+        if (form.id === "dlnaServerSettingsForm") {
+            event.preventDefault();
+            const button = form.querySelector('button[type="submit"]');
+            await performAction(button, "Zapisywanie...", function () {
+                return postJson("/api/dlna/settings", {
+                    server_name: String(form.server_name.value || ""),
+                    bind_ip: String(form.bind_ip.value || ""),
+                    port: String(form.port.value || ""),
+                });
+            });
+            return;
+        }
+
+        if (form.id === "dlnaIconUploadForm") {
+            event.preventDefault();
+            const button = form.querySelector('button[type="submit"]');
+            const ok = await performAction(button, "Wgrywanie...", function () {
+                return postFormData("/api/dlna/icon-upload", new FormData(form));
+            });
+            if (ok) {
+                form.reset();
+            }
+        }
     }
 
     function handleRootChange(event) {
@@ -1179,87 +1065,78 @@
         if (!(target instanceof Element)) {
             return;
         }
-
         if (target.matches("#dlnaCollectionEditorSelect")) {
             activeCollectionId = String(target.value || "");
-            persistLibraryPreferences();
+            persistUiState();
+            renderCollections();
             refreshLibraryResults();
             return;
         }
-
-        if (target.matches("#dlnaLibraryMode")) {
-            const nextMode = String(target.value || "files");
-            libraryMode = nextMode === "folders" || nextMode === "all" ? nextMode : "files";
-            persistLibraryPreferences();
-            refreshLibraryResults();
-            return;
-        }
-
         if (target.matches(".js-dlna-library-checkbox")) {
             const row = target.closest(".dlna-library-row");
             if (row) {
                 row.classList.toggle("is-selected", !!target.checked);
             }
-            updateLibrarySelectionSummary();
-            return;
-        }
-
-        if (target.matches('[data-rule-field="enabled"]')) {
-            const row = target.closest(".dlna-library-row");
-            if (row) {
-                row.classList.toggle("is-selected", !!target.checked);
-            }
+            renderLibrarySelectionSummary();
         }
     }
 
-    renderMount();
-    renderSummary(true);
-    renderPackageAndService();
-    renderAllStaticSections();
-    setActiveTab(activeTab, false);
-    refreshLibraryResults();
+    function handleLibrarySearchInput() {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(function () {
+            refreshLibraryResults();
+        }, 260);
+    }
 
-    document.addEventListener("click", handleRootClick);
-    document.addEventListener("change", handleRootChange, true);
-    document.addEventListener("submit", handleRootSubmit, true);
-    document.getElementById("dlnaLibraryQuery").addEventListener("input", handleSearchInput);
+    function handleLivePayload(data) {
+        if (!data || !data.state) {
+            return;
+        }
+        applyState(data.state, false);
+    }
+
+    root.addEventListener("click", handleRootClick);
+    root.addEventListener("change", handleRootChange, true);
+    root.addEventListener("submit", handleRootSubmit, true);
+    const libraryQueryInput = document.getElementById("dlnaLibraryQuery");
+    if (libraryQueryInput) {
+        libraryQueryInput.addEventListener("input", handleLibrarySearchInput);
+    }
+
+    applyState(currentState, true);
 
     if (window.appLive && typeof window.appLive.createSubscription === "function") {
         liveSubscription = window.appLive.createSubscription({
             url: "/api/dlna/stream",
-            fallbackIntervalMs: 1500,
-            fetchFallback: function() {
+            fallbackIntervalMs: 2000,
+            fetchFallback: function () {
                 return refreshState(false);
             },
-            onData: applyLiveDlnaPayload,
+            onData: handleLivePayload,
         });
         liveSubscription.start();
     } else {
-        const dlnaRefreshTimer = setInterval(function() {
+        const timer = setInterval(function () {
             refreshState(false);
-        }, 1500);
+        }, 2000);
         liveSubscription = {
-            stop: function() {
-                clearInterval(dlnaRefreshTimer);
-            },
-            refreshNow: function() {
-                return refreshState(false);
+            stop: function () {
+                clearInterval(timer);
             },
         };
     }
 
     if (typeof window.registerPageCleanup === "function") {
-        window.registerPageCleanup(function() {
+        window.registerPageCleanup(function () {
             clearTimeout(searchTimer);
+            if (libraryQueryInput) {
+                libraryQueryInput.removeEventListener("input", handleLibrarySearchInput);
+            }
+            root.removeEventListener("click", handleRootClick);
+            root.removeEventListener("change", handleRootChange, true);
+            root.removeEventListener("submit", handleRootSubmit, true);
             if (liveSubscription && typeof liveSubscription.stop === "function") {
                 liveSubscription.stop();
-            }
-            document.removeEventListener("click", handleRootClick);
-            document.removeEventListener("change", handleRootChange, true);
-            document.removeEventListener("submit", handleRootSubmit, true);
-            const queryInput = document.getElementById("dlnaLibraryQuery");
-            if (queryInput) {
-                queryInput.removeEventListener("input", handleSearchInput);
             }
         });
     }

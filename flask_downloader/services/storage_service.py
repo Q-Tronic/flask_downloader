@@ -388,9 +388,9 @@ class ManagedStorageService:
             or bool(re.search(r"(?i)\.(?:temp|f[0-9a-z][0-9a-z-]*)\.[^.\\/]+$", lower))
         )
 
-    def get_server_files(self, scope_username=""):
+    def get_server_files(self, scope_username="", allow_auto_remount=False):
         try:
-            self._ensure_share_ready(auto_remount=True)
+            self._ensure_share_ready(auto_remount=bool(allow_auto_remount))
         except Exception:
             pass
 

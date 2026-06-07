@@ -1,4 +1,3 @@
-
 <section id="dlnaPageRoot">
     <section class="page-card">
         <div class="page-title-row">
@@ -12,12 +11,137 @@
             </div>
         </div>
         <p class="muted">
-            Tu ustawisz serwer DLNA, whitelistę klientów, kolekcje i bibliotekę mediów bez przebijania się przez pełne reloady strony.
+            DLNA działa teraz wyłącznie na bukietach. Jeden plik może należeć tylko do jednego bukietu i jest fizycznie przenoszony do katalogu tego bukietu.
         </p>
 
         <div class="settings-overview-grid" id="dlnaSummaryGrid"></div>
 
-        <form id="dlnaServerSettingsForm" class="auth-form" style="margin-top: 18px;">
+        <div class="dlna-tabbar">
+            <button type="button" class="dlna-tab-button is-active" data-dlna-tab-button="bukiety">Bukiety</button>
+            {% if admin_logged_in %}
+            <button type="button" class="dlna-tab-button" data-dlna-tab-button="klienci">Klienci</button>
+            <button type="button" class="dlna-tab-button" data-dlna-tab-button="serwer">Serwer</button>
+            {% endif %}
+        </div>
+    </section>
+
+    <section class="page-card dlna-panel" data-dlna-panel="bukiety">
+        <h2 class="section-title">Bukiety DLNA</h2>
+        <p class="muted">
+            Każdy użytkownik zarządza własnymi bukietami. Pliki audio bez obrazu są pomijane, a usunięcie pliku z bukietu odkłada go z powrotem do oryginalnej lokalizacji.
+        </p>
+
+        <div class="dlna-subcard">
+            <div class="card-title">Nowy bukiet</div>
+            <form id="dlnaCreateCollectionForm" class="auth-form">
+                <div class="dlna-inline-form is-wide">
+                    <div class="field-group">
+                        <label class="field-label" for="dlnaNewCollectionName">Nazwa bukietu</label>
+                        <input id="dlnaNewCollectionName" type="text" name="name" placeholder="np. Wiking Tappi" required>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="dlnaNewCollectionDescription">Opis bukietu</label>
+                        <input id="dlnaNewCollectionDescription" type="text" name="description" placeholder="opcjonalny opis">
+                    </div>
+                    <button type="submit" class="btn">Dodaj bukiet</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="dlna-section-grid dlna-section-grid--stacked" style="grid-template-columns: minmax(0, 1fr); margin-top: 18px;">
+            <div class="dlna-subcard">
+                <div class="dlna-list-header">
+                    <div class="card-title">Lista bukietów</div>
+                    <div id="dlnaCollectionsMeta" class="small"></div>
+                </div>
+                <div id="dlnaCollectionsList" class="dlna-list dlna-scroll-list is-short"></div>
+            </div>
+
+            <div class="dlna-subcard">
+                <div class="dlna-library-toolbar">
+                    <div class="field-group">
+                        <label class="field-label" for="dlnaCollectionEditorSelect">Edytowany bukiet</label>
+                        <select id="dlnaCollectionEditorSelect"></select>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="dlnaLibraryQuery">Szukaj pliku</label>
+                        <input id="dlnaLibraryQuery" type="text" placeholder="np. bajka, 2026-06-07, odcinek">
+                    </div>
+                </div>
+                <div class="dlna-library-actions">
+                    <button id="dlnaSelectVisibleButton" type="button" class="btn btn-secondary">Zaznacz widoczne</button>
+                    <button id="dlnaUnselectVisibleButton" type="button" class="btn btn-secondary">Odznacz widoczne</button>
+                    <button id="dlnaSaveVisibleSelectionButton" type="button" class="btn btn-green">Zapisz zmiany widocznych plików</button>
+                </div>
+                <div id="dlnaLibrarySelectionSummary" class="dlna-compact-note">
+                    Najpierw wybierz bukiet. Lista pokazuje pliki właściciela bukietu, które można do niego przenieść albo z niego odłożyć.
+                </div>
+                <div class="dlna-list-header" style="margin-top: 18px;">
+                    <div class="card-title">Pliki bukietu i pliki dostępne do dodania</div>
+                    <div id="dlnaLibraryResultsMeta" class="small"></div>
+                </div>
+                <div id="dlnaLibraryResults" class="dlna-scroll-list dlna-library-list">
+                    <div class="dlna-empty">Najpierw utwórz bukiet DLNA albo wybierz istniejący.</div>
+                </div>
+            </div>
+
+            <div class="dlna-subcard">
+                <div class="dlna-list-header">
+                    <div class="card-title">Aktualne pliki w DLNA</div>
+                    <div id="dlnaMediaRulesMeta" class="small"></div>
+                </div>
+                <div id="dlnaMediaRulesList" class="dlna-list dlna-scroll-list"></div>
+            </div>
+        </div>
+    </section>
+
+    {% if admin_logged_in %}
+    <section class="page-card dlna-panel" data-dlna-panel="klienci" hidden>
+        <h2 class="section-title">Klienci DLNA</h2>
+        <p class="muted">Administrator decyduje, które urządzenie widzi które bukiety. Jeśli klient nie ma przypisanego żadnego bukietu, nie widzi nic.</p>
+
+        <div class="dlna-subcard">
+            <div class="card-title">Nowy klient whitelisty</div>
+            <form id="dlnaCreateClientForm" class="auth-form">
+                <div class="dlna-inline-form is-wide">
+                    <div class="field-group">
+                        <label class="field-label" for="dlnaNewClientIp">Adres IP klienta</label>
+                        <input id="dlnaNewClientIp" type="text" name="ip" placeholder="np. 192.168.0.120" required>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="dlnaNewClientDescription">Opis urządzenia</label>
+                        <input id="dlnaNewClientDescription" type="text" name="description" placeholder="np. TV salon, Samsung, telefon">
+                    </div>
+                    <button type="submit" class="btn">Dodaj klienta</button>
+                </div>
+
+                <label class="dlna-checkbox">
+                    <input id="dlnaNewClientEnabled" type="checkbox" name="enabled" checked>
+                    <span class="dlna-checkbox-text">
+                        <strong>Klient aktywny</strong>
+                        <span class="small">Odznacz, jeśli chcesz zachować wpis IP, ale chwilowo zablokować dostęp.</span>
+                    </span>
+                </label>
+
+                <div>
+                    <div class="field-label">Bukiety widoczne dla nowego klienta</div>
+                    <div id="dlnaNewClientCollections" class="dlna-checkbox-grid"></div>
+                </div>
+            </form>
+
+            <div class="dlna-list-header" style="margin-top: 18px;">
+                <div class="card-title">Whitelist</div>
+                <div id="dlnaClientsMeta" class="small"></div>
+            </div>
+            <div id="dlnaClientsList" class="dlna-list dlna-scroll-list is-short"></div>
+        </div>
+    </section>
+
+    <section class="page-card dlna-panel" data-dlna-panel="serwer" hidden>
+        <h2 class="section-title">Serwer DLNA</h2>
+        <p class="muted">Tu ustawiasz usługę Gerbera, ręczną przebudowę biblioteki i ikonę widoczną na telewizorach lub innych klientach DLNA.</p>
+
+        <form id="dlnaServerSettingsForm" class="auth-form">
             <div class="dlna-inline-form is-wide">
                 <div class="field-group">
                     <label class="field-label" for="dlnaServerName">Nazwa serwera DLNA</label>
@@ -34,24 +158,10 @@
             </div>
             <div class="dlna-item-actions">
                 <button type="submit" class="btn">Zapisz ustawienia DLNA</button>
-                <div class="inline-note">
-                    Sieć klientów: <code>192.168.0.0/16</code>. Kolekcja <code>{{ dlna_all_collection_name }}</code> daje pełny widok aktywnej biblioteki.
-                </div>
             </div>
         </form>
 
-        <div class="dlna-tabbar">
-            <button type="button" class="dlna-tab-button is-active" data-dlna-tab-button="serwer">Serwer</button>
-            <button type="button" class="dlna-tab-button" data-dlna-tab-button="dostep">Dostęp</button>
-            <button type="button" class="dlna-tab-button" data-dlna-tab-button="biblioteka">Biblioteka</button>
-        </div>
-    </section>
-
-    <section class="page-card dlna-panel" data-dlna-panel="serwer">
-        <h2 class="section-title">Pakiet i usługa</h2>
-        <p class="muted">Panel utrzymuje <code>gerbera</code> przez <code>apt</code>, preferując oficjalne repo Gerbera zamiast starego pakietu systemowego Debiana.</p>
-
-        <div class="dlna-subcard" style="margin-bottom: 18px;">
+        <div class="dlna-subcard" style="margin-top: 18px;">
             <div class="card-heading">
                 <div class="card-title">Ikona serwera DLNA</div>
                 <div class="card-subtitle">Ta ikonka jest pokazywana klientom DLNA, np. telewizorom Samsung, zamiast domyślnego kwiatuszka Gerbery.</div>
@@ -76,14 +186,11 @@
                             <button id="dlnaIconResetButton" type="button" class="btn btn-secondary">Przywróć ikonę Gerbery</button>
                         </div>
                     </form>
-                    <div class="dlna-compact-note">
-                        Najlepiej użyć kwadratowego obrazka PNG, JPG, BMP albo WEBP. Panel przygotuje automatycznie wszystkie potrzebne rozmiary dla Gerbery.
-                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="dlna-section-grid dlna-section-grid--stacked" style="grid-template-columns: minmax(0, 1fr);">
+        <div class="dlna-section-grid dlna-section-grid--stacked" style="grid-template-columns: minmax(0, 1fr); margin-top: 18px;">
             <div class="dlna-subcard">
                 <div class="card-heading">
                     <div class="card-title">Pakiet DLNA</div>
@@ -132,7 +239,7 @@
             <div class="dlna-subcard">
                 <div class="card-heading">
                     <div class="card-title">Usługa DLNA</div>
-                    <div class="card-subtitle">Stan usługi <code>{{ dlna_service_name }}</code>, autostart i szybka synchronizacja biblioteki.</div>
+                    <div class="card-subtitle">Stan usługi <code>{{ dlna_service_name }}</code>, autostart i ręczna publikacja zmian w Gerberze.</div>
                 </div>
                 <div class="service-status-row">
                     <span id="dlnaServiceStatusPill" class="service-status-pill muted">...</span>
@@ -176,135 +283,13 @@
             </div>
         </div>
     </section>
-
-    <section class="page-card dlna-panel" data-dlna-panel="dostep" hidden>
-        <h2 class="section-title">Klienci i kolekcje</h2>
-        <p class="muted">Tu zarządzasz whitelistą IP i wspólnymi kolekcjami, bez przeglądania całej biblioteki.</p>
-
-        <div class="dlna-section-grid dlna-section-grid--stacked" style="grid-template-columns: minmax(0, 1fr);">
-            <div class="dlna-subcard">
-                <div class="card-title">Kolekcje</div>
-                <div class="dlna-compact-note">Kolekcje są globalne. Jedno medium może należeć do wielu kolekcji, a jeden klient może widzieć kilka kolekcji naraz.</div>
-
-                <form id="dlnaCreateCollectionForm" class="auth-form">
-                    <div class="dlna-inline-form is-wide">
-                        <div class="field-group">
-                            <label class="field-label" for="dlnaNewCollectionName">Nazwa nowej kolekcji</label>
-                            <input id="dlnaNewCollectionName" type="text" name="name" placeholder="np. Filmy, Salon, Bajki" required>
-                        </div>
-                        <div class="field-group">
-                            <label class="field-label" for="dlnaNewCollectionDescription">Opis kolekcji</label>
-                            <input id="dlnaNewCollectionDescription" type="text" name="description" placeholder="opcjonalny opis">
-                        </div>
-                        <button type="submit" class="btn">Dodaj kolekcję</button>
-                    </div>
-                </form>
-
-                <div class="dlna-list-header">
-                    <div class="card-title">Istniejące kolekcje</div>
-                    <div id="dlnaCollectionsMeta" class="small"></div>
-                </div>
-                <div id="dlnaCollectionsList" class="dlna-list dlna-scroll-list is-short"></div>
-            </div>
-
-            <div class="dlna-subcard">
-                <div class="card-title">Klienci DLNA</div>
-                <div class="dlna-compact-note">Dodajesz konkretne IP z whitelisty i przypisujesz im jedną lub wiele kolekcji. Domyślnie nikt nie ma dostępu.</div>
-
-                <form id="dlnaCreateClientForm" class="auth-form">
-                    <div class="dlna-inline-form is-wide">
-                        <div class="field-group">
-                            <label class="field-label" for="dlnaNewClientIp">Adres IP klienta</label>
-                            <input id="dlnaNewClientIp" type="text" name="ip" placeholder="np. 192.168.0.120" required>
-                        </div>
-                        <div class="field-group">
-                            <label class="field-label" for="dlnaNewClientDescription">Opis urządzenia</label>
-                            <input id="dlnaNewClientDescription" type="text" name="description" placeholder="np. TV salon, amplituner, tablet">
-                        </div>
-                        <button type="submit" class="btn">Dodaj klienta</button>
-                    </div>
-
-                    <label class="dlna-checkbox">
-                        <input id="dlnaNewClientEnabled" type="checkbox" name="enabled" checked>
-                        <span class="dlna-checkbox-text">
-                            <strong>Klient aktywny</strong>
-                            <span class="small">Odznacz, jeśli chcesz zachować wpis IP, ale chwilowo zablokować dostęp.</span>
-                        </span>
-                    </label>
-
-                    <div>
-                        <div class="field-label">Kolekcje widoczne dla nowego klienta</div>
-                        <div id="dlnaNewClientCollections" class="dlna-checkbox-grid"></div>
-                    </div>
-
-                    <div style="margin-top: 16px;">
-                        <div class="field-label">Użytkownicy widoczni dla nowego klienta</div>
-                        <div id="dlnaNewClientUsers" class="dlna-checkbox-grid"></div>
-                    </div>
-                </form>
-
-                <div class="dlna-list-header">
-                    <div class="card-title">Whitelist</div>
-                    <div id="dlnaClientsMeta" class="small"></div>
-                </div>
-                <div id="dlnaClientsList" class="dlna-list dlna-scroll-list is-short"></div>
-            </div>
-        </div>
-    </section>
-
-    <section class="page-card dlna-panel" data-dlna-panel="biblioteka" hidden>
-        <h2 class="section-title">Biblioteka DLNA</h2>
-        <p class="muted">Wybierasz bukiet, filtrujesz listę i jednym zapisem dodajesz albo usuwasz widoczne pliki i foldery z tej kolekcji. Zniknięte pliki są czyszczone z DLNA automatycznie.</p>
-
-        <div class="dlna-subcard">
-            <div class="dlna-library-toolbar">
-                <div class="field-group">
-                    <label class="field-label" for="dlnaCollectionEditorSelect">Edytowany bukiet</label>
-                    <select id="dlnaCollectionEditorSelect"></select>
-                </div>
-                <div class="field-group">
-                    <label class="field-label" for="dlnaLibraryQuery">Szukaj po nazwie lub ścieżce</label>
-                    <input id="dlnaLibraryQuery" type="text" placeholder="np. bajki, 2026-05-06, koncert">
-                </div>
-                <div class="field-group">
-                    <label class="field-label" for="dlnaLibraryMode">Widok</label>
-                    <select id="dlnaLibraryMode">
-                        <option value="files">Pliki</option>
-                        <option value="folders">Foldery</option>
-                        <option value="all">Pliki i foldery</option>
-                    </select>
-                </div>
-            </div>
-            <div class="dlna-library-actions">
-                <button id="dlnaSelectVisibleButton" type="button" class="btn btn-secondary">Zaznacz widoczne</button>
-                <button id="dlnaUnselectVisibleButton" type="button" class="btn btn-secondary">Odznacz widoczne</button>
-                <button id="dlnaSaveVisibleSelectionButton" type="button" class="btn btn-green">Zapisz zmiany widocznych pozycji</button>
-            </div>
-            <div class="dlna-list-header">
-                <div class="card-title">Pozycje w bibliotece</div>
-                <div id="dlnaLibraryResultsMeta" class="small"></div>
-            </div>
-            <div id="dlnaLibrarySelectionSummary" class="dlna-compact-note">Najpierw utwórz bukiet, a potem zaznaczaj pozycje na liście.</div>
-            <div id="dlnaLibraryResults" class="dlna-scroll-list dlna-library-list">
-                <div class="dlna-empty">Najpierw utwórz bukiet DLNA albo wybierz istniejący.</div>
-            </div>
-        </div>
-
-        <div class="dlna-subcard" style="margin-top: 18px;">
-            <div class="dlna-list-header">
-                <div class="card-title">Aktualne wpisy DLNA</div>
-                <div id="dlnaMediaRulesMeta" class="small"></div>
-            </div>
-            <div id="dlnaMediaRulesList" class="dlna-list dlna-scroll-list"></div>
-        </div>
-    </section>
+    {% endif %}
 </section>
 
 <script>
 window.pageBootstrapData = {
     initialState: {{ dlna_initial_state|tojson }},
-    serviceName: {{ dlna_service_name|tojson }},
-    allCollectionName: {{ dlna_all_collection_name|tojson }}
+    serviceName: {{ dlna_service_name|tojson }}
 };
 </script>
 <script src="{{ url_for('static', filename='js/pages/dlna.js') }}?v={{ asset_version }}"></script>

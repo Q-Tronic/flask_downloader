@@ -53,6 +53,30 @@ class DlnaUpdateService:
         self._read_config_values = read_config_values
         self._save_update_state = save_update_state
 
+    @staticmethod
+    def normalize_collection_folder_name(value, fallback="Bukiet"):
+        text = re.sub(r"\s+", " ", str(value or "").strip())
+        text = re.sub(r'[<>:"/\\\\|?*\x00-\x1f]+', " ", text)
+        text = re.sub(r"\s+", " ", text).strip().rstrip(". ")
+        if not text:
+            text = str(fallback or "Bukiet").strip() or "Bukiet"
+        return text[:96]
+
+    def _get_default_owner_username(self):
+        usernames = []
+        for item in (self._get_users_snapshot() or []):
+            username = str(item.get("username") or "").strip()
+            if not username:
+                continue
+            usernames.append({
+                "username": username,
+                "role": str(item.get("role") or "user").strip().lower() or "user",
+            })
+        usernames.sort(key=lambda item: (0 if item["role"] == "admin" else 1, item["username"].lower()))
+        if usernames:
+            return self._normalize_username(usernames[0]["username"])
+        return self._normalize_username("admin")
+
     def normalize_update_state(self, value):
         state = self._default_update_state_factory()
 
@@ -143,10 +167,77 @@ class DlnaUpdateService:
                 collection_id = uuid.uuid4().hex
             existing_ids.add(collection_id)
 
+        try:
+            owner_username = self._normalize_username(raw.get("owner_username") or self._get_default_owner_username())
+        except Exception:
+            owner_username = self._get_default_owner_username()
+
+        folder_name = self.normalize_collection_folder_name(raw.get("folder_name") or name, fallback=name)
+        try:
+            created_at = float(raw.get("created_at") or 0.0)
+        except Exception:
+            created_at = 0.0
+        try:
+            updated_at = float(raw.get("updated_at") or created_at or 0.0)
+        except Exception:
+            updated_at = created_at or 0.0
+
         return {
             "id": collection_id,
             "name": name,
             "description": self.normalize_description(raw.get("description"), max_len=320),
+            "owner_username": owner_username,
+            "folder_name": folder_name,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        }
+
+    def normalize_entry_storage_id(self, value):
+        return "network" if str(value or "").strip().lower() == "network" else "local"
+
+    def normalize_file_entry(self, raw, valid_collection_ids):
+        if not isinstance(raw, dict):
+            return None
+
+        collection_id = str(raw.get("collection_id") or "").strip()
+        if not collection_id or collection_id not in valid_collection_ids:
+            return None
+
+        try:
+            owner_username = self._normalize_username(raw.get("owner_username") or self._get_default_owner_username())
+        except Exception:
+            owner_username = self._get_default_owner_username()
+
+        source_storage_kind = self.normalize_config_storage_kind(raw.get("source_storage_kind") or raw.get("storage_kind") or "video")
+        source_relative_path = str(raw.get("source_relative_path") or "").strip()
+        current_relative_path = self.normalize_config_relative_path(raw.get("current_relative_path") or "")
+        if not source_relative_path or not current_relative_path:
+            return None
+
+        file_name = str(raw.get("file_name") or os.path.basename(current_relative_path) or "").strip()
+        if not file_name:
+            return None
+
+        media_kind = str(raw.get("media_kind") or "").strip().lower()
+        if media_kind not in ("video", "image"):
+            media_kind = "video"
+
+        try:
+            added_at = float(raw.get("added_at") or 0.0)
+        except Exception:
+            added_at = 0.0
+
+        return {
+            "id": self.normalize_collection_id(raw.get("id")),
+            "collection_id": collection_id,
+            "owner_username": owner_username,
+            "source_storage_id": self.normalize_entry_storage_id(raw.get("source_storage_id") or "local"),
+            "source_storage_kind": source_storage_kind,
+            "source_relative_path": source_relative_path,
+            "current_relative_path": current_relative_path,
+            "file_name": file_name[:240],
+            "media_kind": media_kind,
+            "added_at": added_at,
         }
 
     def normalize_client_ip(self, value):
@@ -315,6 +406,22 @@ class DlnaUpdateService:
             seen_rules.add(key)
             rule_items.append(item)
 
+        entry_items = []
+        seen_entries = set()
+        for raw in value.get("entries") or []:
+            item = self.normalize_file_entry(raw, valid_collection_ids)
+            if not item:
+                continue
+            entry_key = (
+                item["collection_id"],
+                item["source_storage_id"],
+                item["source_relative_path"],
+            )
+            if entry_key in seen_entries:
+                continue
+            seen_entries.add(entry_key)
+            entry_items.append(item)
+
         try:
             layout_version = max(0, int(value.get("layout_version") or 0))
         except Exception:
@@ -324,6 +431,15 @@ class DlnaUpdateService:
             last_sync_at = float(value.get("last_sync_at") or 0.0)
         except Exception:
             last_sync_at = 0.0
+
+        runtime_phase = str(value.get("runtime_phase") or "").strip().lower()
+        if runtime_phase not in ("idle", "starting", "rebuilding", "running", "error"):
+            runtime_phase = "idle"
+        runtime_phase_detail = self.normalize_description(value.get("runtime_phase_detail"), max_len=240)
+        try:
+            runtime_phase_started_at = float(value.get("runtime_phase_started_at") or 0.0)
+        except Exception:
+            runtime_phase_started_at = 0.0
 
         pending_manual_sync_paths = []
         seen_pending_paths = set()
@@ -350,10 +466,14 @@ class DlnaUpdateService:
             "icon_updated_at": icon_updated_at,
             "collections": collection_items,
             "clients": client_items,
+            "entries": entry_items,
             "media_rules": rule_items,
             "layout_version": layout_version,
             "last_sync_at": last_sync_at,
             "last_sync_error": str(value.get("last_sync_error") or "").strip(),
+            "runtime_phase": runtime_phase,
+            "runtime_phase_detail": runtime_phase_detail,
+            "runtime_phase_started_at": runtime_phase_started_at,
             "pending_manual_sync_paths": pending_manual_sync_paths,
             "pending_manual_sync_since": pending_manual_sync_since,
             "pending_manual_sync_last_item": pending_manual_sync_last_item,

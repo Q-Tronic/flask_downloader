@@ -177,6 +177,9 @@ class DownloadJobsService:
             "overwrite_existing": bool(kwargs.get("overwrite_existing")),
             "replace_paths": [str(path) for path in (kwargs.get("replace_paths") or []) if path],
             "auto_dlna_collection_id": str(kwargs.get("auto_dlna_collection_id") or "").strip(),
+            "dlna_current_relative_path": "",
+            "dlna_collection_id": "",
+            "dlna_collection_name": "",
             "is_live_capture": bool(kwargs.get("is_live_capture")),
             "live_status": str(kwargs.get("live_status") or ""),
             "processing_stage": "",
@@ -311,6 +314,9 @@ class DownloadJobsService:
             job["progress_percent"] = 0.0
             job["filepath"] = ""
             job["relative_path"] = ""
+            job["dlna_current_relative_path"] = ""
+            job["dlna_collection_id"] = ""
+            job["dlna_collection_name"] = ""
             job["processing_stage"] = ""
             if not str(job.get("planned_filename") or "").strip():
                 job["planned_filename"] = str(job.get("filename") or "").strip()
@@ -405,7 +411,20 @@ class DownloadJobsService:
             relative_path = self._safe_relative_download_path(
                 job.get("relative_path") or self._get_relative_download_path(resolved_path, storage_kind, owner_username)
             )
-            if relative_path:
+            dlna_current_relative_path = self._safe_relative_download_path(job.get("dlna_current_relative_path") or "")
+            job["dlna_current_relative_path"] = dlna_current_relative_path
+            job["dlna_collection_id"] = str(job.get("dlna_collection_id") or "").strip()
+            job["dlna_collection_name"] = str(job.get("dlna_collection_name") or "").strip()
+
+            if dlna_current_relative_path:
+                job["file_url"] = None
+                dlna_collection_name = str(job.get("dlna_collection_name") or "").strip()
+                dlna_file_name = str(job.get("filename") or "").strip() or os.path.basename(dlna_current_relative_path)
+                if dlna_collection_name:
+                    job["file_display_name"] = "DLNA/%s/%s" % (dlna_collection_name, dlna_file_name)
+                else:
+                    job["file_display_name"] = "DLNA/%s" % dlna_current_relative_path
+            elif relative_path:
                 job["relative_path"] = relative_path
                 job["file_url"] = self._build_managed_file_url(owner_username, storage_kind, relative_path)
                 job["file_display_name"] = self._format_relative_path_for_user(
