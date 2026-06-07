@@ -967,7 +967,7 @@ install_privileged_sudoers_rules() {
 
     cat > "$sudoers_file" <<EOF
 Defaults:${APP_USER} !requiretty
-${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl, /usr/bin/systemctl, /bin/mount, /usr/bin/mount, ${SYSTEM_FILE_WRITER_HELPER}
+${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl, /usr/bin/systemctl, /bin/systemd-run, /usr/bin/systemd-run, /bin/mount, /usr/bin/mount, ${SYSTEM_FILE_WRITER_HELPER}
 ${APP_USER} ALL=(root) NOPASSWD: ${STORAGE_CONTROL_HELPER}
 EOF
     chmod 440 "$sudoers_file"

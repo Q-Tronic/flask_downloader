@@ -364,18 +364,26 @@ class SystemServiceHelper:
         return state
 
     @staticmethod
-    def _build_systemctl_command(action, service_name):
-        systemctl_binary = shutil.which("systemctl") or "/bin/systemctl"
-        command = [systemctl_binary, str(action or "restart").strip() or "restart", service_name]
+    def _build_privileged_binary_command(binary_name, *args):
+        binary_path = shutil.which(str(binary_name or "").strip()) or ("/bin/%s" % binary_name)
+        command = [binary_path, *[str(arg) for arg in args]]
         if os.name != "nt":
             try:
                 if os.geteuid() != 0:
                     sudo_binary = shutil.which("sudo")
                     if sudo_binary:
-                        command = [sudo_binary, "-n", systemctl_binary, str(action or "restart").strip() or "restart", service_name]
+                        command = [sudo_binary, "-n", binary_path, *[str(arg) for arg in args]]
             except Exception:
                 pass
         return command
+
+    @classmethod
+    def _build_systemctl_command(cls, action, service_name):
+        return cls._build_privileged_binary_command(
+            "systemctl",
+            str(action or "restart").strip() or "restart",
+            service_name,
+        )
 
     @classmethod
     def schedule_systemd_service_restart(cls, service_name):
@@ -479,16 +487,39 @@ exit 0
                 pass
             raise
 
-        process = subprocess.Popen(
-            [script_path],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            close_fds=True,
-            start_new_session=True,
+        unit_name = "flask-downloader-update-%s" % timestamp
+        systemd_run_command = cls._build_privileged_binary_command(
+            "systemd-run",
+            "--unit",
+            unit_name,
+            "--property=Type=oneshot",
+            "--property=KillMode=process",
+            "/bin/bash",
+            script_path,
         )
+
+        try:
+            process = subprocess.Popen(
+                systemd_run_command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                close_fds=True,
+                start_new_session=True,
+            )
+        except Exception:
+            process = subprocess.Popen(
+                [script_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                close_fds=True,
+                start_new_session=True,
+            )
+            unit_name = ""
         return {
             "pid": int(process.pid or 0),
             "script_path": script_path,
             "log_file": log_path,
+            "unit_name": unit_name,
         }
