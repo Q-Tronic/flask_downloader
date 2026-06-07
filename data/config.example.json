@@ -58,6 +58,9 @@
     "media_rules": [],
     "layout_version": 0,
     "last_sync_at": 0.0,
-    "last_sync_error": ""
+    "last_sync_error": "",
+    "pending_manual_sync_paths": [],
+    "pending_manual_sync_since": 0.0,
+    "pending_manual_sync_last_item": ""
   }
 }

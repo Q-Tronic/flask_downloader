@@ -58,6 +58,7 @@ class DownloadJobsService:
         cleanup_download_artifacts,
         ensure_share_ready,
         sync_dlna_runtime_safe,
+        discard_dlna_manual_sync_path,
         get_relative_download_path,
         build_managed_file_url,
         format_relative_path_for_user,
@@ -82,6 +83,7 @@ class DownloadJobsService:
         self._cleanup_download_artifacts = cleanup_download_artifacts
         self._ensure_share_ready = ensure_share_ready
         self._sync_dlna_runtime_safe = sync_dlna_runtime_safe
+        self._discard_dlna_manual_sync_path = discard_dlna_manual_sync_path
         self._get_relative_download_path = get_relative_download_path
         self._build_managed_file_url = build_managed_file_url
         self._format_relative_path_for_user = format_relative_path_for_user
@@ -495,7 +497,12 @@ class DownloadJobsService:
                         job["relative_path"] = ""
                 self._write_download_jobs_locked()
 
-            self._sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
+            self._discard_dlna_manual_sync_path(safe_relative_path)
+            self._sync_dlna_runtime_safe(
+                restart_service_if_active=True,
+                force_full_rescan=False,
+                include_pending_downloads=False,
+            )
             return True, "", 200
         except Exception as exc:
             return False, str(exc), 500

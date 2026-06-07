@@ -90,6 +90,55 @@
         .download-toast-bar.queued {
             background: linear-gradient(90deg, #7f90a6, #9ba8bb);
         }
+        .dlna-sync-toast {
+            background: rgba(16, 34, 28, 0.97);
+            border-color: rgba(71, 201, 126, 0.32);
+            color: #effff5;
+        }
+        .dlna-sync-toast-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        .dlna-sync-toast-title {
+            font-weight: 800;
+            line-height: 1.3;
+        }
+        .dlna-sync-toast-chip {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 28px;
+            padding: 5px 10px;
+            border-radius: 999px;
+            background: rgba(71, 201, 126, 0.18);
+            color: #dbffe9;
+            font-size: 12px;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+        .dlna-sync-toast-meta,
+        .dlna-sync-toast-item {
+            color: rgba(222, 241, 231, 0.9);
+            font-size: 13px;
+            line-height: 1.45;
+        }
+        .dlna-sync-toast-item {
+            margin-top: 6px;
+            color: rgba(255, 255, 255, 0.86);
+            overflow-wrap: anywhere;
+        }
+        .dlna-sync-toast-actions {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 12px;
+        }
+        .dlna-sync-toast-actions .btn[disabled] {
+            opacity: 0.72;
+            cursor: wait;
+        }
         .admin-shell {
             display: grid;
             gap: 14px;

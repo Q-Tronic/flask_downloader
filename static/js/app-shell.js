@@ -2,6 +2,8 @@
     window.appUi = window.appUi || {};
     var appUi = window.appUi;
     var downloadToastLiveSubscription = null;
+    var dlnaManualSyncNoticeState = null;
+    var dlnaManualSyncInFlight = false;
 
     function hideFlashToast() {
         var toast = document.getElementById("uiToast");
@@ -211,6 +213,79 @@
         `;
     }
 
+    function renderDlnaSyncNotice(state) {
+        var host = document.getElementById("dlnaSyncToastStack");
+        if (!host) return;
+
+        dlnaManualSyncNoticeState = state && state.pending ? state : null;
+        if (!dlnaManualSyncNoticeState) {
+            dlnaManualSyncInFlight = false;
+            host.innerHTML = "";
+            return;
+        }
+
+        var count = Number(dlnaManualSyncNoticeState.count || 0);
+        var countText = count > 0 ? toastFormatJobCount(count).replace("pliki", "pliki").replace("plików", "plików") : "";
+        var metaParts = [];
+        if (count > 0) {
+            metaParts.push(count === 1 ? "1 nowy plik czeka na publikację w DLNA" : (count + " nowych plików czeka na publikację w DLNA"));
+        }
+        if (dlnaManualSyncNoticeState.since_text) {
+            metaParts.push("Od: " + dlnaManualSyncNoticeState.since_text);
+        }
+        var lastItem = String(dlnaManualSyncNoticeState.last_item || "").trim();
+        var buttonLabel = dlnaManualSyncInFlight ? "Aktualizowanie..." : "Aktualizuj bibliotekę DLNA";
+
+        host.innerHTML = `
+            <div class="toast dlna-sync-toast" role="status">
+                <div class="dlna-sync-toast-header">
+                    <div class="dlna-sync-toast-title">Nowe pliki czekają na DLNA</div>
+                    <div class="dlna-sync-toast-chip">${toastEscapeHtml(String(count || 0))}</div>
+                </div>
+                <div class="dlna-sync-toast-meta">${toastEscapeHtml(metaParts.join(" • "))}</div>
+                ${lastItem ? `<div class="dlna-sync-toast-item">Ostatni plik: ${toastEscapeHtml(lastItem)}</div>` : ""}
+                <div class="dlna-sync-toast-actions">
+                    <button type="button" class="btn btn-primary" data-dlna-sync-action ${dlnaManualSyncInFlight ? "disabled" : ""}>${toastEscapeHtml(buttonLabel)}</button>
+                </div>
+            </div>
+        `;
+
+        var button = host.querySelector("[data-dlna-sync-action]");
+        if (!button) {
+            return;
+        }
+        button.addEventListener("click", function() {
+            if (dlnaManualSyncInFlight) {
+                return;
+            }
+            dlnaManualSyncInFlight = true;
+            renderDlnaSyncNotice(dlnaManualSyncNoticeState);
+            fetch("/api/dlna/resync", {
+                method: "POST",
+                headers: {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({}),
+            }).then(function(response) {
+                return response.json().catch(function() {
+                    return {};
+                }).then(function(payload) {
+                    if (!response.ok || payload.ok === false) {
+                        throw new Error(String(payload.message || "Nie udało się zaktualizować biblioteki DLNA."));
+                    }
+                    showUiToast(String(payload.message || "Biblioteka DLNA została zaktualizowana."), "success");
+                    return refreshDownloadToasts();
+                });
+            }).catch(function(error) {
+                showUiToast(error && error.message ? error.message : "Nie udało się zaktualizować biblioteki DLNA.", "error");
+            }).finally(function() {
+                dlnaManualSyncInFlight = false;
+                renderDlnaSyncNotice(dlnaManualSyncNoticeState);
+            });
+        });
+    }
+
     async function refreshDownloadToasts() {
         if (!isAuthenticatedShell()) {
             renderDownloadToasts([]);
@@ -235,6 +310,7 @@
     }
 
     function applyDownloadToastPayload(data) {
+        renderDlnaSyncNotice((data && data.admin_logged_in) ? data.dlna_manual_sync_notice : null);
         renderDownloadToasts((data && data.jobs) || []);
     }
 

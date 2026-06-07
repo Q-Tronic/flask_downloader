@@ -13,6 +13,8 @@ class DlnaRuntimeService:
         get_dlna_config_snapshot,
         normalize_dlna_config,
         set_dlna_config,
+        filter_dlna_export_files,
+        clear_dlna_manual_sync_needed,
         get_dlna_package_state_snapshot,
         get_generic_service_state,
         ensure_dlna_service_started_impl,
@@ -44,6 +46,8 @@ class DlnaRuntimeService:
         self._get_dlna_config_snapshot = get_dlna_config_snapshot
         self._normalize_dlna_config = normalize_dlna_config
         self._set_dlna_config = set_dlna_config
+        self._filter_dlna_export_files = filter_dlna_export_files
+        self._clear_dlna_manual_sync_needed = clear_dlna_manual_sync_needed
         self._get_dlna_package_state_snapshot = get_dlna_package_state_snapshot
         self._get_generic_service_state = get_generic_service_state
         self._ensure_dlna_service_started_impl = ensure_dlna_service_started_impl
@@ -90,7 +94,12 @@ class DlnaRuntimeService:
             reset_failed_after_stop=reset_failed_after_stop,
         )
 
-    def sync_runtime(self, restart_service_if_active=False, force_full_rescan=False):
+    def sync_runtime(
+        self,
+        restart_service_if_active=False,
+        force_full_rescan=False,
+        include_pending_downloads=True,
+    ):
         with self._sync_lock:
             self._ensure_dlna_runtime_dirs()
             try:
@@ -108,6 +117,7 @@ class DlnaRuntimeService:
             if layout_upgraded:
                 dlna_config["layout_version"] = self._dlna_virtual_layout_version
                 self._set_dlna_config(dlna_config)
+                dlna_config = self._normalize_dlna_config(dlna_config)
 
             package_state = self._get_dlna_package_state_snapshot()
             current_service_state = (
@@ -129,7 +139,12 @@ class DlnaRuntimeService:
             if layout_upgraded or force_full_rescan:
                 self._clear_dlna_database_files()
 
-            export_state = self._write_dlna_gerbera_config(dlna_config)
+            export_files = self._filter_dlna_export_files(
+                files,
+                dlna_config=dlna_config,
+                include_pending_downloads=include_pending_downloads,
+            )
+            export_state = self._write_dlna_gerbera_config(dlna_config, files=export_files)
 
             if package_state["installed"]:
                 allow_runtime_probe = not should_restart_after_sync
@@ -139,14 +154,22 @@ class DlnaRuntimeService:
                 if should_restart_after_sync:
                     self.ensure_service_started(enable_unit=False, timeout=90, failure_label="restartu")
 
+            if include_pending_downloads:
+                self._clear_dlna_manual_sync_needed()
             self._save_dlna_runtime_status(last_sync_at=time.time(), last_sync_error="")
             return export_state
 
-    def sync_runtime_safe(self, restart_service_if_active=False, force_full_rescan=False):
+    def sync_runtime_safe(
+        self,
+        restart_service_if_active=False,
+        force_full_rescan=False,
+        include_pending_downloads=True,
+    ):
         try:
             self.sync_runtime(
                 restart_service_if_active=restart_service_if_active,
                 force_full_rescan=force_full_rescan,
+                include_pending_downloads=include_pending_downloads,
             )
         except Exception as exc:
             self._save_dlna_runtime_status(last_sync_error=str(exc))

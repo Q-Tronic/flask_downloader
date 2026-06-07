@@ -50,6 +50,7 @@ def register_application_routes(app, context):
         "get_server_files": context["get_server_files"],
         "filter_jobs_for_viewer": context["filter_jobs_for_viewer"],
         "get_jobs_snapshot": context["get_jobs_snapshot"],
+        "get_dlna_manual_sync_notice_state": context["get_dlna_manual_sync_notice_state"],
         "is_valid_http_url": context["is_valid_http_url"],
         "extract_http_urls": context["extract_http_urls"],
         "extract_video_data": context["extract_video_data"],

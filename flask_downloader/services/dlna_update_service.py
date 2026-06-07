@@ -325,6 +325,21 @@ class DlnaUpdateService:
         except Exception:
             last_sync_at = 0.0
 
+        pending_manual_sync_paths = []
+        seen_pending_paths = set()
+        for raw_path in value.get("pending_manual_sync_paths") or []:
+            path_text = str(raw_path or "").strip()
+            if not path_text or path_text in seen_pending_paths:
+                continue
+            seen_pending_paths.add(path_text)
+            pending_manual_sync_paths.append(path_text)
+
+        try:
+            pending_manual_sync_since = float(value.get("pending_manual_sync_since") or 0.0)
+        except Exception:
+            pending_manual_sync_since = 0.0
+        pending_manual_sync_last_item = self.normalize_description(value.get("pending_manual_sync_last_item"), max_len=200)
+
         return {
             "enabled": bool(value.get("enabled", state["enabled"])),
             "server_name": server_name,
@@ -339,6 +354,9 @@ class DlnaUpdateService:
             "layout_version": layout_version,
             "last_sync_at": last_sync_at,
             "last_sync_error": str(value.get("last_sync_error") or "").strip(),
+            "pending_manual_sync_paths": pending_manual_sync_paths,
+            "pending_manual_sync_since": pending_manual_sync_since,
+            "pending_manual_sync_last_item": pending_manual_sync_last_item,
         }
 
     @staticmethod

@@ -15,6 +15,7 @@ def register_download_routes(app, deps):
     get_server_files = deps["get_server_files"]
     filter_jobs_for_viewer = deps["filter_jobs_for_viewer"]
     get_jobs_snapshot = deps["get_jobs_snapshot"]
+    get_dlna_manual_sync_notice_state = deps["get_dlna_manual_sync_notice_state"]
     is_valid_http_url = deps["is_valid_http_url"]
     extract_http_urls = deps["extract_http_urls"]
     extract_video_data = deps["extract_video_data"]
@@ -76,6 +77,7 @@ def register_download_routes(app, deps):
             "mount": get_mount_info(auto_remount=True, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
             "files": get_server_files(scope_username=scope_username),
             "jobs": filtered_jobs,
+            "dlna_manual_sync_notice": get_dlna_manual_sync_notice_state() if is_admin_authenticated() else {"pending": False},
         }
 
     def build_jobs_payload(scope_username):
@@ -88,6 +90,7 @@ def register_download_routes(app, deps):
             "scope_username": scope_username,
             "mount": get_mount_info(auto_remount=True, viewer_username=scope_username or get_current_username(), is_admin=is_admin_authenticated()),
             "jobs": filter_jobs_for_viewer(get_jobs_snapshot(), scope_username=scope_username),
+            "dlna_manual_sync_notice": get_dlna_manual_sync_notice_state() if is_admin_authenticated() else {"pending": False},
         }
 
     def enqueue_download_job(*, page_url, result, fmt, owner_username, overwrite_existing=False, auto_dlna_collection_id="", custom_filename=""):

@@ -845,6 +845,9 @@ def default_dlna_config():
         "layout_version": 0,
         "last_sync_at": 0.0,
         "last_sync_error": "",
+        "pending_manual_sync_paths": [],
+        "pending_manual_sync_since": 0.0,
+        "pending_manual_sync_last_item": "",
     }
 
 
@@ -1645,6 +1648,97 @@ def save_dlna_runtime_status(last_sync_at=None, last_sync_error=None):
         APP_CONFIG["dlna"] = dlna_config
         write_app_config_locked()
     return copy.deepcopy(dlna_config)
+
+
+def normalize_dlna_pending_manual_sync_paths(paths):
+    normalized_paths = []
+    seen = set()
+    for raw_path in paths or []:
+        path_text = str(raw_path or "").strip()
+        if not path_text:
+            continue
+        canonical_path = canonicalize_managed_relative_path(path_text) or safe_relative_download_path(path_text)
+        if not canonical_path or canonical_path in seen:
+            continue
+        seen.add(canonical_path)
+        normalized_paths.append(canonical_path)
+    return normalized_paths
+
+
+def get_dlna_manual_sync_notice_state(dlna_config=None):
+    config = normalize_dlna_config(dlna_config if dlna_config is not None else get_dlna_config_snapshot())
+    pending_paths = normalize_dlna_pending_manual_sync_paths(config.get("pending_manual_sync_paths") or [])
+    try:
+        pending_since = float(config.get("pending_manual_sync_since") or 0.0)
+    except Exception:
+        pending_since = 0.0
+    last_item = str(config.get("pending_manual_sync_last_item") or "").strip()
+    pending_count = len(pending_paths)
+    return {
+        "pending": bool(pending_count),
+        "count": pending_count,
+        "since": pending_since,
+        "since_text": format_ts(pending_since) if pending_since else "",
+        "last_item": last_item,
+        "message": (
+            "Pobrano nowe pliki i biblioteka DLNA czeka na ręczną aktualizację."
+            if pending_count
+            else ""
+        ),
+    }
+
+
+def mark_dlna_manual_sync_needed(relative_path="", item_label=""):
+    canonical_path = canonicalize_managed_relative_path(relative_path) or safe_relative_download_path(relative_path)
+    item_label_text = str(item_label or "").strip()
+    with APP_CONFIG_LOCK:
+        dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
+        pending_paths = normalize_dlna_pending_manual_sync_paths(dlna_config.get("pending_manual_sync_paths") or [])
+        changed = False
+        if canonical_path and canonical_path not in pending_paths:
+            pending_paths.append(canonical_path)
+            changed = True
+        if pending_paths and not float(dlna_config.get("pending_manual_sync_since") or 0.0):
+            dlna_config["pending_manual_sync_since"] = time.time()
+            changed = True
+        if item_label_text and item_label_text != str(dlna_config.get("pending_manual_sync_last_item") or ""):
+            dlna_config["pending_manual_sync_last_item"] = item_label_text[:200]
+            changed = True
+        dlna_config["pending_manual_sync_paths"] = pending_paths
+        if changed:
+            APP_CONFIG["dlna"] = normalize_dlna_config(dlna_config)
+            write_app_config_locked()
+        return get_dlna_manual_sync_notice_state(dlna_config)
+
+
+def discard_dlna_manual_sync_path(relative_path):
+    canonical_path = canonicalize_managed_relative_path(relative_path) or safe_relative_download_path(relative_path)
+    if not canonical_path:
+        return get_dlna_manual_sync_notice_state()
+    with APP_CONFIG_LOCK:
+        dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
+        pending_paths = normalize_dlna_pending_manual_sync_paths(dlna_config.get("pending_manual_sync_paths") or [])
+        next_paths = [item for item in pending_paths if item != canonical_path]
+        if next_paths == pending_paths:
+            return get_dlna_manual_sync_notice_state(dlna_config)
+        dlna_config["pending_manual_sync_paths"] = next_paths
+        if not next_paths:
+            dlna_config["pending_manual_sync_since"] = 0.0
+            dlna_config["pending_manual_sync_last_item"] = ""
+        APP_CONFIG["dlna"] = normalize_dlna_config(dlna_config)
+        write_app_config_locked()
+        return get_dlna_manual_sync_notice_state(dlna_config)
+
+
+def clear_dlna_manual_sync_needed():
+    with APP_CONFIG_LOCK:
+        dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
+        dlna_config["pending_manual_sync_paths"] = []
+        dlna_config["pending_manual_sync_since"] = 0.0
+        dlna_config["pending_manual_sync_last_item"] = ""
+        APP_CONFIG["dlna"] = normalize_dlna_config(dlna_config)
+        write_app_config_locked()
+        return get_dlna_manual_sync_notice_state(dlna_config)
 
 
 def set_dlna_config(dlna_config):
@@ -4043,7 +4137,11 @@ def download_worker(job_id):
                     error="Pobrano plik, ale nie udało się dodać go automatycznie do DLNA: %s" % exc,
                     persist=True,
                 )
-        sync_dlna_runtime_safe(restart_service_if_active=True, force_full_rescan=True)
+        if relative_path:
+            mark_dlna_manual_sync_needed(
+                relative_path=relative_path,
+                item_label=os.path.basename(target_path) or filename or result["title"],
+            )
 
     except DownloadInterruptedError as exc:
         if exc.action == "pause":
@@ -4172,10 +4270,12 @@ DOWNLOAD_JOBS_SERVICE = DownloadJobsService(
     cleanup_empty_download_dirs=cleanup_empty_download_dirs,
     cleanup_download_artifacts=cleanup_download_artifacts,
     ensure_share_ready=ensure_share_ready,
-    sync_dlna_runtime_safe=lambda restart_service_if_active=True, force_full_rescan=False: sync_dlna_runtime_safe(
+    sync_dlna_runtime_safe=lambda restart_service_if_active=True, force_full_rescan=False, include_pending_downloads=True: sync_dlna_runtime_safe(
         restart_service_if_active=restart_service_if_active,
         force_full_rescan=force_full_rescan,
+        include_pending_downloads=include_pending_downloads,
     ),
+    discard_dlna_manual_sync_path=discard_dlna_manual_sync_path,
     get_relative_download_path=get_relative_download_path,
     build_managed_file_url=build_managed_file_url,
     format_relative_path_for_user=format_relative_path_for_user,
@@ -6075,6 +6175,7 @@ def prune_missing_dlna_media_rules(files=None, sync_runtime=True, restart_servic
         sync_dlna_runtime_safe(
             restart_service_if_active=restart_service_if_active,
             force_full_rescan=bool(restart_service_if_active),
+            include_pending_downloads=False,
         )
 
     return {
@@ -6405,6 +6506,25 @@ def reset_dlna_custom_icon():
     return build_dlna_icon_state(dlna_config)
 
 
+def filter_dlna_export_files(files, dlna_config=None, include_pending_downloads=True):
+    items = list(files or [])
+    if include_pending_downloads:
+        return items
+
+    config = normalize_dlna_config(dlna_config if dlna_config is not None else get_dlna_config_snapshot())
+    pending_paths = set(normalize_dlna_pending_manual_sync_paths(config.get("pending_manual_sync_paths") or []))
+    if not pending_paths:
+        return items
+
+    filtered_items = []
+    for item in items:
+        relative_path = canonicalize_managed_relative_path(item.get("relative_path") or "") or safe_relative_download_path(item.get("relative_path") or "")
+        if relative_path and relative_path in pending_paths:
+            continue
+        filtered_items.append(item)
+    return filtered_items
+
+
 def rebuild_dlna_export_tree(dlna_config=None, files=None):
     config = dlna_config or get_dlna_config_snapshot()
     files = files if files is not None else get_server_files()
@@ -6713,13 +6833,13 @@ def resolve_dlna_bind_interface_name(bind_ip):
     return ""
 
 
-def write_dlna_gerbera_config(dlna_config=None):
+def write_dlna_gerbera_config(dlna_config=None, files=None):
     config = dlna_config or get_dlna_config_snapshot()
     ensure_dlna_runtime_dirs()
     ensure_dlna_webroot_assets(config)
     ensure_dlna_export_root_directory()
     cleanup_dlna_legacy_export_root()
-    export_state = rebuild_dlna_export_tree(config)
+    export_state = rebuild_dlna_export_tree(config, files=files)
     root_entry_map = export_state["root_entry_map"]
     package_state = get_dlna_package_state_snapshot()
     package_version = package_state.get("current_version_raw")
@@ -7388,6 +7508,8 @@ DLNA_RUNTIME_SERVICE = DlnaRuntimeService(
     get_dlna_config_snapshot=get_dlna_config_snapshot,
     normalize_dlna_config=normalize_dlna_config,
     set_dlna_config=set_dlna_config,
+    filter_dlna_export_files=filter_dlna_export_files,
+    clear_dlna_manual_sync_needed=clear_dlna_manual_sync_needed,
     get_dlna_package_state_snapshot=get_dlna_package_state_snapshot,
     get_generic_service_state=get_generic_service_state,
     ensure_dlna_service_started_impl=ensure_dlna_service_started,
@@ -7413,17 +7535,19 @@ DLNA_RUNTIME_SERVICE = DlnaRuntimeService(
 )
 
 
-def sync_dlna_runtime(restart_service_if_active=False, force_full_rescan=False):
+def sync_dlna_runtime(restart_service_if_active=False, force_full_rescan=False, include_pending_downloads=True):
     return DLNA_RUNTIME_SERVICE.sync_runtime(
         restart_service_if_active=restart_service_if_active,
         force_full_rescan=force_full_rescan,
+        include_pending_downloads=include_pending_downloads,
     )
 
 
-def sync_dlna_runtime_safe(restart_service_if_active=False, force_full_rescan=False):
+def sync_dlna_runtime_safe(restart_service_if_active=False, force_full_rescan=False, include_pending_downloads=True):
     return DLNA_RUNTIME_SERVICE.sync_runtime_safe(
         restart_service_if_active=restart_service_if_active,
         force_full_rescan=force_full_rescan,
+        include_pending_downloads=include_pending_downloads,
     )
 
 
