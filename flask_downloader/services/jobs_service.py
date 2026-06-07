@@ -297,24 +297,26 @@ class DownloadJobsService:
             if not self._job_has_retry_payload(job):
                 return False, "To zadanie nie ma już kompletu danych potrzebnych do ponowienia.", None
 
-            retry_payload = {
-                "owner_username": self._normalize_username(job.get("owner_username") or self._default_admin_username),
-                "storage_kind": self._normalize_storage_kind(job.get("storage_kind") or "video"),
-                "title": str(job.get("title") or ""),
-                "label": str(job.get("label") or ""),
-                "planned_filename": str(job.get("planned_filename") or job.get("filename") or ""),
-                "overwrite_existing": bool(job.get("overwrite_existing")),
-                "replace_paths": [str(path) for path in (job.get("replace_paths") or []) if path],
-                "auto_dlna_collection_id": str(job.get("auto_dlna_collection_id") or "").strip(),
-                "is_live_capture": bool(job.get("is_live_capture")),
-                "live_status": str(job.get("live_status") or ""),
-                "selection_signature": dict(job.get("selection_signature") or {}),
-            }
-            page_url = str(job.get("page_url") or "").strip()
-            format_id = str(job.get("format_id") or "").strip()
+            self._cancel_events_store[job_id] = threading.Event()
+            self._stop_requests_store[job_id] = ""
+            job["status"] = "queued"
+            job["status_label"] = "Przygotowanie live" if bool(job.get("is_live_capture")) else "W kolejce"
+            job["error"] = ""
+            job["finished_at"] = None
+            job["started_at"] = None
+            job["downloaded_bytes"] = 0
+            job["total_bytes"] = None
+            job["progress_percent"] = 0.0
+            job["filepath"] = ""
+            job["relative_path"] = ""
+            job["processing_stage"] = ""
+            if not str(job.get("planned_filename") or "").strip():
+                job["planned_filename"] = str(job.get("filename") or "").strip()
+            self._write_download_jobs_locked()
+            resumed_job = dict(job)
 
-        new_job = self.create_job(page_url, format_id, **retry_payload)
-        return True, "Dodano ponowne pobieranie do kolejki.", new_job
+        self._start_download_thread(job_id)
+        return True, "Ponowiono zadanie.", resumed_job
 
     def cleanup_job_cancel_handle(self, job_id):
         with self._jobs_lock:
