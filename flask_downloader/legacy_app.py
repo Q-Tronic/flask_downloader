@@ -2283,9 +2283,11 @@ def migrate_legacy_job_payloads(raw_jobs, path_map, legacy_roots):
     return migrated_jobs, changed
 
 
-def migrate_legacy_dlna_rules(config, default_storage_id="local"):
+def migrate_legacy_dlna_rules(config, default_storage_id="local", storage_config=None):
     if not isinstance(config, dict):
         return config, False
+
+    effective_storage_config = normalize_storage_config(storage_config or default_storage_config())
 
     def parse_managed_relative_path_legacy(value):
         safe_value = safe_relative_download_path(value or "")
@@ -2325,9 +2327,116 @@ def migrate_legacy_dlna_rules(config, default_storage_id="local"):
         return text[:240] or "plik"
 
     def get_legacy_dlna_collection_root(storage_id):
-        user_storage_base_root = os.path.abspath(get_user_storage_base_root(storage_id))
-        storage_root = os.path.abspath(os.path.dirname(user_storage_base_root))
+        storage_root = os.path.abspath(
+            get_storage_root_by_id(
+                effective_storage_config,
+                normalize_storage_id(storage_id or normalized_default_storage_id, default=normalized_default_storage_id),
+            )
+        )
         return os.path.join(storage_root, DLNA_LIBRARY_ROOT_NAME)
+
+    def get_legacy_managed_path_info(path):
+        candidate = os.path.abspath(str(path or ""))
+        if not candidate:
+            return None
+
+        for candidate_storage_id in ("local", "network"):
+            absolute_root = os.path.abspath(
+                get_storage_user_root_by_id(
+                    effective_storage_config,
+                    candidate_storage_id,
+                )
+            )
+            try:
+                if os.path.commonpath([absolute_root, candidate]) != absolute_root:
+                    continue
+            except Exception:
+                continue
+
+            try:
+                relative_path = os.path.relpath(candidate, absolute_root).replace("\\", "/").strip("/")
+            except Exception:
+                continue
+
+            parts = [segment for segment in relative_path.split("/") if segment]
+            if len(parts) < 3:
+                continue
+
+            raw_storage_kind = str(parts[1] or "").strip().lower()
+            if raw_storage_kind not in ("video", "audio"):
+                continue
+
+            try:
+                owner_username = normalize_username(parts[0])
+            except Exception:
+                continue
+
+            user_relative_path = "/".join(parts[2:]).strip("/")
+            if not user_relative_path:
+                continue
+
+            return {
+                "storage_id": normalize_storage_id(candidate_storage_id, default=normalized_default_storage_id),
+                "owner_username": owner_username,
+                "storage_kind": raw_storage_kind,
+                "relative_path": build_managed_relative_path(
+                    owner_username,
+                    raw_storage_kind,
+                    user_relative_path,
+                    storage_id=candidate_storage_id,
+                ),
+                "user_relative_path": user_relative_path,
+                "is_legacy": False,
+            }
+        return None
+
+    def resolve_legacy_dlna_source_path(relative_path, storage_kind="video", owner_username=None, storage_id=None):
+        parsed_relative = parse_managed_relative_path_legacy(relative_path)
+        if parsed_relative and not parsed_relative.get("is_legacy"):
+            normalized_storage_id = normalize_storage_id(
+                parsed_relative.get("storage_id") or storage_id or normalized_default_storage_id,
+                default=normalized_default_storage_id,
+            )
+            normalized_owner = normalize_username(
+                parsed_relative.get("owner_username") or owner_username or DEFAULT_ADMIN_USERNAME
+            )
+            normalized_kind = normalize_storage_kind(
+                parsed_relative.get("storage_kind") or storage_kind or "video"
+            )
+            user_relative_path = safe_relative_download_path(parsed_relative.get("user_relative_path") or "")
+        else:
+            user_relative_path = safe_relative_download_path(relative_path)
+            if not user_relative_path:
+                return ""
+            normalized_storage_id = normalize_storage_id(
+                storage_id or normalized_default_storage_id,
+                default=normalized_default_storage_id,
+            )
+            normalized_owner = normalize_username(owner_username or DEFAULT_ADMIN_USERNAME)
+            normalized_kind = normalize_storage_kind(storage_kind or "video")
+
+        if not user_relative_path:
+            return ""
+
+        base_root = os.path.abspath(
+            get_storage_user_root_by_id(effective_storage_config, normalized_storage_id)
+        )
+        candidate = os.path.abspath(
+            os.path.join(
+                base_root,
+                normalized_owner,
+                normalized_kind,
+                user_relative_path,
+            )
+        )
+
+        try:
+            if os.path.commonpath([base_root, candidate]) != base_root:
+                return ""
+        except Exception:
+            return ""
+
+        return candidate
 
     def build_legacy_dlna_target_relative_path(collection, file_name):
         folder_name = safe_relative_download_path(
@@ -2413,7 +2522,7 @@ def migrate_legacy_dlna_rules(config, default_storage_id="local"):
                 relative_path,
                 storage_id=storage_id,
             )
-        source_absolute_path = resolve_download_path(
+        source_absolute_path = resolve_legacy_dlna_source_path(
             source_relative_path,
             storage_kind,
             owner_username=owner_username,
@@ -2431,7 +2540,7 @@ def migrate_legacy_dlna_rules(config, default_storage_id="local"):
                     media_kind = detect_legacy_dlna_media_kind(current_file_path)
                     if not media_kind:
                         continue
-                    managed_info = get_managed_path_info(current_file_path)
+                    managed_info = get_legacy_managed_path_info(current_file_path)
                     if not managed_info:
                         continue
                     yield {
@@ -2675,6 +2784,7 @@ def migrate_legacy_storage_layout():
                 or "local",
                 default="local",
             ),
+            storage_config=APP_CONFIG.get("storage"),
         )
         if dlna_changed:
             APP_CONFIG["dlna"] = normalize_dlna_config(migrated_dlna_config)
