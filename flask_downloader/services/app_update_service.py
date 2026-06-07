@@ -1,7 +1,6 @@
 import os
 import re
 import shutil
-import subprocess
 import tarfile
 import tempfile
 import time
@@ -26,6 +25,7 @@ class AppUpdateService:
         read_update_state,
         save_update_state,
         schedule_service_restart,
+        finalize_update_detached,
     ):
         self._project_root = os.path.abspath(str(project_root or "").strip() or ".")
         self._version_file = os.path.abspath(str(version_file or "").strip() or os.path.join(self._project_root, "VERSION"))
@@ -40,6 +40,7 @@ class AppUpdateService:
         self._read_update_state = read_update_state
         self._save_update_state = save_update_state
         self._schedule_service_restart = schedule_service_restart
+        self._finalize_update_detached = finalize_update_detached
 
     @staticmethod
     def default_update_state():
@@ -338,25 +339,23 @@ class AppUpdateService:
                 )
             self._copy_repo_payload(source_root, self._project_root)
 
-            if os.path.isfile(self._requirements_file) and os.path.isfile(self._venv_pip_path):
-                if progress_callback:
-                    progress_callback(
-                        status="running",
-                        status_label="Zależności",
-                        progress_percent=82.0,
-                        detail="Aktualizuję zależności Pythona w virtualenv aplikacji.",
-                    )
-                completed = subprocess.run(
-                    [self._venv_pip_path, "install", "-r", self._requirements_file],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    timeout=1800,
-                    check=False,
+            has_python_dependencies = os.path.isfile(self._requirements_file) and os.path.isfile(self._venv_pip_path)
+            if progress_callback:
+                dependency_detail = (
+                    "Przygotowuję bezpieczną finalizację zależności poza żywym procesem panelu WWW."
+                    if has_python_dependencies
+                    else "Przygotowuję bezpieczny restart po podmianie kodu bez aktualizacji zależności."
                 )
-                if completed.returncode != 0:
-                    detail = str(completed.stdout or "").strip()
-                    raise RuntimeError(detail[-1600:] if detail else "Aktualizacja zależności Pythona nie powiodła się.")
+                progress_callback(
+                    status="running",
+                    status_label="Zależności",
+                    progress_percent=82.0,
+                    detail=dependency_detail,
+                )
+            detached_finalize = self._finalize_update_detached(
+                pip_path=self._venv_pip_path if has_python_dependencies else "",
+                requirements_file=self._requirements_file if has_python_dependencies else "",
+            )
 
             new_version = self.get_current_version() or latest_state["latest_version_raw"] or current_version
             self._save_update_state(new_version, time.time(), "")
@@ -366,11 +365,20 @@ class AppUpdateService:
                     status="running",
                     status_label="Restart",
                     progress_percent=96.0,
-                    detail="Kod aplikacji jest gotowy. Za chwilę zaplanuję restart usługi Flask.",
+                    detail="Kod aplikacji jest gotowy. Za chwilę odłączony helper bezpiecznie zatrzyma panel, zaktualizuje zależności i uruchomi usługę ponownie.",
                 )
-            self._schedule_service_restart()
+            finalize_detail = "Finalizacja aktualizacji została uruchomiona w tle"
+            if detached_finalize.get("log_file"):
+                finalize_detail += " (log: %s)" % detached_finalize["log_file"]
+            if progress_callback:
+                progress_callback(
+                    status="running",
+                    status_label="Restart",
+                    progress_percent=98.0,
+                    detail=finalize_detail + ". Panel może być chwilowo niedostępny podczas zatrzymania i ponownego startu usługi.",
+                )
 
-            message = "Aplikacja została zaktualizowana z %s do %s. Za chwilę usługa Flask zostanie zrestartowana." % (
+            message = "Aplikacja została zaktualizowana z %s do %s. Finalizacja zależności i restart usługi zostały odłączone od panelu, więc strona może zniknąć na chwilę i wrócić po starcie." % (
                 current_version,
                 new_version,
             )

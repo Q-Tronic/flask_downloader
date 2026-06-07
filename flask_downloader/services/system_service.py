@@ -1,6 +1,8 @@
 import os
+import shlex
 import shutil
 import subprocess
+import tempfile
 import time
 
 
@@ -362,17 +364,22 @@ class SystemServiceHelper:
         return state
 
     @staticmethod
-    def schedule_systemd_service_restart(service_name):
+    def _build_systemctl_command(action, service_name):
         systemctl_binary = shutil.which("systemctl") or "/bin/systemctl"
-        command = [systemctl_binary, "restart", service_name]
+        command = [systemctl_binary, str(action or "restart").strip() or "restart", service_name]
         if os.name != "nt":
             try:
                 if os.geteuid() != 0:
                     sudo_binary = shutil.which("sudo")
                     if sudo_binary:
-                        command = [sudo_binary, "-n", systemctl_binary, "restart", service_name]
+                        command = [sudo_binary, "-n", systemctl_binary, str(action or "restart").strip() or "restart", service_name]
             except Exception:
                 pass
+        return command
+
+    @classmethod
+    def schedule_systemd_service_restart(cls, service_name):
+        command = cls._build_systemctl_command("restart", service_name)
         return subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,
@@ -381,3 +388,107 @@ class SystemServiceHelper:
             close_fds=True,
             start_new_session=True,
         )
+
+    @classmethod
+    def schedule_systemd_service_update_finalize(
+        cls,
+        service_name,
+        *,
+        pip_path="",
+        requirements_file="",
+        log_file="",
+        delay_seconds=1.5,
+    ):
+        if os.name == "nt":
+            raise RuntimeError("Odłączona finalizacja aktualizacji aplikacji wymaga Linuxa.")
+
+        normalized_service_name = str(service_name or "").strip()
+        if not normalized_service_name:
+            raise RuntimeError("Brak nazwy usługi do restartu po aktualizacji.")
+
+        normalized_pip_path = str(pip_path or "").strip()
+        normalized_requirements = str(requirements_file or "").strip()
+        if normalized_pip_path and not os.path.isfile(normalized_pip_path):
+            raise RuntimeError("Nie znaleziono pip virtualenv dla aktualizacji: %s" % normalized_pip_path)
+        if normalized_requirements and not os.path.isfile(normalized_requirements):
+            raise RuntimeError("Nie znaleziono requirements.txt dla aktualizacji: %s" % normalized_requirements)
+
+        backup_root = os.path.join(tempfile.gettempdir(), "flask-downloader-update-runtime")
+        os.makedirs(backup_root, exist_ok=True)
+        timestamp = time.strftime("%Y%m%d-%H%M%S", time.localtime())
+        log_path = os.path.abspath(
+            str(log_file or "").strip()
+            or os.path.join(backup_root, "%s-%s.log" % (normalized_service_name.replace("/", "_"), timestamp))
+        )
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+        stop_command = cls._build_systemctl_command("stop", normalized_service_name)
+        start_command = cls._build_systemctl_command("start", normalized_service_name)
+
+        install_block = 'echo "[app-update] Pomijam pip install (brak requirements lub pip)." >> {log}\n'.format(
+            log=shlex.quote(log_path),
+        )
+        if normalized_pip_path and normalized_requirements:
+            install_block = (
+                'echo "[app-update] Aktualizuję zależności Python: {req}" >> {log}\n'
+                '{pip} install -r {req} >> {log} 2>&1\n'
+                'pip_rc=$?\n'
+                'echo "[app-update] Zakończono pip install, kod=$pip_rc" >> {log}\n'
+            ).format(
+                pip=shlex.quote(normalized_pip_path),
+                req=shlex.quote(normalized_requirements),
+                log=shlex.quote(log_path),
+            )
+
+        script_content = """#!/bin/bash
+set +e
+sleep {delay}
+echo "[app-update] Start finalizacji: $(date '+%Y-%m-%d %H:%M:%S')" >> {log}
+{stop_cmd} >> {log} 2>&1
+stop_rc=$?
+echo "[app-update] Zatrzymano usługę {service}, kod=$stop_rc" >> {log}
+{install_block}
+{start_cmd} >> {log} 2>&1
+start_rc=$?
+echo "[app-update] Uruchomiono usługę {service}, kod=$start_rc" >> {log}
+rm -f -- "$0"
+exit 0
+""".format(
+            delay=max(0.5, float(delay_seconds or 0.0)),
+            log=shlex.quote(log_path),
+            service=normalized_service_name,
+            stop_cmd=shlex.join(stop_command),
+            install_block=install_block.rstrip(),
+            start_cmd=shlex.join(start_command),
+        )
+
+        fd, script_path = tempfile.mkstemp(prefix="flask_downloader_update_", suffix=".sh")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(script_content)
+            os.chmod(script_path, 0o700)
+        except Exception:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            try:
+                if os.path.exists(script_path):
+                    os.unlink(script_path)
+            except Exception:
+                pass
+            raise
+
+        process = subprocess.Popen(
+            [script_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            close_fds=True,
+            start_new_session=True,
+        )
+        return {
+            "pid": int(process.pid or 0),
+            "script_path": script_path,
+            "log_file": log_path,
+        }

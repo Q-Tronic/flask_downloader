@@ -4772,6 +4772,21 @@ def schedule_flask_service_restart():
     return schedule_systemd_service_restart(SYSTEMD_SERVICE_NAME)
 
 
+def schedule_flask_update_finalize(pip_path="", requirements_file=""):
+    update_logs_root = os.path.join(APP_ROOT, "backups", "app-update-runtime")
+    os.makedirs(update_logs_root, exist_ok=True)
+    log_path = os.path.join(
+        update_logs_root,
+        "update-finalize-%s.log" % time.strftime("%Y%m%d-%H%M%S", time.localtime()),
+    )
+    return SYSTEM_SERVICE.schedule_systemd_service_update_finalize(
+        SYSTEMD_SERVICE_NAME,
+        pip_path=pip_path,
+        requirements_file=requirements_file,
+        log_file=log_path,
+    )
+
+
 APP_UPDATE_SERVICE = AppUpdateService(
     project_root=APP_ROOT,
     version_file=VERSION_FILE,
@@ -4786,6 +4801,7 @@ APP_UPDATE_SERVICE = AppUpdateService(
     read_update_state=read_app_update_state,
     save_update_state=save_app_update_state,
     schedule_service_restart=schedule_flask_service_restart,
+    finalize_update_detached=schedule_flask_update_finalize,
 )
 
 
