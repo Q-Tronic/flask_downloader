@@ -480,7 +480,7 @@ class DlnaLibraryService:
         files = self._get_server_files()
         prune_result = self._prune_missing_dlna_media_rules(
             files=files,
-            sync_runtime=True,
+            sync_runtime=False,
             restart_service_if_active=False,
         )
         dlna_config = self._normalize_dlna_config(prune_result.get("config"))

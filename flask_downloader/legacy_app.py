@@ -5912,7 +5912,7 @@ def dlna_autoheal_scheduler():
                 prune_missing_dlna_media_rules(
                     files=None,
                     sync_runtime=True,
-                    restart_service_if_active=True,
+                    restart_service_if_active=False,
                 )
         except Exception:
             pass
@@ -6070,7 +6070,7 @@ def prune_missing_dlna_media_rules(files=None, sync_runtime=True, restart_servic
     if sync_runtime:
         sync_dlna_runtime_safe(
             restart_service_if_active=restart_service_if_active,
-            force_full_rescan=True,
+            force_full_rescan=bool(restart_service_if_active),
         )
 
     return {
