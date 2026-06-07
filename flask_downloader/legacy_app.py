@@ -714,6 +714,7 @@ def count_user_media_files(username):
 
 
 def count_user_jobs(username):
+    ensure_download_jobs_loaded()
     owner = normalize_username(username)
     with DOWNLOAD_LOCK:
         return sum(1 for job in DOWNLOAD_JOBS.values() if normalize_username(job.get("owner_username") or DEFAULT_ADMIN_USERNAME) == owner)
@@ -2379,6 +2380,23 @@ def load_saved_download_jobs():
         return {}
 
     return jobs
+
+
+def ensure_download_jobs_loaded(force=False):
+    with DOWNLOAD_LOCK:
+        if DOWNLOAD_JOBS and not force:
+            return False
+
+    reloaded_jobs = load_saved_download_jobs()
+    if not reloaded_jobs:
+        return False
+
+    with DOWNLOAD_LOCK:
+        if DOWNLOAD_JOBS and not force:
+            return False
+        DOWNLOAD_JOBS.clear()
+        DOWNLOAD_JOBS.update(copy.deepcopy(reloaded_jobs))
+    return True
 
 
 LEGACY_STORAGE_MIGRATION_STATE = migrate_legacy_storage_layout()
@@ -4195,6 +4213,7 @@ def download_worker(job_id):
 
 
 def get_jobs_snapshot():
+    ensure_download_jobs_loaded()
     return DOWNLOAD_JOBS_SERVICE.get_jobs_snapshot()
 
 
