@@ -2,6 +2,7 @@ import os
 import threading
 import time
 import uuid
+import re
 
 
 class JobViewService:
@@ -92,6 +93,42 @@ class DownloadJobsService:
             daemon=True,
         )
         thread.start()
+
+    @staticmethod
+    def _job_has_retry_payload(job):
+        if not job:
+            return False
+        if str(job.get("page_url") or "").strip() == "":
+            return False
+        if str(job.get("format_id") or "").strip():
+            return True
+
+        signature = dict(job.get("selection_signature") or {})
+        return any(
+            str(signature.get(key) or "").strip()
+            for key in ("media_kind", "label", "ext")
+        ) or any(
+            int(signature.get(key) or 0) > 0
+            for key in ("height", "width")
+        )
+
+    @classmethod
+    def _build_failure_hint(cls, job):
+        if str((job or {}).get("status") or "") != "failed":
+            return ""
+
+        error_text = str((job or {}).get("error") or "").strip()
+        if not error_text:
+            return ""
+
+        lowered = error_text.casefold()
+        if "429" in lowered or "too many requests" in lowered:
+            return "Źródło chwilowo ogranicza liczbę żądań. Odczekaj chwilę i użyj „Pobierz ponownie”."
+        if any(marker in lowered for marker in ("timed out", "timeout", "connection reset", "temporarily unavailable")):
+            return "Błąd wygląda na chwilowy problem sieciowy. Spróbuj ponownie za moment."
+        if re.search(r"\b5\d\d\b", lowered):
+            return "Serwer źródłowy zwrócił błąd po swojej stronie. Warto spróbować ponownie później."
+        return ""
 
     def update_job(self, job_id, **kwargs):
         with self._jobs_lock:
@@ -245,6 +282,40 @@ class DownloadJobsService:
         self._start_download_thread(job_id)
         return True, "Wznowiono pobieranie."
 
+    def retry_job(self, job_id):
+        with self._jobs_lock:
+            job = self._jobs_store.get(job_id)
+            if not job:
+                return False, "Nie znaleziono zadania.", None
+
+            if not self._can_access_owner(job.get("owner_username") or self._default_admin_username):
+                return False, "Nie masz dostępu do tego zadania.", None
+
+            if str(job.get("status") or "") != "failed":
+                return False, "Ponownie można uruchomić tylko zadanie zakończone niepowodzeniem.", None
+
+            if not self._job_has_retry_payload(job):
+                return False, "To zadanie nie ma już kompletu danych potrzebnych do ponowienia.", None
+
+            retry_payload = {
+                "owner_username": self._normalize_username(job.get("owner_username") or self._default_admin_username),
+                "storage_kind": self._normalize_storage_kind(job.get("storage_kind") or "video"),
+                "title": str(job.get("title") or ""),
+                "label": str(job.get("label") or ""),
+                "planned_filename": str(job.get("planned_filename") or job.get("filename") or ""),
+                "overwrite_existing": bool(job.get("overwrite_existing")),
+                "replace_paths": [str(path) for path in (job.get("replace_paths") or []) if path],
+                "auto_dlna_collection_id": str(job.get("auto_dlna_collection_id") or "").strip(),
+                "is_live_capture": bool(job.get("is_live_capture")),
+                "live_status": str(job.get("live_status") or ""),
+                "selection_signature": dict(job.get("selection_signature") or {}),
+            }
+            page_url = str(job.get("page_url") or "").strip()
+            format_id = str(job.get("format_id") or "").strip()
+
+        new_job = self.create_job(page_url, format_id, **retry_payload)
+        return True, "Dodano ponowne pobieranie do kolejki.", new_job
+
     def cleanup_job_cancel_handle(self, job_id):
         with self._jobs_lock:
             if job_id in self._cancel_events_store:
@@ -355,6 +426,8 @@ class DownloadJobsService:
             job["can_cancel"] = job.get("status") in ("queued", "downloading", "paused")
             job["can_pause"] = job.get("status") in ("queued", "downloading") and not str(job.get("processing_stage") or "").strip()
             job["can_resume"] = job.get("status") == "paused"
+            job["can_retry"] = str(job.get("status") or "") == "failed" and self._job_has_retry_payload(job)
+            job["failure_hint"] = self._build_failure_hint(job)
 
         return jobs
 

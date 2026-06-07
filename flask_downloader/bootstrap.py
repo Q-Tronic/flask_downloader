@@ -67,6 +67,7 @@ def register_application_routes(app, context):
         "mark_job_cancel_requested": context["mark_job_cancel_requested"],
         "mark_job_pause_requested": context["mark_job_pause_requested"],
         "resume_job_download": context["resume_job_download"],
+        "retry_job_download": context["retry_job_download"],
         "delete_job": context["delete_job_record"],
         "delete_managed_file": context["delete_managed_download_file"],
         "build_m3u": context["build_m3u"],

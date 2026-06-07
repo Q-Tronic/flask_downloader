@@ -127,6 +127,32 @@ async function resumeJob(jobId) {
     }
 }
 
+async function retryJob(jobId, failureHint) {
+    const confirmMessage = failureHint
+        ? "Uruchomić to zadanie ponownie?\n\n" + failureHint
+        : "Uruchomić to zadanie ponownie z tymi samymi ustawieniami?";
+    if (!confirm(confirmMessage)) {
+        return;
+    }
+
+    try {
+        const response = await fetch("/api/jobs/" + encodeURIComponent(jobId) + "/retry", {
+            method: "POST"
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            showToast(data.error || "Nie udało się ponowić zadania.", "error");
+            return;
+        }
+
+        showToast(data.message || "Dodano zadanie do kolejki ponownie.", "success");
+        refreshData();
+    } catch (err) {
+        showToast("Błąd ponawiania zadania: " + err, "error");
+    }
+}
+
 async function cancelJob(jobId, jobStatus) {
     const confirmMessage = String(jobStatus || "") === "paused"
         ? "Anulować to wstrzymane pobieranie i usunąć jego dane tymczasowe?"
@@ -259,6 +285,9 @@ function renderJobs(jobs, adminLoggedIn) {
         const errorHtml = job.error
             ? '<div class="row"><div class="label">Szczegóły</div><div class="value">' + escapeHtml(job.error) + '</div></div>'
             : '';
+        const hintHtml = job.failure_hint
+            ? '<div class="small" style="margin-top:6px;">' + escapeHtml(job.failure_hint) + '</div>'
+            : "";
 
         const fileHtml = job.file_url
             ? '<div class="row"><div class="label">Plik</div><div class="value"><a class="file-link" href="' + escapeHtml(job.file_url) + '" target="_blank" rel="noopener">' + escapeHtml(job.file_display_name || job.relative_path || job.filename || "") + '</a></div></div>'
@@ -275,6 +304,10 @@ function renderJobs(jobs, adminLoggedIn) {
 
         if (job.can_resume) {
             actionButtons += '<button type="button" class="btn btn-secondary js-resume-job" data-job-id="' + escapeHtml(job.job_id) + '">Wznów</button>';
+        }
+
+        if (job.can_retry) {
+            actionButtons += '<button type="button" class="btn btn-secondary js-retry-job" data-job-id="' + escapeHtml(job.job_id) + '" data-job-failure-hint="' + escapeHtml(job.failure_hint || "") + '">Pobierz ponownie</button>';
         }
 
         if (job.can_cancel) {
@@ -317,6 +350,7 @@ function renderJobs(jobs, adminLoggedIn) {
                 ${ownerHtml}
                 ${fileHtml}
                 ${errorHtml}
+                ${hintHtml}
                 <div class="small">ID: ${escapeHtml(job.job_id)}</div>
                 ${actionsHtml}
             </div>
@@ -393,6 +427,16 @@ async function handleJobsClick(event) {
         const jobId = cancelBtn.dataset.jobId || "";
         if (jobId) {
             await cancelJob(jobId, cancelBtn.dataset.jobStatus || "");
+        }
+        return;
+    }
+
+    const retryBtn = event.target.closest(".js-retry-job");
+    if (retryBtn) {
+        event.preventDefault();
+        const jobId = retryBtn.dataset.jobId || "";
+        if (jobId) {
+            await retryJob(jobId, retryBtn.dataset.jobFailureHint || "");
         }
         return;
     }

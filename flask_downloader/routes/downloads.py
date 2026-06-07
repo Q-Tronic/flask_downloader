@@ -32,6 +32,7 @@ def register_download_routes(app, deps):
     mark_job_cancel_requested = deps["mark_job_cancel_requested"]
     mark_job_pause_requested = deps["mark_job_pause_requested"]
     resume_job_download = deps["resume_job_download"]
+    retry_job_download = deps["retry_job_download"]
     delete_job = deps["delete_job"]
     delete_managed_file = deps["delete_managed_file"]
     build_m3u = deps["build_m3u"]
@@ -434,6 +435,30 @@ def register_download_routes(app, deps):
             return jsonify({"ok": False, "error": message}), status_code
 
         return jsonify({"ok": True, "message": message})
+
+    @app.route("/api/jobs/<job_id>/retry", methods=["POST"])
+    def api_retry_job(job_id):
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        ok, message = ensure_share_ready(auto_remount=True)
+        if not ok:
+            return jsonify({
+                "ok": False,
+                "error": "Udział sieciowy offline. %s" % message
+            }), 503
+
+        ok, message, job = retry_job_download(job_id)
+        if not ok:
+            status_code = 404 if "Nie znaleziono zadania" in message else 403 if "Nie masz dostępu" in message else 409
+            return jsonify({"ok": False, "error": message}), status_code
+
+        return jsonify({
+            "ok": True,
+            "message": message,
+            "job_id": str((job or {}).get("job_id") or ""),
+        }), 202
 
     @app.route("/api/jobs/<job_id>/delete", methods=["POST"])
     def api_delete_job(job_id):

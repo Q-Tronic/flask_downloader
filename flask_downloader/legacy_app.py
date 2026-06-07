@@ -3590,6 +3590,10 @@ def resume_job_download(job_id):
     return DOWNLOAD_JOBS_SERVICE.resume_job(job_id)
 
 
+def retry_job_download(job_id):
+    return DOWNLOAD_JOBS_SERVICE.retry_job(job_id)
+
+
 def cleanup_job_cancel_handle(job_id):
     return DOWNLOAD_JOBS_SERVICE.cleanup_job_cancel_handle(job_id)
 
