@@ -528,11 +528,19 @@ class DlnaLibraryService:
     def get_client_visible_collection_ids(self, client, dlna_config=None):
         config = dlna_config or self._get_dlna_config_snapshot()
         named_map = self._get_all_collection_map(config)
-        return {
+        visible_ids = {
             str(item or "").strip()
             for item in (client.get("collection_ids") or [])
             if str(item or "").strip() in named_map
         }
+        assigned_usernames = set(self.get_client_assigned_usernames(client))
+        if assigned_usernames:
+            for collection in config.get("collections") or []:
+                collection_id = str(collection.get("id") or "").strip()
+                owner_username = str(collection.get("owner_username") or self._default_admin_username).strip() or self._default_admin_username
+                if collection_id and collection_id in named_map and owner_username in assigned_usernames:
+                    visible_ids.add(collection_id)
+        return visible_ids
 
     def get_client_assigned_usernames(self, client):
         return self.normalize_client_usernames((client or {}).get("usernames") or [])
@@ -591,6 +599,11 @@ class DlnaLibraryService:
             for item in self.get_collection_catalog(config)
         }
         all_collection_map = self._get_all_collection_map(config)
+        available_user_map = {
+            str(item.get("username") or "").strip(): item
+            for item in (self.get_available_users() or [])
+            if str(item.get("username") or "").strip()
+        }
         pending_paths = self._get_pending_sync_paths(config)
         entry_count_map = {}
         for entry in self._get_entries(config):
@@ -606,6 +619,7 @@ class DlnaLibraryService:
         client_items = []
         for client in config.get("clients") or []:
             visible_collection_ids = self.get_client_visible_collection_ids(client, config)
+            assigned_usernames = self.get_client_assigned_usernames(client)
             visible_media_count = 0
             for collection_id in visible_collection_ids:
                 visible_media_count += int(entry_count_map.get(collection_id, 0))
@@ -620,8 +634,18 @@ class DlnaLibraryService:
                     for item in visible_collection_ids
                     if item in all_collection_map
                 ],
-                "usernames": [],
-                "user_labels": [],
+                "usernames": assigned_usernames,
+                "user_labels": [
+                    {
+                        "username": username,
+                        "role": str((available_user_map.get(username) or {}).get("role") or "user").strip().lower() or "user",
+                        "text": "%s (%s)" % (
+                            username,
+                            "Administrator" if str((available_user_map.get(username) or {}).get("role") or "user").strip().lower() == "admin" else "Użytkownik",
+                        ),
+                    }
+                    for username in assigned_usernames
+                ],
                 "visible_media_count": visible_media_count,
             })
 
@@ -1112,7 +1136,7 @@ class DlnaLibraryService:
             "description": self._normalize_dlna_description(description, max_len=200),
             "enabled": bool(enabled),
             "collection_ids": self.normalize_client_collection_ids(collection_ids or [], dlna_config),
-            "usernames": [],
+            "usernames": self.normalize_client_usernames(usernames or []),
         }
         dlna_config.setdefault("clients", []).append(client)
         self._set_dlna_config(dlna_config)
@@ -1140,7 +1164,7 @@ class DlnaLibraryService:
             item["description"] = self._normalize_dlna_description(description, max_len=200)
             item["enabled"] = bool(enabled)
             item["collection_ids"] = self.normalize_client_collection_ids(collection_ids or [], dlna_config)
-            item["usernames"] = []
+            item["usernames"] = self.normalize_client_usernames(usernames or [])
             found = True
             break
 

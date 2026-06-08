@@ -307,7 +307,7 @@ def register_dlna_routes(app, deps):
                     description=payload.get("description"),
                     enabled=parse_boolean_flag(payload.get("enabled"), default=True),
                     collection_ids=payload.get("collection_ids") or [],
-                    usernames=[],
+                    usernames=payload.get("usernames") or [],
                 )
                 return build_dlna_json_response(message="Dodano klienta DLNA do whitelisty.", kind="success")
             if action == "update":
@@ -317,7 +317,7 @@ def register_dlna_routes(app, deps):
                     description=payload.get("description"),
                     enabled=parse_boolean_flag(payload.get("enabled"), default=True),
                     collection_ids=payload.get("collection_ids") or [],
-                    usernames=[],
+                    usernames=payload.get("usernames") or [],
                 )
                 return build_dlna_json_response(message="Zapisano klienta DLNA.", kind="success")
             if action == "delete":

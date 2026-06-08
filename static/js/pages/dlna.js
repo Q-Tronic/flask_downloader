@@ -76,6 +76,10 @@
         return Array.isArray(currentState.collections) ? currentState.collections : [];
     }
 
+    function getAvailableUsers() {
+        return Array.isArray(currentState.available_users) ? currentState.available_users : [];
+    }
+
     function getManageableCollections() {
         return getCollections().filter(function (item) {
             return !!item && !!item.can_manage;
@@ -283,6 +287,28 @@
         }).join("");
     }
 
+    function renderUserCheckboxGrid(selectedUsernames, scopeName) {
+        const selectedSet = new Set((selectedUsernames || []).map(function (item) { return String(item || ""); }));
+        const users = getAvailableUsers();
+        if (!users.length) {
+            return '<div class="dlna-empty">Brak dostępnych użytkowników.</div>';
+        }
+        return users.map(function (item) {
+            const username = String((item && item.username) || "");
+            const checked = selectedSet.has(username);
+            const roleLabel = String((item && item.role) || "user").toLowerCase() === "admin" ? "Administrator" : "Użytkownik";
+            return `
+                <label class="dlna-checkbox">
+                    <input type="checkbox" value="${escapeHtml(username)}" data-checkbox-scope="${escapeHtml(scopeName)}" ${checked ? "checked" : ""}>
+                    <span class="dlna-checkbox-text">
+                        <strong>${escapeHtml(username)}</strong>
+                        <span class="small">${escapeHtml(roleLabel)}</span>
+                    </span>
+                </label>
+            `;
+        }).join("");
+    }
+
     function readCheckboxScope(scopeName, container) {
         return Array.from((container || root).querySelectorAll('input[data-checkbox-scope="' + scopeName + '"]:checked')).map(function (input) {
             return String(input.value || "");
@@ -470,14 +496,17 @@
         if (!isAdmin()) {
             return;
         }
+        const list = document.getElementById("dlnaClientsList");
+        const meta = document.getElementById("dlnaClientsMeta");
+        const clients = Array.isArray(currentState.clients) ? currentState.clients : [];
         const newClientCollections = document.getElementById("dlnaNewClientCollections");
         if (newClientCollections) {
             newClientCollections.innerHTML = renderCollectionCheckboxGrid([], "new-client");
         }
-
-        const list = document.getElementById("dlnaClientsList");
-        const meta = document.getElementById("dlnaClientsMeta");
-        const clients = Array.isArray(currentState.clients) ? currentState.clients : [];
+        const newClientUsers = document.getElementById("dlnaNewClientUsers");
+        if (newClientUsers) {
+            newClientUsers.innerHTML = renderUserCheckboxGrid([], "new-client-users");
+        }
         if (meta) {
             meta.textContent = clients.length ? (clients.filter(function (item) { return !!item.enabled; }).length + " aktywnych z " + clients.length) : "Brak klientów";
         }
@@ -519,6 +548,11 @@
                     <div style="margin-top: 12px;">
                         <div class="field-label">Bukiety widoczne dla klienta</div>
                         <div class="dlna-checkbox-grid">${renderCollectionCheckboxGrid(client.collection_ids || [], "client-" + client.id)}</div>
+                    </div>
+                    <div style="margin-top: 12px;">
+                        <div class="field-label">Wszystkie bukiety wybranych użytkowników</div>
+                        <div class="dlna-checkbox-grid">${renderUserCheckboxGrid(client.usernames || [], "client-users-" + client.id)}</div>
+                        <div class="small">${Array.isArray(client.user_labels) && client.user_labels.length ? escapeHtml(client.user_labels.map(function (item) { return item.text || item.username || ""; }).join(", ")) : "Brak przypisanych użytkowników."}</div>
                     </div>
                     <div class="dlna-item-actions">
                         <button type="button" class="btn js-dlna-save-client" data-client-id="${escapeHtml(client.id)}">Zapisz klienta</button>
@@ -902,6 +936,7 @@
                     description: String((card.querySelector('[data-client-field="description"]') || {}).value || ""),
                     enabled: !!((card.querySelector('[data-client-field="enabled"]') || {}).checked),
                     collection_ids: readCheckboxScope("client-" + clientId, card),
+                    usernames: readCheckboxScope("client-users-" + clientId, card),
                 });
             });
             return;
@@ -1058,6 +1093,7 @@
                     description: String(form.description.value || ""),
                     enabled: !!form.enabled.checked,
                     collection_ids: readCheckboxScope("new-client"),
+                    usernames: readCheckboxScope("new-client-users"),
                 });
             });
             if (ok) {
