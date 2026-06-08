@@ -618,6 +618,10 @@ class DlnaLibraryService:
 
         client_items = []
         for client in config.get("clients") or []:
+            explicit_collection_ids = self.normalize_client_collection_ids(
+                (client or {}).get("collection_ids") or [],
+                config,
+            )
             visible_collection_ids = self.get_client_visible_collection_ids(client, config)
             assigned_usernames = self.get_client_assigned_usernames(client)
             visible_media_count = 0
@@ -628,8 +632,14 @@ class DlnaLibraryService:
                 "ip": client["ip"],
                 "description": client.get("description") or "",
                 "enabled": bool(client.get("enabled", True)),
-                "collection_ids": list(visible_collection_ids),
+                "collection_ids": list(explicit_collection_ids),
                 "collection_names": [
+                    all_collection_map[item]["name"]
+                    for item in explicit_collection_ids
+                    if item in all_collection_map
+                ],
+                "effective_collection_ids": list(visible_collection_ids),
+                "effective_collection_names": [
                     all_collection_map[item]["name"]
                     for item in visible_collection_ids
                     if item in all_collection_map

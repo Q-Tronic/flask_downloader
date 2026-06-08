@@ -546,8 +546,9 @@
                         </span>
                     </label>
                     <div style="margin-top: 12px;">
-                        <div class="field-label">Bukiety widoczne dla klienta</div>
+                        <div class="field-label">Ręcznie przypisane bukiety</div>
                         <div class="dlna-checkbox-grid">${renderCollectionCheckboxGrid(client.collection_ids || [], "client-" + client.id)}</div>
+                        <div class="small">${Array.isArray(client.effective_collection_names) && client.effective_collection_names.length ? ('Łącznie widoczne: ' + escapeHtml(client.effective_collection_names.join(", "))) : "Brak widocznych bukietów."}</div>
                     </div>
                     <div style="margin-top: 12px;">
                         <div class="field-label">Wszystkie bukiety wybranych użytkowników</div>
