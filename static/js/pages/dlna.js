@@ -25,6 +25,8 @@
     let activeCollectionId = "";
     let librarySelectionDirty = false;
     let librarySelectionDirtyCollectionId = "";
+    let newClientDraft = null;
+    const clientDrafts = new Map();
 
     try {
         const storedTab = window.sessionStorage ? String(window.sessionStorage.getItem("dlnaActiveTab") || "") : "";
@@ -91,6 +93,188 @@
         return getCollections().find(function (item) {
             return String((item && item.id) || "") === normalizedId;
         }) || null;
+    }
+
+    function getClientById(clientId) {
+        const normalizedId = String(clientId || "");
+        const clients = Array.isArray(currentState.clients) ? currentState.clients : [];
+        return clients.find(function (item) {
+            return String((item && item.id) || "") === normalizedId;
+        }) || null;
+    }
+
+    function normalizeStringList(values) {
+        const result = [];
+        const seen = new Set();
+        (values || []).forEach(function (item) {
+            const value = String(item || "").trim();
+            if (!value || seen.has(value)) {
+                return;
+            }
+            seen.add(value);
+            result.push(value);
+        });
+        return result;
+    }
+
+    function normalizeSortedStringList(values) {
+        return normalizeStringList(values).slice().sort();
+    }
+
+    function sameStringList(left, right) {
+        const a = normalizeSortedStringList(left);
+        const b = normalizeSortedStringList(right);
+        if (a.length !== b.length) {
+            return false;
+        }
+        for (let index = 0; index < a.length; index += 1) {
+            if (a[index] !== b[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    function buildEffectiveCollectionIds(explicitCollectionIds, usernames) {
+        const result = normalizeStringList(explicitCollectionIds);
+        const seen = new Set(result);
+        const assignedUsers = new Set(normalizeStringList(usernames));
+        getCollections().forEach(function (item) {
+            const collectionId = String((item && item.id) || "").trim();
+            const ownerUsername = String((item && item.owner_username) || "").trim();
+            if (!collectionId || !ownerUsername || !assignedUsers.has(ownerUsername) || seen.has(collectionId)) {
+                return;
+            }
+            seen.add(collectionId);
+            result.push(collectionId);
+        });
+        return result;
+    }
+
+    function mapCollectionNames(collectionIds) {
+        const names = [];
+        normalizeStringList(collectionIds).forEach(function (collectionId) {
+            const collection = getCollectionById(collectionId);
+            if (collection && collection.name) {
+                names.push(String(collection.name));
+            }
+        });
+        return names;
+    }
+
+    function mapUserLabels(usernames) {
+        const userMap = new Map(getAvailableUsers().map(function (item) {
+            return [String((item && item.username) || ""), item || {}];
+        }));
+        return normalizeStringList(usernames).map(function (username) {
+            const item = userMap.get(username) || {};
+            const role = String(item.role || "user").toLowerCase() === "admin" ? "admin" : "user";
+            return {
+                username: username,
+                role: role,
+                text: username + " (" + (role === "admin" ? "Administrator" : "Użytkownik") + ")",
+            };
+        });
+    }
+
+    function getClientDraft(clientId) {
+        return clientDrafts.get(String(clientId || "")) || null;
+    }
+
+    function hasClientDrafts() {
+        return !!newClientDraft || clientDrafts.size > 0;
+    }
+
+    function clearClientDraft(clientId) {
+        clientDrafts.delete(String(clientId || ""));
+    }
+
+    function clearNewClientDraft() {
+        newClientDraft = null;
+    }
+
+    function createClientViewModel(client) {
+        const clientId = String((client && client.id) || "");
+        const draft = getClientDraft(clientId);
+        const explicitCollectionIds = draft ? normalizeStringList(draft.collection_ids) : normalizeStringList((client && client.collection_ids) || []);
+        const usernames = draft ? normalizeStringList(draft.usernames) : normalizeStringList((client && client.usernames) || []);
+        const effectiveCollectionIds = buildEffectiveCollectionIds(
+            explicitCollectionIds,
+            usernames,
+        );
+        return Object.assign({}, client || {}, draft || {}, {
+            collection_ids: explicitCollectionIds,
+            collection_names: mapCollectionNames(explicitCollectionIds),
+            effective_collection_ids: effectiveCollectionIds,
+            effective_collection_names: mapCollectionNames(effectiveCollectionIds),
+            usernames: usernames,
+            user_labels: mapUserLabels(usernames),
+        });
+    }
+
+    function readClientDraftFromCard(card) {
+        const clientId = String(((card && card.dataset) || {}).clientId || "");
+        return {
+            id: clientId,
+            ip: String((card.querySelector('[data-client-field="ip"]') || {}).value || ""),
+            description: String((card.querySelector('[data-client-field="description"]') || {}).value || ""),
+            enabled: !!((card.querySelector('[data-client-field="enabled"]') || {}).checked),
+            collection_ids: readCheckboxScope("client-" + clientId, card),
+            usernames: readCheckboxScope("client-users-" + clientId, card),
+        };
+    }
+
+    function syncClientDraft(card) {
+        if (!card) {
+            return;
+        }
+        const draft = readClientDraftFromCard(card);
+        const clientId = String(draft.id || "");
+        if (!clientId) {
+            return;
+        }
+        const serverClient = getClientById(clientId);
+        if (!serverClient) {
+            clientDrafts.set(clientId, draft);
+            return;
+        }
+        const shouldKeepDraft = (
+            String(serverClient.ip || "") !== draft.ip
+            || String(serverClient.description || "") !== draft.description
+            || !!serverClient.enabled !== !!draft.enabled
+            || !sameStringList(serverClient.collection_ids || [], draft.collection_ids)
+            || !sameStringList(serverClient.usernames || [], draft.usernames)
+        );
+        if (shouldKeepDraft) {
+            clientDrafts.set(clientId, draft);
+        } else {
+            clientDrafts.delete(clientId);
+        }
+    }
+
+    function readNewClientDraft(form) {
+        return {
+            ip: String((form && form.ip && form.ip.value) || ""),
+            description: String((form && form.description && form.description.value) || ""),
+            enabled: !!((form && form.enabled && form.enabled.checked)),
+            collection_ids: readCheckboxScope("new-client", form || root),
+            usernames: readCheckboxScope("new-client-users", form || root),
+        };
+    }
+
+    function syncNewClientDraft(form) {
+        if (!form) {
+            return;
+        }
+        const draft = readNewClientDraft(form);
+        const shouldKeepDraft = (
+            !!draft.ip
+            || !!draft.description
+            || !draft.enabled
+            || (draft.collection_ids || []).length > 0
+            || (draft.usernames || []).length > 0
+        );
+        newClientDraft = shouldKeepDraft ? draft : null;
     }
 
     function persistUiState() {
@@ -492,23 +676,41 @@
         renderLibrarySelectionSummary();
     }
 
-    function renderClients() {
+    function renderClients(options) {
         if (!isAdmin()) {
             return;
         }
+        const opts = options || {};
         const list = document.getElementById("dlnaClientsList");
         const meta = document.getElementById("dlnaClientsMeta");
         const clients = Array.isArray(currentState.clients) ? currentState.clients : [];
+        if (meta) {
+            meta.textContent = clients.length ? (clients.filter(function (item) { return !!item.enabled; }).length + " aktywnych z " + clients.length) : "Brak klientów";
+        }
+        if (!opts.force && hasClientDrafts()) {
+            return;
+        }
+        const createClientForm = document.getElementById("dlnaCreateClientForm");
         const newClientCollections = document.getElementById("dlnaNewClientCollections");
         if (newClientCollections) {
-            newClientCollections.innerHTML = renderCollectionCheckboxGrid([], "new-client");
+            newClientCollections.innerHTML = renderCollectionCheckboxGrid((newClientDraft || {}).collection_ids || [], "new-client");
         }
         const newClientUsers = document.getElementById("dlnaNewClientUsers");
         if (newClientUsers) {
-            newClientUsers.innerHTML = renderUserCheckboxGrid([], "new-client-users");
+            newClientUsers.innerHTML = renderUserCheckboxGrid((newClientDraft || {}).usernames || [], "new-client-users");
         }
-        if (meta) {
-            meta.textContent = clients.length ? (clients.filter(function (item) { return !!item.enabled; }).length + " aktywnych z " + clients.length) : "Brak klientów";
+        if (createClientForm) {
+            if (createClientForm.ip) {
+                createClientForm.ip.value = String(((newClientDraft || {}).ip) || "");
+            }
+            if (createClientForm.description) {
+                createClientForm.description.value = String(((newClientDraft || {}).description) || "");
+            }
+            if (createClientForm.enabled) {
+                createClientForm.enabled.checked = Object.prototype.hasOwnProperty.call(newClientDraft || {}, "enabled")
+                    ? !!newClientDraft.enabled
+                    : true;
+            }
         }
         if (!list) {
             return;
@@ -518,28 +720,29 @@
             return;
         }
         list.innerHTML = clients.map(function (client) {
+            const clientView = createClientViewModel(client);
             return `
-                <article class="dlna-card" data-client-id="${escapeHtml(client.id)}">
+                <article class="dlna-card" data-client-id="${escapeHtml(clientView.id)}">
                     <div class="dlna-item-header">
                         <div>
-                            <div class="dlna-item-title">${escapeHtml(client.ip || "")}</div>
-                            <div class="small">${escapeHtml(client.description || "Brak opisu urządzenia.")}</div>
-                            <div class="small">Widoczne pliki: ${escapeHtml(client.visible_media_count || 0)}</div>
+                            <div class="dlna-item-title">${escapeHtml(clientView.ip || "")}</div>
+                            <div class="small">${escapeHtml(clientView.description || "Brak opisu urządzenia.")}</div>
+                            <div class="small">Widoczne pliki: ${escapeHtml(clientView.visible_media_count || 0)}</div>
                         </div>
-                        <span class="service-status-pill ${client.enabled ? "success" : "muted"}">${client.enabled ? "Aktywny" : "Wyłączony"}</span>
+                        <span class="service-status-pill ${clientView.enabled ? "success" : "muted"}">${clientView.enabled ? "Aktywny" : "Wyłączony"}</span>
                     </div>
                     <div class="dlna-inline-form is-wide">
                         <div class="field-group">
-                            <label class="field-label" for="dlnaClientIp-${escapeHtml(client.id)}">Adres IP</label>
-                            <input id="dlnaClientIp-${escapeHtml(client.id)}" data-client-field="ip" type="text" value="${escapeHtml(client.ip || "")}">
+                            <label class="field-label" for="dlnaClientIp-${escapeHtml(clientView.id)}">Adres IP</label>
+                            <input id="dlnaClientIp-${escapeHtml(clientView.id)}" data-client-field="ip" type="text" value="${escapeHtml(clientView.ip || "")}">
                         </div>
                         <div class="field-group">
-                            <label class="field-label" for="dlnaClientDescription-${escapeHtml(client.id)}">Opis urządzenia</label>
-                            <input id="dlnaClientDescription-${escapeHtml(client.id)}" data-client-field="description" type="text" value="${escapeHtml(client.description || "")}">
+                            <label class="field-label" for="dlnaClientDescription-${escapeHtml(clientView.id)}">Opis urządzenia</label>
+                            <input id="dlnaClientDescription-${escapeHtml(clientView.id)}" data-client-field="description" type="text" value="${escapeHtml(clientView.description || "")}">
                         </div>
                     </div>
                     <label class="dlna-checkbox" style="margin-top: 12px;">
-                        <input type="checkbox" data-client-field="enabled" ${client.enabled ? "checked" : ""}>
+                        <input type="checkbox" data-client-field="enabled" ${clientView.enabled ? "checked" : ""}>
                         <span class="dlna-checkbox-text">
                             <strong>Klient aktywny</strong>
                             <span class="small">Wyłącz klienta bez kasowania wpisu IP.</span>
@@ -547,17 +750,17 @@
                     </label>
                     <div style="margin-top: 12px;">
                         <div class="field-label">Ręcznie przypisane bukiety</div>
-                        <div class="dlna-checkbox-grid">${renderCollectionCheckboxGrid(client.collection_ids || [], "client-" + client.id)}</div>
-                        <div class="small">${Array.isArray(client.effective_collection_names) && client.effective_collection_names.length ? ('Łącznie widoczne: ' + escapeHtml(client.effective_collection_names.join(", "))) : "Brak widocznych bukietów."}</div>
+                        <div class="dlna-checkbox-grid">${renderCollectionCheckboxGrid(clientView.collection_ids || [], "client-" + clientView.id)}</div>
+                        <div class="small">${Array.isArray(clientView.effective_collection_names) && clientView.effective_collection_names.length ? ('Łącznie widoczne: ' + escapeHtml(clientView.effective_collection_names.join(", "))) : "Brak widocznych bukietów."}</div>
                     </div>
                     <div style="margin-top: 12px;">
                         <div class="field-label">Wszystkie bukiety wybranych użytkowników</div>
-                        <div class="dlna-checkbox-grid">${renderUserCheckboxGrid(client.usernames || [], "client-users-" + client.id)}</div>
-                        <div class="small">${Array.isArray(client.user_labels) && client.user_labels.length ? escapeHtml(client.user_labels.map(function (item) { return item.text || item.username || ""; }).join(", ")) : "Brak przypisanych użytkowników."}</div>
+                        <div class="dlna-checkbox-grid">${renderUserCheckboxGrid(clientView.usernames || [], "client-users-" + clientView.id)}</div>
+                        <div class="small">${Array.isArray(clientView.user_labels) && clientView.user_labels.length ? escapeHtml(clientView.user_labels.map(function (item) { return item.text || item.username || ""; }).join(", ")) : "Brak przypisanych użytkowników."}</div>
                     </div>
                     <div class="dlna-item-actions">
-                        <button type="button" class="btn js-dlna-save-client" data-client-id="${escapeHtml(client.id)}">Zapisz klienta</button>
-                        <button type="button" class="btn btn-stop js-dlna-delete-client" data-client-id="${escapeHtml(client.id)}">Usuń klienta</button>
+                        <button type="button" class="btn js-dlna-save-client" data-client-id="${escapeHtml(clientView.id)}">Zapisz klienta</button>
+                        <button type="button" class="btn btn-stop js-dlna-delete-client" data-client-id="${escapeHtml(clientView.id)}">Usuń klienta</button>
                     </div>
                 </article>
             `;
@@ -760,7 +963,7 @@
         renderCollectionEditorSelect();
         renderCollections();
         renderMediaEntries();
-        renderClients();
+        renderClients({force: true});
         renderPackageAndService();
         setActiveTab(activeTab, false);
         persistUiState();
@@ -940,6 +1143,8 @@
                     usernames: readCheckboxScope("client-users-" + clientId, card),
                 });
             });
+            clearClientDraft(clientId);
+            renderClients({force: true});
             return;
         }
 
@@ -956,6 +1161,8 @@
                     client_id: clientId,
                 });
             });
+            clearClientDraft(clientId);
+            renderClients({force: true});
             return;
         }
 
@@ -1103,7 +1310,8 @@
                 if (enabledInput) {
                     enabledInput.checked = true;
                 }
-                renderClients();
+                clearNewClientDraft();
+                renderClients({force: true});
             }
             return;
         }
@@ -1138,6 +1346,14 @@
         if (!(target instanceof Element)) {
             return;
         }
+        const clientCard = target.closest("[data-client-id]");
+        if (clientCard) {
+            syncClientDraft(clientCard);
+        }
+        const createClientForm = target.closest("#dlnaCreateClientForm");
+        if (createClientForm instanceof HTMLFormElement) {
+            syncNewClientDraft(createClientForm);
+        }
         if (target.matches("#dlnaCollectionEditorSelect")) {
             activeCollectionId = String(target.value || "");
             clearLibrarySelectionDirty();
@@ -1156,6 +1372,22 @@
         }
     }
 
+    function handleRootInput(event) {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+        const clientCard = target.closest("[data-client-id]");
+        if (clientCard) {
+            syncClientDraft(clientCard);
+            return;
+        }
+        const createClientForm = target.closest("#dlnaCreateClientForm");
+        if (createClientForm instanceof HTMLFormElement) {
+            syncNewClientDraft(createClientForm);
+        }
+    }
+
     function handleLibrarySearchInput() {
         clearTimeout(searchTimer);
         searchTimer = setTimeout(function () {
@@ -1171,6 +1403,7 @@
     }
 
     root.addEventListener("click", handleRootClick);
+    root.addEventListener("input", handleRootInput, true);
     root.addEventListener("change", handleRootChange, true);
     root.addEventListener("submit", handleRootSubmit, true);
     const libraryQueryInput = document.getElementById("dlnaLibraryQuery");
@@ -1208,6 +1441,7 @@
                 libraryQueryInput.removeEventListener("input", handleLibrarySearchInput);
             }
             root.removeEventListener("click", handleRootClick);
+            root.removeEventListener("input", handleRootInput, true);
             root.removeEventListener("change", handleRootChange, true);
             root.removeEventListener("submit", handleRootSubmit, true);
             if (liveSubscription && typeof liveSubscription.stop === "function") {
