@@ -762,6 +762,120 @@
             gap: 12px;
             margin-bottom: 10px;
         }
+        .dlna-compact-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .dlna-compact-list {
+            gap: 10px;
+        }
+        .dlna-compact-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: center;
+            padding: 14px 16px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.025);
+        }
+        .dlna-compact-row.is-selected {
+            border-color: rgba(91, 156, 244, 0.45);
+            background: rgba(91, 156, 244, 0.08);
+        }
+        .dlna-compact-main {
+            display: grid;
+            gap: 6px;
+            min-width: 0;
+        }
+        .dlna-compact-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            min-width: 0;
+        }
+        .dlna-compact-title {
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            line-height: 1.15;
+            word-break: break-word;
+        }
+        .dlna-compact-meta,
+        .dlna-compact-note {
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.5;
+            word-break: break-word;
+        }
+        .dlna-compact-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .dlna-compact-actions {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .dlna-inline-status {
+            min-height: 32px;
+            padding: 6px 10px;
+            font-size: 12px;
+        }
+        .app-modal[hidden] {
+            display: none !important;
+        }
+        .app-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 80;
+            display: grid;
+            place-items: center;
+            padding: 24px;
+        }
+        .app-modal-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(6, 10, 17, 0.72);
+            backdrop-filter: blur(4px);
+        }
+        .app-modal-card {
+            position: relative;
+            width: min(560px, 100%);
+            max-height: min(88vh, 920px);
+            overflow: auto;
+            display: grid;
+            gap: 18px;
+            padding: 22px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: #18202d;
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+        }
+        .app-modal-card--wide {
+            width: min(920px, 100%);
+        }
+        .app-modal-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+        .app-modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            flex-wrap: wrap;
+            padding-top: 4px;
+        }
         .dlna-log-snippet {
             padding: 12px 14px;
             border-radius: 14px;
@@ -1767,6 +1881,13 @@
             .dlna-item-head-actions {
                 justify-content: flex-start;
             }
+            .dlna-compact-row {
+                grid-template-columns: minmax(0, 1fr);
+                align-items: start;
+            }
+            .dlna-compact-actions {
+                justify-content: flex-start;
+            }
             .dlna-library-row {
                 grid-template-columns: auto minmax(0, 1fr);
             }
@@ -1842,6 +1963,13 @@
             .info-grid,
             .row {
                 grid-template-columns: 1fr;
+            }
+            .app-modal {
+                padding: 14px;
+            }
+            .app-modal-card {
+                padding: 18px 16px;
+                border-radius: 18px;
             }
             .search-form-actions,
             .search-form-extra-row {

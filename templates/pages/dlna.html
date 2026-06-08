@@ -31,30 +31,19 @@
             Każdy użytkownik zarządza własnymi bukietami. Pliki audio bez obrazu są pomijane, a usunięcie pliku z bukietu odkłada go z powrotem do oryginalnej lokalizacji.
         </p>
 
-        <div class="dlna-subcard">
-            <div class="card-title">Nowy bukiet</div>
-            <form id="dlnaCreateCollectionForm" class="auth-form">
-                <div class="dlna-inline-form is-wide">
-                    <div class="field-group">
-                        <label class="field-label" for="dlnaNewCollectionName">Nazwa bukietu</label>
-                        <input id="dlnaNewCollectionName" type="text" name="name" placeholder="np. Wiking Tappi" required>
-                    </div>
-                    <div class="field-group">
-                        <label class="field-label" for="dlnaNewCollectionDescription">Opis bukietu</label>
-                        <input id="dlnaNewCollectionDescription" type="text" name="description" placeholder="opcjonalny opis">
-                    </div>
-                    <button type="submit" class="btn">Dodaj bukiet</button>
-                </div>
-            </form>
-        </div>
-
         <div class="dlna-section-grid dlna-section-grid--stacked" style="grid-template-columns: minmax(0, 1fr); margin-top: 18px;">
             <div class="dlna-subcard">
                 <div class="dlna-list-header">
-                    <div class="card-title">Lista bukietów</div>
+                    <div>
+                        <div class="card-title">Bukiety</div>
+                        <div class="small">Kompaktowa lista bukietów z szybką edycją i usuwaniem.</div>
+                    </div>
                     <div id="dlnaCollectionsMeta" class="small"></div>
                 </div>
-                <div id="dlnaCollectionsList" class="dlna-list dlna-scroll-list is-short"></div>
+                <div class="dlna-compact-toolbar">
+                    <button id="dlnaOpenCreateCollectionModal" type="button" class="btn">Dodaj bukiet</button>
+                </div>
+                <div id="dlnaCollectionsList" class="dlna-list dlna-scroll-list is-short dlna-compact-list"></div>
             </div>
 
             <div class="dlna-subcard">
@@ -101,44 +90,17 @@
         <p class="muted">Administrator decyduje, które urządzenie widzi które bukiety. Jeśli klient nie ma przypisanego żadnego bukietu, nie widzi nic.</p>
 
         <div class="dlna-subcard">
-            <div class="card-title">Nowy klient whitelisty</div>
-            <form id="dlnaCreateClientForm" class="auth-form">
-                <div class="dlna-inline-form is-wide">
-                    <div class="field-group">
-                        <label class="field-label" for="dlnaNewClientIp">Adres IP klienta</label>
-                        <input id="dlnaNewClientIp" type="text" name="ip" placeholder="np. 192.168.0.120" required>
-                    </div>
-                    <div class="field-group">
-                        <label class="field-label" for="dlnaNewClientDescription">Opis urządzenia</label>
-                        <input id="dlnaNewClientDescription" type="text" name="description" placeholder="np. TV salon, Samsung, telefon">
-                    </div>
-                    <button type="submit" class="btn">Dodaj klienta</button>
-                </div>
-
-                <label class="dlna-checkbox">
-                    <input id="dlnaNewClientEnabled" type="checkbox" name="enabled" checked>
-                    <span class="dlna-checkbox-text">
-                        <strong>Klient aktywny</strong>
-                        <span class="small">Odznacz, jeśli chcesz zachować wpis IP, ale chwilowo zablokować dostęp.</span>
-                    </span>
-                </label>
-
+            <div class="dlna-list-header">
                 <div>
-                    <div class="field-label">Bukiety widoczne dla nowego klienta</div>
-                    <div id="dlnaNewClientCollections" class="dlna-checkbox-grid"></div>
+                    <div class="card-title">Whitelist</div>
+                    <div class="small">Jeden wiersz na urządzenie, bez rozpychania widoku formularzami.</div>
                 </div>
-                <div>
-                    <div class="field-label">Wszystkie bukiety wybranych użytkowników</div>
-                    <div id="dlnaNewClientUsers" class="dlna-checkbox-grid"></div>
-                    <div class="small">Klient automatycznie zobaczy także wszystkie bukiety należące do zaznaczonych użytkowników.</div>
-                </div>
-            </form>
-
-            <div class="dlna-list-header" style="margin-top: 18px;">
-                <div class="card-title">Whitelist</div>
                 <div id="dlnaClientsMeta" class="small"></div>
             </div>
-            <div id="dlnaClientsList" class="dlna-list dlna-scroll-list is-short"></div>
+            <div class="dlna-compact-toolbar">
+                <button id="dlnaOpenCreateClientModal" type="button" class="btn">Dodaj klienta</button>
+            </div>
+            <div id="dlnaClientsList" class="dlna-list dlna-scroll-list is-short dlna-compact-list"></div>
         </div>
     </section>
 
@@ -288,6 +250,80 @@
             </div>
         </div>
     </section>
+    {% endif %}
+
+    <div id="dlnaCollectionModal" class="app-modal" hidden>
+        <div class="app-modal-backdrop" data-modal-close="collection"></div>
+        <div class="app-modal-card">
+            <div class="app-modal-head">
+                <div>
+                    <div id="dlnaCollectionModalTitle" class="card-title">Nowy bukiet</div>
+                    <div id="dlnaCollectionModalSubtitle" class="card-subtitle">Utwórz albo popraw nazwę i opis bukietu DLNA.</div>
+                </div>
+                <button type="button" class="btn btn-secondary app-modal-close" data-modal-close="collection">Zamknij</button>
+            </div>
+            <form id="dlnaCollectionModalForm" class="auth-form">
+                <div class="field-group">
+                    <label class="field-label" for="dlnaCollectionModalName">Nazwa bukietu</label>
+                    <input id="dlnaCollectionModalName" type="text" name="name" placeholder="np. Wiking Tappi" required>
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="dlnaCollectionModalDescription">Opis bukietu</label>
+                    <input id="dlnaCollectionModalDescription" type="text" name="description" placeholder="opcjonalny opis">
+                </div>
+                <div class="app-modal-actions">
+                    <button type="submit" id="dlnaCollectionModalSubmit" class="btn">Zapisz bukiet</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    {% if admin_logged_in %}
+    <div id="dlnaClientModal" class="app-modal" hidden>
+        <div class="app-modal-backdrop" data-modal-close="client"></div>
+        <div class="app-modal-card app-modal-card--wide">
+            <div class="app-modal-head">
+                <div>
+                    <div id="dlnaClientModalTitle" class="card-title">Nowy klient DLNA</div>
+                    <div class="card-subtitle">Dodaj albo popraw whitelistę urządzenia i jego widoczne bukiety.</div>
+                </div>
+                <button type="button" class="btn btn-secondary app-modal-close" data-modal-close="client">Zamknij</button>
+            </div>
+            <form id="dlnaClientModalForm" class="auth-form">
+                <div class="dlna-inline-form is-wide">
+                    <div class="field-group">
+                        <label class="field-label" for="dlnaClientModalIp">Adres IP klienta</label>
+                        <input id="dlnaClientModalIp" type="text" name="ip" placeholder="np. 192.168.0.120" required>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="dlnaClientModalDescription">Opis urządzenia</label>
+                        <input id="dlnaClientModalDescription" type="text" name="description" placeholder="np. TV salon, Samsung, telefon">
+                    </div>
+                </div>
+
+                <label class="dlna-checkbox">
+                    <input id="dlnaClientModalEnabled" type="checkbox" name="enabled" checked>
+                    <span class="dlna-checkbox-text">
+                        <strong>Klient aktywny</strong>
+                        <span class="small">Odznacz, jeśli chcesz zachować wpis IP, ale chwilowo zablokować dostęp.</span>
+                    </span>
+                </label>
+
+                <div>
+                    <div class="field-label">Ręcznie przypisane bukiety</div>
+                    <div id="dlnaClientModalCollections" class="dlna-checkbox-grid"></div>
+                </div>
+                <div>
+                    <div class="field-label">Wszystkie bukiety wybranych użytkowników</div>
+                    <div id="dlnaClientModalUsers" class="dlna-checkbox-grid"></div>
+                    <div class="small">Klient automatycznie zobaczy także wszystkie bukiety należące do zaznaczonych użytkowników.</div>
+                </div>
+                <div class="app-modal-actions">
+                    <button type="submit" id="dlnaClientModalSubmit" class="btn">Zapisz klienta</button>
+                </div>
+            </form>
+        </div>
+    </div>
     {% endif %}
 </section>
 

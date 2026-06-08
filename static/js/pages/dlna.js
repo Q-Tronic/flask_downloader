@@ -25,8 +25,12 @@
     let activeCollectionId = "";
     let librarySelectionDirty = false;
     let librarySelectionDirtyCollectionId = "";
+    let newCollectionDraft = null;
+    const collectionDrafts = new Map();
     let newClientDraft = null;
     const clientDrafts = new Map();
+    let collectionModalState = {mode: "create", collectionId: ""};
+    let clientModalState = {mode: "create", clientId: ""};
 
     try {
         const storedTab = window.sessionStorage ? String(window.sessionStorage.getItem("dlnaActiveTab") || "") : "";
@@ -185,12 +189,24 @@
         return !!newClientDraft || clientDrafts.size > 0;
     }
 
+    function getCollectionDraft(collectionId) {
+        return collectionDrafts.get(String(collectionId || "")) || null;
+    }
+
     function clearClientDraft(clientId) {
         clientDrafts.delete(String(clientId || ""));
     }
 
     function clearNewClientDraft() {
         newClientDraft = null;
+    }
+
+    function clearCollectionDraft(collectionId) {
+        collectionDrafts.delete(String(collectionId || ""));
+    }
+
+    function clearNewCollectionDraft() {
+        newCollectionDraft = null;
     }
 
     function createClientViewModel(client) {
@@ -212,30 +228,35 @@
         });
     }
 
-    function readClientDraftFromCard(card) {
-        const clientId = String(((card && card.dataset) || {}).clientId || "");
+    function createCollectionViewModel(collection) {
+        const collectionId = String((collection && collection.id) || "");
+        const draft = getCollectionDraft(collectionId);
+        return Object.assign({}, collection || {}, draft || {});
+    }
+
+    function readClientFormDraft(form, scopePrefix, clientId) {
         return {
-            id: clientId,
-            ip: String((card.querySelector('[data-client-field="ip"]') || {}).value || ""),
-            description: String((card.querySelector('[data-client-field="description"]') || {}).value || ""),
-            enabled: !!((card.querySelector('[data-client-field="enabled"]') || {}).checked),
-            collection_ids: readCheckboxScope("client-" + clientId, card),
-            usernames: readCheckboxScope("client-users-" + clientId, card),
+            id: String(clientId || ""),
+            ip: String((form && form.ip && form.ip.value) || ""),
+            description: String((form && form.description && form.description.value) || ""),
+            enabled: !!((form && form.enabled && form.enabled.checked)),
+            collection_ids: readCheckboxScope(scopePrefix, form || root),
+            usernames: readCheckboxScope(scopePrefix + "-users", form || root),
         };
     }
 
-    function syncClientDraft(card) {
-        if (!card) {
+    function syncClientDraft(form, scopePrefix, clientId) {
+        if (!form) {
             return;
         }
-        const draft = readClientDraftFromCard(card);
-        const clientId = String(draft.id || "");
-        if (!clientId) {
+        const normalizedClientId = String(clientId || "");
+        if (!normalizedClientId) {
             return;
         }
-        const serverClient = getClientById(clientId);
+        const draft = readClientFormDraft(form, scopePrefix, normalizedClientId);
+        const serverClient = getClientById(normalizedClientId);
         if (!serverClient) {
-            clientDrafts.set(clientId, draft);
+            clientDrafts.set(normalizedClientId, draft);
             return;
         }
         const shouldKeepDraft = (
@@ -246,20 +267,14 @@
             || !sameStringList(serverClient.usernames || [], draft.usernames)
         );
         if (shouldKeepDraft) {
-            clientDrafts.set(clientId, draft);
+            clientDrafts.set(normalizedClientId, draft);
         } else {
-            clientDrafts.delete(clientId);
+            clientDrafts.delete(normalizedClientId);
         }
     }
 
     function readNewClientDraft(form) {
-        return {
-            ip: String((form && form.ip && form.ip.value) || ""),
-            description: String((form && form.description && form.description.value) || ""),
-            enabled: !!((form && form.enabled && form.enabled.checked)),
-            collection_ids: readCheckboxScope("new-client", form || root),
-            usernames: readCheckboxScope("new-client-users", form || root),
-        };
+        return readClientFormDraft(form, "new-client-modal", "");
     }
 
     function syncNewClientDraft(form) {
@@ -275,6 +290,44 @@
             || (draft.usernames || []).length > 0
         );
         newClientDraft = shouldKeepDraft ? draft : null;
+    }
+
+    function readCollectionFormDraft(form) {
+        return {
+            name: String((form && form.name && form.name.value) || ""),
+            description: String((form && form.description && form.description.value) || ""),
+        };
+    }
+
+    function syncCollectionModalDraft(form) {
+        if (!form) {
+            return;
+        }
+        const draft = readCollectionFormDraft(form);
+        const mode = String(collectionModalState.mode || "create");
+        if (mode === "create") {
+            const shouldKeepDraft = !!draft.name || !!draft.description;
+            newCollectionDraft = shouldKeepDraft ? draft : null;
+            return;
+        }
+        const collectionId = String(collectionModalState.collectionId || "");
+        if (!collectionId) {
+            return;
+        }
+        const serverCollection = getCollectionById(collectionId);
+        if (!serverCollection) {
+            collectionDrafts.set(collectionId, draft);
+            return;
+        }
+        const shouldKeepDraft = (
+            String(serverCollection.name || "") !== draft.name
+            || String(serverCollection.description || "") !== draft.description
+        );
+        if (shouldKeepDraft) {
+            collectionDrafts.set(collectionId, draft);
+        } else {
+            collectionDrafts.delete(collectionId);
+        }
     }
 
     function persistUiState() {
@@ -307,6 +360,46 @@
         if (!exists) {
             activeCollectionId = String((manageableCollections[0] || {}).id || "");
         }
+    }
+
+    function setModalOpen(modalId, open) {
+        const modal = document.getElementById(modalId);
+        if (!modal) {
+            return;
+        }
+        modal.hidden = !open;
+        document.body.classList.toggle(
+            "has-modal-open",
+            Array.from(root.querySelectorAll(".app-modal")).some(function (node) {
+                return !node.hidden;
+            })
+        );
+    }
+
+    function openCollectionModal(mode, collectionId) {
+        collectionModalState = {
+            mode: String(mode || "create"),
+            collectionId: String(collectionId || ""),
+        };
+        renderCollectionModal();
+        setModalOpen("dlnaCollectionModal", true);
+    }
+
+    function closeCollectionModal() {
+        setModalOpen("dlnaCollectionModal", false);
+    }
+
+    function openClientModal(mode, clientId) {
+        clientModalState = {
+            mode: String(mode || "create"),
+            clientId: String(clientId || ""),
+        };
+        renderClientModal();
+        setModalOpen("dlnaClientModal", true);
+    }
+
+    function closeClientModal() {
+        setModalOpen("dlnaClientModal", false);
     }
 
     function isLibrarySelectionDirtyForActiveCollection() {
@@ -499,6 +592,94 @@
         });
     }
 
+    function renderCollectionModal() {
+        const form = document.getElementById("dlnaCollectionModalForm");
+        if (!(form instanceof HTMLFormElement)) {
+            return;
+        }
+        const title = document.getElementById("dlnaCollectionModalTitle");
+        const subtitle = document.getElementById("dlnaCollectionModalSubtitle");
+        const submit = document.getElementById("dlnaCollectionModalSubmit");
+        const mode = String(collectionModalState.mode || "create");
+        const collection = mode === "edit" ? createCollectionViewModel(getCollectionById(collectionModalState.collectionId) || {}) : null;
+        const draft = mode === "edit"
+            ? (getCollectionDraft(collectionModalState.collectionId) || null)
+            : (newCollectionDraft || null);
+        const value = Object.assign({
+            name: "",
+            description: "",
+        }, collection || {}, draft || {});
+        if (title) {
+            title.textContent = mode === "edit" ? "Edytuj bukiet" : "Nowy bukiet";
+        }
+        if (subtitle) {
+            subtitle.textContent = mode === "edit"
+                ? "Zmień nazwę albo opis wybranego bukietu DLNA."
+                : "Utwórz nowy bukiet DLNA i później przypisz do niego pliki.";
+        }
+        if (submit) {
+            submit.textContent = mode === "edit" ? "Zapisz bukiet" : "Dodaj bukiet";
+            submit.dataset.idleLabel = submit.textContent;
+        }
+        if (form.name) {
+            form.name.value = String(value.name || "");
+        }
+        if (form.description) {
+            form.description.value = String(value.description || "");
+        }
+    }
+
+    function renderClientModal() {
+        const form = document.getElementById("dlnaClientModalForm");
+        if (!(form instanceof HTMLFormElement)) {
+            return;
+        }
+        const title = document.getElementById("dlnaClientModalTitle");
+        const submit = document.getElementById("dlnaClientModalSubmit");
+        const mode = String(clientModalState.mode || "create");
+        const client = mode === "edit" ? createClientViewModel(getClientById(clientModalState.clientId) || {}) : null;
+        const draft = mode === "edit"
+            ? (getClientDraft(clientModalState.clientId) || null)
+            : (newClientDraft || null);
+        const clientView = Object.assign({
+            ip: "",
+            description: "",
+            enabled: true,
+            collection_ids: [],
+            usernames: [],
+        }, client || {}, draft || {});
+        if (title) {
+            title.textContent = mode === "edit" ? "Edytuj klienta DLNA" : "Nowy klient DLNA";
+        }
+        if (submit) {
+            submit.textContent = mode === "edit" ? "Zapisz klienta" : "Dodaj klienta";
+            submit.dataset.idleLabel = submit.textContent;
+        }
+        if (form.ip) {
+            form.ip.value = String(clientView.ip || "");
+        }
+        if (form.description) {
+            form.description.value = String(clientView.description || "");
+        }
+        if (form.enabled) {
+            form.enabled.checked = !!clientView.enabled;
+        }
+        const collectionsBox = document.getElementById("dlnaClientModalCollections");
+        if (collectionsBox) {
+            collectionsBox.innerHTML = renderCollectionCheckboxGrid(
+                clientView.collection_ids || [],
+                mode === "edit" ? ("client-modal-" + clientModalState.clientId) : "new-client-modal"
+            );
+        }
+        const usersBox = document.getElementById("dlnaClientModalUsers");
+        if (usersBox) {
+            usersBox.innerHTML = renderUserCheckboxGrid(
+                clientView.usernames || [],
+                mode === "edit" ? ("client-modal-" + clientModalState.clientId + "-users") : "new-client-modal-users"
+            );
+        }
+    }
+
     function renderCollections() {
         const list = document.getElementById("dlnaCollectionsList");
         const meta = document.getElementById("dlnaCollectionsMeta");
@@ -514,36 +695,34 @@
             return;
         }
         list.innerHTML = collections.map(function (item) {
+            const collectionView = createCollectionViewModel(item);
             const selected = String(item.id || "") === String(activeCollectionId || "");
-            const ownerLine = isAdmin() ? ('<div class="small">Właściciel: ' + escapeHtml(item.owner_username || "") + '</div>') : "";
             const canManage = !!item.can_manage;
-            const actions = canManage ? `
-                <div class="dlna-item-actions">
-                    <button type="button" class="btn btn-secondary js-dlna-select-collection" data-collection-id="${escapeHtml(item.id)}">${selected ? "Edytujesz ten bukiet" : "Edytuj pliki"}</button>
-                    <button type="button" class="btn js-dlna-save-collection" data-collection-id="${escapeHtml(item.id)}">Zapisz bukiet</button>
-                    <button type="button" class="btn btn-stop js-dlna-delete-collection" data-collection-id="${escapeHtml(item.id)}">Usuń bukiet</button>
-                </div>
-            ` : "";
+            const itemCount = Number(collectionView.item_count || 0);
+            const metaParts = [];
+            if (isAdmin()) {
+                metaParts.push("Właściciel: " + String(collectionView.owner_username || "-"));
+            }
+            metaParts.push(itemCount + " " + (itemCount === 1 ? "plik" : "plików"));
+            if (collectionView.description) {
+                metaParts.push(String(collectionView.description));
+            }
             return `
-                <article class="dlna-card ${selected ? "is-selected" : ""}" data-collection-id="${escapeHtml(item.id)}">
-                    <div class="dlna-item-header">
-                        <div>
-                            <div class="dlna-item-title">${escapeHtml(item.name)}</div>
-                            <div class="small">${escapeHtml(item.item_count || 0)} plików</div>
-                            ${ownerLine}
+                <article class="dlna-compact-row ${selected ? "is-selected" : ""}">
+                    <div class="dlna-compact-main">
+                        <div class="dlna-compact-head">
+                            <div class="dlna-compact-title">${escapeHtml(collectionView.name)}</div>
+                            <span class="service-status-pill muted dlna-inline-status">${itemCount} ${itemCount === 1 ? "plik" : "plików"}</span>
                         </div>
+                        <div class="dlna-compact-meta">${escapeHtml(metaParts.join(" · "))}</div>
                     </div>
-                    <div class="dlna-inline-form is-wide">
-                        <div class="field-group">
-                            <label class="field-label" for="dlnaCollectionName-${escapeHtml(item.id)}">Nazwa bukietu</label>
-                            <input id="dlnaCollectionName-${escapeHtml(item.id)}" data-collection-field="name" type="text" value="${escapeHtml(item.name)}" ${canManage ? "" : "disabled"}>
-                        </div>
-                        <div class="field-group">
-                            <label class="field-label" for="dlnaCollectionDescription-${escapeHtml(item.id)}">Opis bukietu</label>
-                            <input id="dlnaCollectionDescription-${escapeHtml(item.id)}" data-collection-field="description" type="text" value="${escapeHtml(item.description || "")}" ${canManage ? "" : "disabled"}>
-                        </div>
+                    <div class="dlna-compact-actions">
+                        <button type="button" class="btn btn-secondary js-dlna-select-collection" data-collection-id="${escapeHtml(item.id)}">${selected ? "Edytujesz pliki" : "Pliki"}</button>
+                        ${canManage ? `
+                            <button type="button" class="btn js-dlna-open-edit-collection" data-collection-id="${escapeHtml(item.id)}">Edytuj</button>
+                            <button type="button" class="btn btn-stop js-dlna-delete-collection" data-collection-id="${escapeHtml(item.id)}">Usuń</button>
+                        ` : ""}
                     </div>
-                    ${actions || '<div class="inline-note">Ten bukiet należy do innego użytkownika. Możesz go tylko przeglądać.</div>'}
                 </article>
             `;
         }).join("");
@@ -680,37 +859,11 @@
         if (!isAdmin()) {
             return;
         }
-        const opts = options || {};
         const list = document.getElementById("dlnaClientsList");
         const meta = document.getElementById("dlnaClientsMeta");
         const clients = Array.isArray(currentState.clients) ? currentState.clients : [];
         if (meta) {
             meta.textContent = clients.length ? (clients.filter(function (item) { return !!item.enabled; }).length + " aktywnych z " + clients.length) : "Brak klientów";
-        }
-        if (!opts.force && hasClientDrafts()) {
-            return;
-        }
-        const createClientForm = document.getElementById("dlnaCreateClientForm");
-        const newClientCollections = document.getElementById("dlnaNewClientCollections");
-        if (newClientCollections) {
-            newClientCollections.innerHTML = renderCollectionCheckboxGrid((newClientDraft || {}).collection_ids || [], "new-client");
-        }
-        const newClientUsers = document.getElementById("dlnaNewClientUsers");
-        if (newClientUsers) {
-            newClientUsers.innerHTML = renderUserCheckboxGrid((newClientDraft || {}).usernames || [], "new-client-users");
-        }
-        if (createClientForm) {
-            if (createClientForm.ip) {
-                createClientForm.ip.value = String(((newClientDraft || {}).ip) || "");
-            }
-            if (createClientForm.description) {
-                createClientForm.description.value = String(((newClientDraft || {}).description) || "");
-            }
-            if (createClientForm.enabled) {
-                createClientForm.enabled.checked = Object.prototype.hasOwnProperty.call(newClientDraft || {}, "enabled")
-                    ? !!newClientDraft.enabled
-                    : true;
-            }
         }
         if (!list) {
             return;
@@ -721,45 +874,23 @@
         }
         list.innerHTML = clients.map(function (client) {
             const clientView = createClientViewModel(client);
+            const visibleCollections = Array.isArray(clientView.effective_collection_names) ? clientView.effective_collection_names : [];
+            const userLabels = Array.isArray(clientView.user_labels) ? clientView.user_labels.map(function (item) { return item.text || item.username || ""; }) : [];
             return `
-                <article class="dlna-card" data-client-id="${escapeHtml(clientView.id)}">
-                    <div class="dlna-item-header">
-                        <div>
-                            <div class="dlna-item-title">${escapeHtml(clientView.ip || "")}</div>
-                            <div class="small">${escapeHtml(clientView.description || "Brak opisu urządzenia.")}</div>
-                            <div class="small">Widoczne pliki: ${escapeHtml(clientView.visible_media_count || 0)}</div>
+                <article class="dlna-compact-row">
+                    <div class="dlna-compact-main">
+                        <div class="dlna-compact-head">
+                            <div class="dlna-compact-title">${escapeHtml(clientView.ip || "")}</div>
+                            <span class="service-status-pill ${clientView.enabled ? "success" : "muted"} dlna-inline-status">${clientView.enabled ? "Aktywny" : "Wyłączony"}</span>
                         </div>
-                        <span class="service-status-pill ${clientView.enabled ? "success" : "muted"}">${clientView.enabled ? "Aktywny" : "Wyłączony"}</span>
-                    </div>
-                    <div class="dlna-inline-form is-wide">
-                        <div class="field-group">
-                            <label class="field-label" for="dlnaClientIp-${escapeHtml(clientView.id)}">Adres IP</label>
-                            <input id="dlnaClientIp-${escapeHtml(clientView.id)}" data-client-field="ip" type="text" value="${escapeHtml(clientView.ip || "")}">
-                        </div>
-                        <div class="field-group">
-                            <label class="field-label" for="dlnaClientDescription-${escapeHtml(clientView.id)}">Opis urządzenia</label>
-                            <input id="dlnaClientDescription-${escapeHtml(clientView.id)}" data-client-field="description" type="text" value="${escapeHtml(clientView.description || "")}">
+                        <div class="dlna-compact-meta">${escapeHtml(clientView.description || "Brak opisu urządzenia.")} · Widoczne pliki: ${escapeHtml(clientView.visible_media_count || 0)}</div>
+                        <div class="dlna-compact-tags">
+                            <span class="dlna-token">${visibleCollections.length ? escapeHtml("Bukiety: " + visibleCollections.join(", ")) : "Brak widocznych bukietów"}</span>
+                            ${userLabels.length ? ('<span class="dlna-token">' + escapeHtml("Użytkownicy: " + userLabels.join(", ")) + '</span>') : ""}
                         </div>
                     </div>
-                    <label class="dlna-checkbox" style="margin-top: 12px;">
-                        <input type="checkbox" data-client-field="enabled" ${clientView.enabled ? "checked" : ""}>
-                        <span class="dlna-checkbox-text">
-                            <strong>Klient aktywny</strong>
-                            <span class="small">Wyłącz klienta bez kasowania wpisu IP.</span>
-                        </span>
-                    </label>
-                    <div style="margin-top: 12px;">
-                        <div class="field-label">Ręcznie przypisane bukiety</div>
-                        <div class="dlna-checkbox-grid">${renderCollectionCheckboxGrid(clientView.collection_ids || [], "client-" + clientView.id)}</div>
-                        <div class="small">${Array.isArray(clientView.effective_collection_names) && clientView.effective_collection_names.length ? ('Łącznie widoczne: ' + escapeHtml(clientView.effective_collection_names.join(", "))) : "Brak widocznych bukietów."}</div>
-                    </div>
-                    <div style="margin-top: 12px;">
-                        <div class="field-label">Wszystkie bukiety wybranych użytkowników</div>
-                        <div class="dlna-checkbox-grid">${renderUserCheckboxGrid(clientView.usernames || [], "client-users-" + clientView.id)}</div>
-                        <div class="small">${Array.isArray(clientView.user_labels) && clientView.user_labels.length ? escapeHtml(clientView.user_labels.map(function (item) { return item.text || item.username || ""; }).join(", ")) : "Brak przypisanych użytkowników."}</div>
-                    </div>
-                    <div class="dlna-item-actions">
-                        <button type="button" class="btn js-dlna-save-client" data-client-id="${escapeHtml(clientView.id)}">Zapisz klienta</button>
+                    <div class="dlna-compact-actions">
+                        <button type="button" class="btn btn-secondary js-dlna-open-edit-client" data-client-id="${escapeHtml(clientView.id)}">Edytuj</button>
                         <button type="button" class="btn btn-stop js-dlna-delete-client" data-client-id="${escapeHtml(clientView.id)}">Usuń klienta</button>
                     </div>
                 </article>
@@ -964,6 +1095,8 @@
         renderCollections();
         renderMediaEntries();
         renderClients({force: true});
+        renderCollectionModal();
+        renderClientModal();
         renderPackageAndService();
         setActiveTab(activeTab, false);
         persistUiState();
@@ -1075,6 +1208,34 @@
             return;
         }
 
+        const openCreateCollectionModalButton = event.target.closest("#dlnaOpenCreateCollectionModal");
+        if (openCreateCollectionModalButton) {
+            event.preventDefault();
+            openCollectionModal("create", "");
+            return;
+        }
+
+        const openCreateClientModalButton = event.target.closest("#dlnaOpenCreateClientModal");
+        if (openCreateClientModalButton) {
+            event.preventDefault();
+            openClientModal("create", "");
+            return;
+        }
+
+        const closeCollectionModalButton = event.target.closest('[data-modal-close="collection"]');
+        if (closeCollectionModalButton) {
+            event.preventDefault();
+            closeCollectionModal();
+            return;
+        }
+
+        const closeClientModalButton = event.target.closest('[data-modal-close="client"]');
+        if (closeClientModalButton) {
+            event.preventDefault();
+            closeClientModal();
+            return;
+        }
+
         const selectCollectionButton = event.target.closest(".js-dlna-select-collection");
         if (selectCollectionButton) {
             event.preventDefault();
@@ -1086,22 +1247,14 @@
             return;
         }
 
-        const saveCollectionButton = event.target.closest(".js-dlna-save-collection");
-        if (saveCollectionButton) {
+        const openEditCollectionButton = event.target.closest(".js-dlna-open-edit-collection");
+        if (openEditCollectionButton) {
             event.preventDefault();
-            const collectionId = String(saveCollectionButton.dataset.collectionId || "");
-            const card = saveCollectionButton.closest("[data-collection-id]");
-            if (!collectionId || !card) {
+            const collectionId = String(openEditCollectionButton.dataset.collectionId || "");
+            if (!collectionId) {
                 return;
             }
-            await performAction(saveCollectionButton, "Zapisywanie...", function () {
-                return postJson("/api/dlna/collections", {
-                    action: "update",
-                    collection_id: collectionId,
-                    name: String((card.querySelector('[data-collection-field="name"]') || {}).value || ""),
-                    description: String((card.querySelector('[data-collection-field="description"]') || {}).value || ""),
-                });
-            });
+            openCollectionModal("edit", collectionId);
             return;
         }
 
@@ -1118,33 +1271,24 @@
                     collection_id: collectionId,
                 });
             });
+            clearCollectionDraft(collectionId);
+            if (String(collectionModalState.collectionId || "") === collectionId) {
+                closeCollectionModal();
+            }
             if (String(activeCollectionId || "") === collectionId) {
                 activeCollectionId = "";
             }
             return;
         }
 
-        const saveClientButton = event.target.closest(".js-dlna-save-client");
-        if (saveClientButton) {
+        const openEditClientButton = event.target.closest(".js-dlna-open-edit-client");
+        if (openEditClientButton) {
             event.preventDefault();
-            const card = saveClientButton.closest("[data-client-id]");
-            const clientId = card ? String(card.dataset.clientId || "") : "";
-            if (!card || !clientId) {
+            const clientId = String(openEditClientButton.dataset.clientId || "");
+            if (!clientId) {
                 return;
             }
-            await performAction(saveClientButton, "Zapisywanie...", function () {
-                return postJson("/api/dlna/clients", {
-                    action: "update",
-                    client_id: clientId,
-                    ip: String((card.querySelector('[data-client-field="ip"]') || {}).value || ""),
-                    description: String((card.querySelector('[data-client-field="description"]') || {}).value || ""),
-                    enabled: !!((card.querySelector('[data-client-field="enabled"]') || {}).checked),
-                    collection_ids: readCheckboxScope("client-" + clientId, card),
-                    usernames: readCheckboxScope("client-users-" + clientId, card),
-                });
-            });
-            clearClientDraft(clientId);
-            renderClients({force: true});
+            openClientModal("edit", clientId);
             return;
         }
 
@@ -1162,7 +1306,9 @@
                 });
             });
             clearClientDraft(clientId);
-            renderClients({force: true});
+            if (String(clientModalState.clientId || "") === clientId) {
+                closeClientModal();
+            }
             return;
         }
 
@@ -1275,11 +1421,17 @@
             return;
         }
 
-        if (form.id === "dlnaCreateCollectionForm") {
+        if (form.id === "dlnaCollectionModalForm") {
             event.preventDefault();
             const button = form.querySelector('button[type="submit"]');
-            const ok = await performAction(button, "Dodawanie...", function () {
-                return postJson("/api/dlna/collections", {
+            const isEdit = String(collectionModalState.mode || "create") === "edit";
+            const ok = await performAction(button, isEdit ? "Zapisywanie..." : "Dodawanie...", function () {
+                return postJson("/api/dlna/collections", isEdit ? {
+                    action: "update",
+                    collection_id: String(collectionModalState.collectionId || ""),
+                    name: String(form.name.value || ""),
+                    description: String(form.description.value || ""),
+                } : {
                     action: "create",
                     name: String(form.name.value || ""),
                     description: String(form.description.value || ""),
@@ -1287,30 +1439,52 @@
             });
             if (ok) {
                 form.reset();
+                if (isEdit) {
+                    clearCollectionDraft(collectionModalState.collectionId);
+                } else {
+                    clearNewCollectionDraft();
+                }
+                closeCollectionModal();
+                renderCollections();
             }
             return;
         }
 
-        if (form.id === "dlnaCreateClientForm") {
+        if (form.id === "dlnaClientModalForm") {
             event.preventDefault();
             const button = form.querySelector('button[type="submit"]');
-            const ok = await performAction(button, "Dodawanie...", function () {
-                return postJson("/api/dlna/clients", {
+            const isEdit = String(clientModalState.mode || "create") === "edit";
+            const scopeSuffix = isEdit ? String(clientModalState.clientId || "") : "";
+            const ok = await performAction(button, isEdit ? "Zapisywanie..." : "Dodawanie...", function () {
+                return postJson("/api/dlna/clients", isEdit ? {
+                    action: "update",
+                    client_id: String(clientModalState.clientId || ""),
+                    ip: String(form.ip.value || ""),
+                    description: String(form.description.value || ""),
+                    enabled: !!form.enabled.checked,
+                    collection_ids: readCheckboxScope("client-modal-" + scopeSuffix),
+                    usernames: readCheckboxScope("client-modal-" + scopeSuffix + "-users"),
+                } : {
                     action: "create",
                     ip: String(form.ip.value || ""),
                     description: String(form.description.value || ""),
                     enabled: !!form.enabled.checked,
-                    collection_ids: readCheckboxScope("new-client"),
-                    usernames: readCheckboxScope("new-client-users"),
+                    collection_ids: readCheckboxScope("new-client-modal"),
+                    usernames: readCheckboxScope("new-client-modal-users"),
                 });
             });
             if (ok) {
                 form.reset();
-                const enabledInput = form.querySelector("#dlnaNewClientEnabled");
+                const enabledInput = form.querySelector("#dlnaClientModalEnabled");
                 if (enabledInput) {
                     enabledInput.checked = true;
                 }
-                clearNewClientDraft();
+                if (isEdit) {
+                    clearClientDraft(clientModalState.clientId);
+                } else {
+                    clearNewClientDraft();
+                }
+                closeClientModal();
                 renderClients({force: true});
             }
             return;
@@ -1346,13 +1520,17 @@
         if (!(target instanceof Element)) {
             return;
         }
-        const clientCard = target.closest("[data-client-id]");
-        if (clientCard) {
-            syncClientDraft(clientCard);
+        const clientModalForm = target.closest("#dlnaClientModalForm");
+        if (clientModalForm instanceof HTMLFormElement) {
+            if (String(clientModalState.mode || "create") === "edit") {
+                syncClientDraft(clientModalForm, "client-modal-" + String(clientModalState.clientId || ""), String(clientModalState.clientId || ""));
+            } else {
+                syncNewClientDraft(clientModalForm);
+            }
         }
-        const createClientForm = target.closest("#dlnaCreateClientForm");
-        if (createClientForm instanceof HTMLFormElement) {
-            syncNewClientDraft(createClientForm);
+        const collectionModalForm = target.closest("#dlnaCollectionModalForm");
+        if (collectionModalForm instanceof HTMLFormElement) {
+            syncCollectionModalDraft(collectionModalForm);
         }
         if (target.matches("#dlnaCollectionEditorSelect")) {
             activeCollectionId = String(target.value || "");
@@ -1377,14 +1555,18 @@
         if (!(target instanceof Element)) {
             return;
         }
-        const clientCard = target.closest("[data-client-id]");
-        if (clientCard) {
-            syncClientDraft(clientCard);
+        const clientModalForm = target.closest("#dlnaClientModalForm");
+        if (clientModalForm instanceof HTMLFormElement) {
+            if (String(clientModalState.mode || "create") === "edit") {
+                syncClientDraft(clientModalForm, "client-modal-" + String(clientModalState.clientId || ""), String(clientModalState.clientId || ""));
+            } else {
+                syncNewClientDraft(clientModalForm);
+            }
             return;
         }
-        const createClientForm = target.closest("#dlnaCreateClientForm");
-        if (createClientForm instanceof HTMLFormElement) {
-            syncNewClientDraft(createClientForm);
+        const collectionModalForm = target.closest("#dlnaCollectionModalForm");
+        if (collectionModalForm instanceof HTMLFormElement) {
+            syncCollectionModalDraft(collectionModalForm);
         }
     }
 
