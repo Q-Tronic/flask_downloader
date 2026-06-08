@@ -820,6 +820,8 @@ class DlnaLibraryService:
                     item["storage_kind"],
                     item["relative_path"],
                     normalized_collection_id,
+                    dlna_config=config,
+                    persist=False,
                     sync_runtime=False,
                 ):
                     changed = True
@@ -996,8 +998,19 @@ class DlnaLibraryService:
         self._set_dlna_config(dlna_config)
         self._sync_dlna_runtime_safe(restart_service_if_active=False, force_full_rescan=False, include_pending_downloads=False)
 
-    def assign_file_to_collection(self, storage_kind, relative_path, collection_id, *, sync_runtime=True, allow_background=False, return_details=False):
-        dlna_config = self._get_dlna_config_snapshot()
+    def assign_file_to_collection(
+        self,
+        storage_kind,
+        relative_path,
+        collection_id,
+        *,
+        sync_runtime=True,
+        allow_background=False,
+        return_details=False,
+        dlna_config=None,
+        persist=True,
+    ):
+        dlna_config = dlna_config if isinstance(dlna_config, dict) else self._get_dlna_config_snapshot()
         collection = self._get_collection_by_id(collection_id, dlna_config)
         if allow_background:
             if not collection:
@@ -1072,7 +1085,8 @@ class DlnaLibraryService:
             "added_at": time.time(),
         }
         dlna_config.setdefault("entries", []).append(entry)
-        self._set_dlna_config(dlna_config)
+        if persist:
+            self._set_dlna_config(dlna_config)
         if sync_runtime:
             self._sync_dlna_runtime_safe(restart_service_if_active=False, force_full_rescan=False, include_pending_downloads=False)
         if return_details:
