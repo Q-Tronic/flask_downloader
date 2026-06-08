@@ -291,6 +291,58 @@ class DlnaLibraryService:
             storage_id=entry.get("source_storage_id") or "local",
         )
 
+    def _get_owner_storage_kind_root(self, storage_id, owner_username, storage_kind):
+        return os.path.abspath(
+            os.path.join(
+                self._get_storage_root(storage_id=self._normalize_storage_id(storage_id)),
+                str(owner_username or self._default_admin_username).strip() or self._default_admin_username,
+                self._normalize_storage_kind(storage_kind or "video"),
+            )
+        )
+
+    def _get_collection_folder_path(self, storage_id, collection):
+        folder_name = self._sanitize_collection_folder_name(
+            collection.get("folder_name") or collection.get("name") or "",
+            fallback=collection.get("name") or "Bukiet",
+        )
+        return self.get_collection_storage_path(storage_id, folder_name)
+
+    @staticmethod
+    def _cleanup_empty_directories(start_dir, stop_root, preserve_paths=None):
+        current_dir = os.path.abspath(str(start_dir or "").strip())
+        root_dir = os.path.abspath(str(stop_root or "").strip())
+        if not current_dir or not root_dir:
+            return
+        try:
+            if os.path.commonpath([root_dir, current_dir]) != root_dir:
+                return
+        except Exception:
+            return
+        preserved = {
+            os.path.abspath(str(path or "").strip())
+            for path in (preserve_paths or [])
+            if str(path or "").strip()
+        }
+        preserved.add(root_dir)
+        while current_dir and current_dir not in preserved:
+            try:
+                if not os.path.isdir(current_dir):
+                    break
+                if os.listdir(current_dir):
+                    break
+                os.rmdir(current_dir)
+            except Exception:
+                break
+            parent_dir = os.path.dirname(current_dir)
+            if not parent_dir or parent_dir == current_dir:
+                break
+            try:
+                if os.path.commonpath([root_dir, parent_dir]) != root_dir:
+                    break
+            except Exception:
+                break
+            current_dir = parent_dir
+
     def _build_collection_entry_relative_path(self, collection, file_name):
         folder_name = self._sanitize_collection_folder_name(collection.get("folder_name") or collection.get("name") or "", fallback=collection.get("name") or "Bukiet")
         return "%s/%s" % (folder_name, self._normalize_file_name(file_name))
@@ -943,10 +995,13 @@ class DlnaLibraryService:
 
     def _rename_collection_entries(self, collection, next_folder_name, dlna_config):
         collection_id = str(collection.get("id") or "").strip()
+        previous_folder_path_by_storage = {}
         for entry in self._get_entries_for_collection(collection_id, dlna_config):
             current_path = self._get_entry_current_path(entry)
             current_exists = bool(current_path and os.path.isfile(current_path))
             storage_id = self._normalize_storage_id(entry.get("source_storage_id") or "local")
+            if storage_id not in previous_folder_path_by_storage:
+                previous_folder_path_by_storage[storage_id] = self._get_collection_folder_path(storage_id, collection)
             target_relative_path = self._safe_relative_download_path("%s/%s" % (next_folder_name, entry.get("file_name") or ""))
             target_path = self.get_collection_storage_path(storage_id, target_relative_path)
             if not target_path:
@@ -957,6 +1012,12 @@ class DlnaLibraryService:
                     raise ValueError("Docelowy plik %s już istnieje. Zmień nazwę bukietu albo zwolnij ten plik." % os.path.basename(target_path))
                 shutil.move(current_path, target_path)
             entry["current_relative_path"] = target_relative_path
+        for storage_id, previous_folder_path in previous_folder_path_by_storage.items():
+            if previous_folder_path:
+                self._cleanup_empty_directories(
+                    previous_folder_path,
+                    self.get_collection_storage_root(storage_id),
+                )
 
     def update_collection(self, collection_id, name, description=""):
         collection_id = str(collection_id or "").strip()
@@ -994,11 +1055,23 @@ class DlnaLibraryService:
     def _remove_entry(self, entry, collection, dlna_config, *, persist=True):
         current_path = self._get_entry_current_path(entry)
         source_path = self._get_entry_source_path(entry)
+        source_storage_id = self._normalize_storage_id(entry.get("source_storage_id") or "local")
+        source_owner_username = str(entry.get("owner_username") or self._default_admin_username).strip() or self._default_admin_username
+        source_storage_kind = self._normalize_storage_kind(entry.get("source_storage_kind") or "video")
         if current_path and os.path.isfile(current_path) and source_path:
             if os.path.exists(source_path):
                 raise ValueError("Nie mogę odłożyć pliku z powrotem do oryginalnej lokalizacji, bo plik już tam istnieje.")
             os.makedirs(os.path.dirname(source_path), exist_ok=True)
             shutil.move(current_path, source_path)
+            self._cleanup_empty_directories(
+                os.path.dirname(current_path),
+                self.get_collection_storage_root(source_storage_id),
+                preserve_paths=[self._get_collection_folder_path(source_storage_id, collection)],
+            )
+            self._cleanup_empty_directories(
+                os.path.dirname(source_path),
+                self._get_owner_storage_kind_root(source_storage_id, source_owner_username, source_storage_kind),
+            )
         entries = [
             item
             for item in (dlna_config.get("entries") or [])
@@ -1017,6 +1090,13 @@ class DlnaLibraryService:
         dlna_config = self._get_dlna_config_snapshot()
         collection = self._get_collection_by_id(collection_id, dlna_config)
         self._ensure_collection_manageable(collection)
+        collection_folder_paths = {
+            self._normalize_storage_id(entry.get("source_storage_id") or "local"): self._get_collection_folder_path(
+                self._normalize_storage_id(entry.get("source_storage_id") or "local"),
+                collection,
+            )
+            for entry in self._get_entries_for_collection(collection_id, dlna_config)
+        }
 
         for entry in list(self._get_entries_for_collection(collection_id, dlna_config)):
             self._remove_entry(entry, collection, dlna_config, persist=False)
@@ -1031,6 +1111,12 @@ class DlnaLibraryService:
 
         self._set_dlna_config(dlna_config)
         self._sync_dlna_runtime_safe(restart_service_if_active=False, force_full_rescan=False, include_pending_downloads=False)
+        for storage_id, folder_path in collection_folder_paths.items():
+            if folder_path:
+                self._cleanup_empty_directories(
+                    folder_path,
+                    self.get_collection_storage_root(storage_id),
+                )
 
     def assign_file_to_collection(
         self,
@@ -1105,6 +1191,10 @@ class DlnaLibraryService:
             raise ValueError("Nie udało się przygotować katalogu bukietu DLNA.")
         os.makedirs(os.path.dirname(target_path), exist_ok=True)
         shutil.move(source_path, target_path)
+        self._cleanup_empty_directories(
+            os.path.dirname(source_path),
+            self._get_owner_storage_kind_root(source_storage_id, source_owner_username, normalized_source_kind),
+        )
 
         entry = {
             "id": uuid.uuid4().hex,
