@@ -1683,7 +1683,7 @@ def normalize_dlna_pending_manual_sync_paths(paths):
         path_text = str(raw_path or "").strip()
         if not path_text:
             continue
-        canonical_path = canonicalize_managed_relative_path(path_text) or safe_relative_download_path(path_text)
+        canonical_path = canonicalize_dlna_notice_relative_path(path_text) or safe_relative_download_path(path_text)
         if not canonical_path or canonical_path in seen:
             continue
         seen.add(canonical_path)
@@ -1691,15 +1691,59 @@ def normalize_dlna_pending_manual_sync_paths(paths):
     return normalized_paths
 
 
+def canonicalize_dlna_notice_relative_path(relative_path, default_storage_id="local"):
+    safe_path = safe_relative_download_path(relative_path)
+    if not safe_path:
+        return ""
+
+    parts = [segment for segment in safe_path.split("/") if segment]
+    if not parts:
+        return ""
+
+    if str(parts[0]).startswith("@"):
+        if len(parts) < 4:
+            return safe_path
+        try:
+            owner_username = normalize_username(parts[1] or DEFAULT_ADMIN_USERNAME)
+        except Exception:
+            return safe_path
+        storage_kind = normalize_storage_kind(parts[2] or "video")
+        user_relative_path = safe_relative_download_path("/".join(parts[3:]))
+        if not user_relative_path:
+            return safe_path
+        return build_managed_relative_path(
+            owner_username,
+            storage_kind,
+            user_relative_path,
+            storage_id=normalize_storage_id(str(parts[0])[1:], default=default_storage_id),
+        )
+
+    if len(parts) >= 3 and str(parts[1] or "").strip().lower() in ("video", "audio"):
+        try:
+            owner_username = normalize_username(parts[0] or DEFAULT_ADMIN_USERNAME)
+        except Exception:
+            return safe_path
+        storage_kind = normalize_storage_kind(parts[1] or "video")
+        user_relative_path = safe_relative_download_path("/".join(parts[2:]))
+        if not user_relative_path:
+            return safe_path
+        return build_managed_relative_path(
+            owner_username,
+            storage_kind,
+            user_relative_path,
+            storage_id=normalize_storage_id(default_storage_id, default="local"),
+        )
+
+    return safe_path
+
+
 def sanitize_dlna_manual_sync_notice_config(dlna_config):
     config = normalize_dlna_config(dlna_config if isinstance(dlna_config, dict) else {})
     original_paths = normalize_dlna_pending_manual_sync_paths(config.get("pending_manual_sync_paths") or [])
     known_paths = set()
     for entry in config.get("entries") or []:
-        source_relative_path = canonicalize_managed_relative_path(
+        source_relative_path = canonicalize_dlna_notice_relative_path(
             entry.get("source_relative_path") or "",
-            owner_username=entry.get("owner_username") or DEFAULT_ADMIN_USERNAME,
-            storage_kind=normalize_storage_kind(entry.get("source_storage_kind") or "video"),
         ) or safe_relative_download_path(entry.get("source_relative_path") or "")
         current_relative_path = safe_relative_download_path(entry.get("current_relative_path") or "")
         if source_relative_path:
@@ -1769,7 +1813,7 @@ def get_dlna_manual_sync_notice_state(dlna_config=None):
 
 
 def mark_dlna_manual_sync_needed(relative_path="", item_label=""):
-    canonical_path = canonicalize_managed_relative_path(relative_path) or safe_relative_download_path(relative_path)
+    canonical_path = canonicalize_dlna_notice_relative_path(relative_path) or safe_relative_download_path(relative_path)
     item_label_text = str(item_label or "").strip()
     with APP_CONFIG_LOCK:
         dlna_config = normalize_dlna_config(APP_CONFIG.get("dlna"))
@@ -1795,7 +1839,7 @@ def mark_dlna_manual_sync_needed(relative_path="", item_label=""):
 
 
 def discard_dlna_manual_sync_path(relative_path):
-    canonical_path = canonicalize_managed_relative_path(relative_path) or safe_relative_download_path(relative_path)
+    canonical_path = canonicalize_dlna_notice_relative_path(relative_path) or safe_relative_download_path(relative_path)
     if not canonical_path:
         return get_dlna_manual_sync_notice_state()
     with APP_CONFIG_LOCK:
@@ -7097,7 +7141,7 @@ def filter_dlna_export_files(files, dlna_config=None, include_pending_downloads=
 
     filtered_items = []
     for item in items:
-        relative_path = canonicalize_managed_relative_path(item.get("relative_path") or "") or safe_relative_download_path(item.get("relative_path") or "")
+        relative_path = canonicalize_dlna_notice_relative_path(item.get("relative_path") or "") or safe_relative_download_path(item.get("relative_path") or "")
         if relative_path and relative_path in pending_paths:
             continue
         filtered_items.append(item)
