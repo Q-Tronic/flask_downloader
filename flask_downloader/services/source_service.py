@@ -6,6 +6,7 @@ from urllib.parse import quote, urlparse
 
 class SourceMediaService:
     URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+    TVP_EPISODE_CODE_PATTERN = re.compile(r"(^|[,/_-])S(?P<season>\d{1,2})E(?P<episode>\d{1,4})(?=$|[,/_-])", re.IGNORECASE)
 
     def __init__(
         self,
@@ -272,10 +273,84 @@ class SourceMediaService:
 
         return "%s - %s" % (prefix, base_title)
 
+    @staticmethod
+    def _normalize_int(value):
+        try:
+            return int(value or 0)
+        except Exception:
+            return 0
+
+    @classmethod
+    def _extract_tvp_episode_code(cls, info):
+        season_number = cls._normalize_int((info or {}).get("season_number"))
+        episode_number = cls._normalize_int((info or {}).get("episode_number"))
+        if season_number > 0 and episode_number > 0:
+            return "S%02dE%02d" % (season_number, episode_number)
+
+        for candidate in (
+            (info or {}).get("webpage_url"),
+            (info or {}).get("original_url"),
+            (info or {}).get("url"),
+        ):
+            match = cls.TVP_EPISODE_CODE_PATTERN.search(str(candidate or ""))
+            if not match:
+                continue
+            season_number = cls._normalize_int(match.group("season"))
+            episode_number = cls._normalize_int(match.group("episode"))
+            if season_number > 0 and episode_number > 0:
+                return "S%02dE%02d" % (season_number, episode_number)
+
+        if episode_number > 0:
+            return "E%02d" % episode_number
+        return ""
+
+    @staticmethod
+    def _is_tvp_vod_extractor(extractor_name):
+        text = str(extractor_name or "").strip().lower()
+        return text.startswith("tvp") or "tvp:vod" in text or "tvpvod" in text
+
+    def _build_tvp_download_basename(self, title, item):
+        if not self._is_tvp_vod_extractor((item or {}).get("extractor")):
+            return ""
+
+        media_kind = str((item or {}).get("media_kind") or "").strip().lower()
+        if media_kind != "video":
+            return ""
+
+        series = self._normalize_title_text((item or {}).get("series"))
+        raw_title = self._normalize_title_text((item or {}).get("source_title"))
+        current_title = self._normalize_title_text(title)
+        episode_code = self._normalize_title_text((item or {}).get("episode_code"))
+        quality_label = self.make_quality_label(item)
+
+        if not series:
+            return ""
+
+        episode_title = raw_title or current_title
+        if episode_title and self._title_compare_key(episode_title).startswith(self._title_compare_key("%s -" % series)):
+            episode_title = episode_title[len(series):].lstrip(" -")
+
+        detail_parts = []
+        if episode_code:
+            detail_parts.append(episode_code)
+        if episode_title:
+            detail_parts.append(episode_title)
+
+        if not detail_parts:
+            return ""
+
+        base_name = "%s - %s" % (series, " ".join(detail_parts))
+        if quality_label:
+            base_name = "%s (%s)" % (base_name, quality_label)
+        return self._safe_filename(base_name, default="video")
+
     def build_download_basename(self, title, item):
         media_kind = str((item or {}).get("media_kind") or "").strip().lower()
         if media_kind == "audio":
             return self._safe_filename(title, default="audio")
+        tvp_basename = self._build_tvp_download_basename(title, item)
+        if tvp_basename:
+            return tvp_basename
         label = item.get("label") or item.get("format_id") or "source"
         return self._safe_filename("%s_%s" % (title, label), default="video")
 
@@ -414,6 +489,10 @@ class SourceMediaService:
                     "download_format": format_id or "best",
                     "merge_ext": (fmt.get("ext") or "mp4").lower(),
                     "bitrate_kbps": float(fmt.get("tbr") or 0) if fmt.get("tbr") not in (None, "", False) else 0.0,
+                    "extractor": info.get("extractor_key") or info.get("extractor") or "",
+                    "series": info.get("series") or "",
+                    "source_title": info.get("title") or "",
+                    "episode_code": self._extract_tvp_episode_code(info),
                     "_format_candidates": [{
                         "format_id": format_id or "default",
                         "has_audio": acodec not in (None, "", "none"),
