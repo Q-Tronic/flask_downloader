@@ -146,9 +146,57 @@ function getVisibleCollectionEpisodes() {
     if (!collectionBrowserState) {
         return [];
     }
-    return collectionBrowserState.collection.episodes.filter(function(item) {
+    const seasonEpisodes = collectionBrowserState.collection.episodes.filter(function(item) {
         return String(item.season_value || "") === String(collectionBrowserState.activeSeasonValue || "");
     });
+    return seasonEpisodes.slice().sort(compareCollectionEpisodesForCurrentMode);
+}
+
+function compareCollectionEpisodesForCurrentMode(left, right) {
+    const sortMode = String((collectionBrowserState && collectionBrowserState.sortMode) || "episode_asc");
+    const leftEpisode = Number((left && left.episode_number) || 0);
+    const rightEpisode = Number((right && right.episode_number) || 0);
+    const leftOrder = Number((left && left.order_index) || 0);
+    const rightOrder = Number((right && right.order_index) || 0);
+    const leftTitle = String((left && (left.title || left.display_title)) || "");
+    const rightTitle = String((right && (right.title || right.display_title)) || "");
+    const titleCompare = leftTitle.localeCompare(rightTitle, "pl", {numeric: true, sensitivity: "base"});
+
+    if (sortMode === "episode_desc") {
+        if (leftEpisode > 0 || rightEpisode > 0) {
+            if (leftEpisode !== rightEpisode) {
+                return rightEpisode - leftEpisode;
+            }
+        }
+        if (titleCompare !== 0) {
+            return titleCompare;
+        }
+        return rightOrder - leftOrder;
+    }
+
+    if (sortMode === "title_asc") {
+        if (titleCompare !== 0) {
+            return titleCompare;
+        }
+        return leftOrder - rightOrder;
+    }
+
+    if (sortMode === "title_desc") {
+        if (titleCompare !== 0) {
+            return -titleCompare;
+        }
+        return rightOrder - leftOrder;
+    }
+
+    if (leftEpisode > 0 || rightEpisode > 0) {
+        if (leftEpisode !== rightEpisode) {
+            return leftEpisode - rightEpisode;
+        }
+    }
+    if (titleCompare !== 0) {
+        return titleCompare;
+    }
+    return leftOrder - rightOrder;
 }
 
 function getSelectedCollectionEpisodeIds() {
@@ -175,6 +223,7 @@ function renderCollectionBrowser(options) {
     }).length;
     const selectedTotalCount = getSelectedCollectionEpisodeIds().length;
     const mediaKind = collectionBrowserState.mediaKind || "video";
+    const sortMode = collectionBrowserState.sortMode || "episode_asc";
 
     const seasonControlHtml = collection.has_multiple_seasons ? `
         <div class="stack-card">
@@ -198,6 +247,15 @@ function renderCollectionBrowser(options) {
         <div class="collection-browser-shell">
             <div class="collection-browser-toolbar">
                 ${seasonControlHtml}
+                <div class="stack-card">
+                    <label class="field-label" for="collectionSortSelect">Sortowanie</label>
+                    <select id="collectionSortSelect">
+                        <option value="episode_asc"${sortMode === "episode_asc" ? " selected" : ""}>Numer odcinka rosnąco</option>
+                        <option value="episode_desc"${sortMode === "episode_desc" ? " selected" : ""}>Numer odcinka malejąco</option>
+                        <option value="title_asc"${sortMode === "title_asc" ? " selected" : ""}>Tytuł A-Z</option>
+                        <option value="title_desc"${sortMode === "title_desc" ? " selected" : ""}>Tytuł Z-A</option>
+                    </select>
+                </div>
                 <div class="stack-card">
                     <label class="field-label">Tryb pobierania</label>
                     <div class="collection-media-toggle">
@@ -256,6 +314,7 @@ function openCollectionBrowser(collection, defaultMediaKind, options) {
         collection: normalizedCollection,
         mediaKind: mediaKind,
         activeSeasonValue: String(normalizedCollection.default_season_value || (normalizedCollection.seasons[0] && normalizedCollection.seasons[0].value) || ""),
+        sortMode: "episode_asc",
         selectedEpisodeIds: new Set(),
         dynamic: dynamicMode,
     };
@@ -1127,6 +1186,13 @@ function handleCollectionBrowserChange(event) {
     const seasonSelect = event.target.closest("#collectionSeasonSelect");
     if (seasonSelect && collectionBrowserState) {
         collectionBrowserState.activeSeasonValue = String(seasonSelect.value || "");
+        renderCollectionBrowser({resetScroll: true});
+        return;
+    }
+
+    const sortSelect = event.target.closest("#collectionSortSelect");
+    if (sortSelect && collectionBrowserState) {
+        collectionBrowserState.sortMode = String(sortSelect.value || "episode_asc");
         renderCollectionBrowser({resetScroll: true});
         return;
     }

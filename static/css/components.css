@@ -496,6 +496,9 @@
             flex-wrap: wrap;
             gap: 8px;
         }
+        .collection-browser-toolbar .stack-card select {
+            min-width: 0;
+        }
         .collection-browser-summary {
             display: grid;
             gap: 4px;
