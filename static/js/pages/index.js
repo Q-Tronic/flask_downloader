@@ -2,6 +2,8 @@
 const pageData = window.pageBootstrapData || {};
 const quickUrlInput = document.getElementById("quickUrlInput");
 const quickDlnaCollectionSelect = document.getElementById("quickDlnaCollectionSelect");
+const indexDynamicBrowserHost = document.getElementById("indexDynamicBrowserHost");
+let collectionBrowserState = null;
 
 function showUiToastMessage(message, kind) {
     if (window.appUi && typeof window.appUi.showToast === "function") {
@@ -35,12 +37,341 @@ function setQuickButtonsBusy(busy, activeButton) {
     });
 }
 
+function extractUrlCandidatesFromText(rawText) {
+    const text = String(rawText || "").replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+    const matches = text.match(/https?:\/\/[^\s<>"']+/gi) || [];
+    const seen = new Set();
+    const results = [];
+
+    matches.forEach(function(match) {
+        const candidate = String(match || "").trim().replace(/[),.;]+$/g, "");
+        if (!candidate) {
+            return;
+        }
+        const dedupeKey = candidate.toLowerCase();
+        if (seen.has(dedupeKey)) {
+            return;
+        }
+        seen.add(dedupeKey);
+        results.push(candidate);
+    });
+
+    return results;
+}
+
+function isPotentialTvpCollectionUrl(url) {
+    const text = String(url || "").trim().toLowerCase();
+    if (!text.includes("vod.tvp.pl")) {
+        return false;
+    }
+    return !/,s\d+e\d+,/.test(text);
+}
+
+function escapeCollectionHtml(value) {
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+function formatCollectionCount(count, nounOne, nounFew, nounMany) {
+    const numericCount = Number(count || 0);
+    if (numericCount === 1) {
+        return "1 " + nounOne;
+    }
+    const mod10 = numericCount % 10;
+    const mod100 = numericCount % 100;
+    if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) {
+        return numericCount + " " + nounFew;
+    }
+    return numericCount + " " + nounMany;
+}
+
+function normalizeCollectionPayload(collection) {
+    const payload = collection && typeof collection === "object" ? collection : {};
+    const seasons = Array.isArray(payload.seasons) ? payload.seasons.slice() : [];
+    const episodes = Array.isArray(payload.episodes) ? payload.episodes.slice() : [];
+    return {
+        title: String(payload.title || ""),
+        page_url: String(payload.page_url || ""),
+        extractor: String(payload.extractor || ""),
+        seasons: seasons,
+        episodes: episodes,
+        episode_count: Number(payload.episode_count || episodes.length || 0),
+        season_count: Number(payload.season_count || seasons.length || 0),
+        default_season_value: String(payload.default_season_value || (seasons[0] && seasons[0].value) || ""),
+        has_multiple_seasons: Boolean(payload.has_multiple_seasons || seasons.length > 1),
+        default_media_kind: String(payload.default_media_kind || "video").toLowerCase() === "audio" ? "audio" : "video",
+    };
+}
+
+function getCollectionBrowserPanel() {
+    return document.getElementById("collectionBrowserPanel");
+}
+
+function buildDynamicCollectionShell(collection) {
+    return `
+        <section class="page-card">
+            <h2 class="section-title">Wykryta kolekcja odcinków</h2>
+            <div class="info-grid">
+                <div class="info-label">Tytuł</div>
+                <div class="info-value">${escapeCollectionHtml(collection.title || "")}</div>
+
+                <div class="info-label">Adres strony</div>
+                <div class="info-value">
+                    <a class="link" href="${escapeCollectionHtml(collection.page_url || "#")}" target="_blank" rel="noopener">${escapeCollectionHtml(collection.page_url || "")}</a>
+                </div>
+
+                <div class="info-label">Extractor</div>
+                <div class="info-value">${escapeCollectionHtml(collection.extractor || "")}</div>
+
+                <div class="info-label">Sezony</div>
+                <div class="info-value">${escapeCollectionHtml(String(collection.season_count || 0))}</div>
+
+                <div class="info-label">Odcinki</div>
+                <div class="info-value">${escapeCollectionHtml(String(collection.episode_count || 0))}</div>
+            </div>
+        </section>
+
+        <section class="page-card">
+            <h2 class="section-title">Sezony i odcinki</h2>
+            <div id="collectionBrowserPanel" class="collection-browser-panel"></div>
+        </section>
+    `;
+}
+
+function getVisibleCollectionEpisodes() {
+    if (!collectionBrowserState) {
+        return [];
+    }
+    return collectionBrowserState.collection.episodes.filter(function(item) {
+        return String(item.season_value || "") === String(collectionBrowserState.activeSeasonValue || "");
+    });
+}
+
+function getSelectedCollectionEpisodeIds() {
+    if (!collectionBrowserState) {
+        return [];
+    }
+    return Array.from(collectionBrowserState.selectedEpisodeIds || []);
+}
+
+function renderCollectionBrowser(options) {
+    const panel = getCollectionBrowserPanel();
+    if (!panel || !collectionBrowserState) {
+        return;
+    }
+
+    const renderOptions = options && typeof options === "object" ? options : {};
+    const previousList = panel.querySelector(".collection-episode-list");
+    const preservedScrollTop = previousList ? previousList.scrollTop : 0;
+    const collection = collectionBrowserState.collection;
+    const visibleEpisodes = getVisibleCollectionEpisodes();
+    const selectedIds = collectionBrowserState.selectedEpisodeIds;
+    const selectedVisibleCount = visibleEpisodes.filter(function(item) {
+        return selectedIds.has(String(item.id || ""));
+    }).length;
+    const selectedTotalCount = getSelectedCollectionEpisodeIds().length;
+    const mediaKind = collectionBrowserState.mediaKind || "video";
+
+    const seasonControlHtml = collection.has_multiple_seasons ? `
+        <div class="stack-card">
+            <label class="field-label" for="collectionSeasonSelect">Sezon</label>
+            <select id="collectionSeasonSelect">
+                ${collection.seasons.map(function(season) {
+                    const isSelected = String(season.value || "") === String(collectionBrowserState.activeSeasonValue || "") ? " selected" : "";
+                    const seasonCountText = formatCollectionCount(season.count, "odcinek", "odcinki", "odcinków");
+                    return `<option value="${escapeCollectionHtml(season.value || "")}"${isSelected}>${escapeCollectionHtml(season.label || "")} (${escapeCollectionHtml(seasonCountText)})</option>`;
+                }).join("")}
+            </select>
+        </div>
+    ` : `
+        <div class="stack-card">
+            <label class="field-label">Sezon</label>
+            <div class="collection-static-value">${escapeCollectionHtml((collection.seasons[0] && collection.seasons[0].label) || "Jeden sezon")}</div>
+        </div>
+    `;
+
+    panel.innerHTML = `
+        <div class="collection-browser-shell">
+            <div class="collection-browser-toolbar">
+                ${seasonControlHtml}
+                <div class="stack-card">
+                    <label class="field-label">Tryb pobierania</label>
+                    <div class="collection-media-toggle">
+                        <button type="button" class="btn ${mediaKind === "video" ? "btn-green" : "btn-secondary"}" data-collection-media-kind="video">Wideo BEST</button>
+                        <button type="button" class="btn ${mediaKind === "audio" ? "btn-download" : "btn-secondary"}" data-collection-media-kind="audio">Audio BEST</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="collection-browser-summary">
+                <div>Zaznaczono ${escapeCollectionHtml(String(selectedVisibleCount))} z ${escapeCollectionHtml(String(visibleEpisodes.length))} widocznych oraz ${escapeCollectionHtml(String(selectedTotalCount))} łącznie.</div>
+                <div>Wybrane odcinki zostaną dodane do kolejki i pobiorą się po kolei bez pełnego odświeżania strony.</div>
+            </div>
+
+            <div class="actions collection-browser-actions">
+                <button type="button" class="btn btn-secondary" data-collection-select-visible="true">Zaznacz widoczne</button>
+                <button type="button" class="btn btn-secondary" data-collection-clear-visible="true">Wyczyść widoczne</button>
+                <button type="button" class="btn btn-secondary" data-collection-clear-all="true">Wyczyść wszystko</button>
+                <button type="button" class="btn btn-server" data-collection-queue="true" ${selectedTotalCount ? "" : "disabled"}>Dodaj zaznaczone do kolejki</button>
+            </div>
+
+            <div class="collection-episode-list" role="list">
+                ${visibleEpisodes.map(function(item) {
+                    const itemId = String(item.id || "");
+                    const checked = selectedIds.has(itemId) ? " checked" : "";
+                    return `
+                        <label class="collection-episode-row" role="listitem">
+                            <input type="checkbox" data-collection-episode-id="${escapeCollectionHtml(itemId)}"${checked}>
+                            <span class="collection-episode-main">
+                                ${item.episode_code ? `<span class="badge">${escapeCollectionHtml(item.episode_code)}</span>` : ""}
+                                <span class="collection-episode-title">${escapeCollectionHtml(item.title || item.display_title || "Odcinek")}</span>
+                            </span>
+                        </label>
+                    `;
+                }).join("") || '<div class="source-detail-empty">Brak odcinków w wybranym sezonie.</div>'}
+            </div>
+        </div>
+    `;
+
+    const nextList = panel.querySelector(".collection-episode-list");
+    if (nextList && !renderOptions.resetScroll) {
+        nextList.scrollTop = preservedScrollTop;
+    }
+}
+
+function openCollectionBrowser(collection, defaultMediaKind, options) {
+    const normalizedCollection = normalizeCollectionPayload(collection);
+    const dynamicMode = Boolean(options && options.dynamic);
+    const mediaKind = String(defaultMediaKind || normalizedCollection.default_media_kind || "video").toLowerCase() === "audio" ? "audio" : "video";
+
+    if (dynamicMode && indexDynamicBrowserHost) {
+        indexDynamicBrowserHost.innerHTML = buildDynamicCollectionShell(normalizedCollection);
+    }
+
+    collectionBrowserState = {
+        collection: normalizedCollection,
+        mediaKind: mediaKind,
+        activeSeasonValue: String(normalizedCollection.default_season_value || (normalizedCollection.seasons[0] && normalizedCollection.seasons[0].value) || ""),
+        selectedEpisodeIds: new Set(),
+        dynamic: dynamicMode,
+    };
+
+    clearSourceContextToast();
+    renderCollectionBrowser();
+
+    const panel = getCollectionBrowserPanel();
+    if (panel) {
+        panel.scrollIntoView({behavior: "smooth", block: "start"});
+    }
+}
+
+async function inspectSingleUrlForCollection(url) {
+    const response = await fetch("/api/source-browser?page_url=" + encodeURIComponent(url), {
+        headers: {"Accept": "application/json"},
+    });
+    const data = await response.json().catch(function() {
+        return {};
+    });
+    if (!response.ok || !data.ok) {
+        throw new Error((data && data.error) || "Nie udało się odczytać listy odcinków.");
+    }
+    return data;
+}
+
+async function queueCollectionEpisodes() {
+    if (!collectionBrowserState) {
+        return;
+    }
+
+    const selectedIds = getSelectedCollectionEpisodeIds();
+    if (!selectedIds.length) {
+        showUiToastMessage("Zaznacz co najmniej jeden odcinek do pobrania.", "error");
+        return;
+    }
+
+    const selectedEpisodes = collectionBrowserState.collection.episodes.filter(function(item) {
+        return collectionBrowserState.selectedEpisodeIds.has(String(item.id || ""));
+    }).sort(function(left, right) {
+        return Number(left.order_index || 0) - Number(right.order_index || 0);
+    });
+
+    const queueButton = document.querySelector("[data-collection-queue='true']");
+    if (queueButton) {
+        queueButton.disabled = true;
+        queueButton.dataset.idleLabel = queueButton.dataset.idleLabel || String(queueButton.textContent || "").trim();
+        queueButton.textContent = "Trwa...";
+    }
+
+    try {
+        const response = await fetch("/api/collection-downloads", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                media_kind: collectionBrowserState.mediaKind || "video",
+                auto_dlna_collection_id: getQuickDlnaCollectionId(),
+                episodes: selectedEpisodes.map(function(item) {
+                    return {
+                        id: item.id,
+                        page_url: item.page_url,
+                        title: item.title,
+                        display_title: item.display_title,
+                        queue_title: item.queue_title,
+                        series: item.series,
+                        episode_code: item.episode_code,
+                        season_number: item.season_number,
+                        episode_number: item.episode_number,
+                    };
+                }),
+            }),
+        });
+
+        const data = await response.json().catch(function() {
+            return {};
+        });
+
+        if (!response.ok || !data.ok) {
+            showUiToastMessage((data && data.error) || "Nie udało się dodać odcinków do kolejki.", "error");
+            return;
+        }
+
+        selectedEpisodes.forEach(function(item) {
+            collectionBrowserState.selectedEpisodeIds.delete(String(item.id || ""));
+        });
+        renderCollectionBrowser();
+
+        const queuedCount = Number(data.queued_count || 0);
+        const failedCount = Number(data.failed_count || 0);
+        let message = queuedCount === 1
+            ? "Dodano 1 odcinek do kolejki."
+            : "Dodano " + queuedCount + " odcinków do kolejki.";
+        if (failedCount > 0) {
+            message += " " + failedCount + " pozycji pominięto.";
+        }
+        showUiToastMessage(message, "success");
+        if (window.appUi && typeof window.appUi.refreshDownloadToasts === "function") {
+            window.appUi.refreshDownloadToasts();
+        }
+    } catch (err) {
+        showUiToastMessage("Błąd połączenia z serwerem: " + err, "error");
+    } finally {
+        if (queueButton) {
+            queueButton.disabled = false;
+            queueButton.textContent = queueButton.dataset.idleLabel || "Dodaj zaznaczone do kolejki";
+        }
+    }
+}
+
 async function runQuickDownload(mediaKind, triggerButton) {
     if (!quickUrlInput) {
         return;
     }
 
     const urlsText = String(quickUrlInput.value || "").trim();
+    const parsedUrls = extractUrlCandidatesFromText(urlsText);
     if (!urlsText) {
         showUiToastMessage("Wklej co najmniej jeden link do pobrania.", "error");
         quickUrlInput.focus();
@@ -50,6 +381,15 @@ async function runQuickDownload(mediaKind, triggerButton) {
     setQuickButtonsBusy(true, triggerButton);
 
     try {
+        if (parsedUrls.length === 1 && isPotentialTvpCollectionUrl(parsedUrls[0])) {
+            const browserData = await inspectSingleUrlForCollection(parsedUrls[0]);
+            if (browserData && browserData.kind === "collection") {
+                openCollectionBrowser(browserData.collection || {}, mediaKind, {dynamic: true});
+                showUiToastMessage("Wykryto kolekcję TVP VOD. Wybierz sezon i zaznacz odcinki do pobrania.", "success");
+                return;
+            }
+        }
+
         const response = await fetch("/api/quick-downloads", {
             method: "POST",
             headers: {"Content-Type": "application/json"},
@@ -63,6 +403,12 @@ async function runQuickDownload(mediaKind, triggerButton) {
         const data = await response.json().catch(function() {
             return {};
         });
+
+        if (data && data.selection_required && data.kind === "collection") {
+            openCollectionBrowser(data.collection || {}, mediaKind, {dynamic: true});
+            showUiToastMessage("Wykryto kolekcję TVP VOD. Wybierz sezon i zaznacz odcinki do pobrania.", "success");
+            return;
+        }
 
         if (!response.ok || !data.ok) {
             showUiToastMessage((data && data.error) || "Nie udało się dodać szybkich pobrań.", "error");
@@ -729,6 +1075,77 @@ function initializeSourcePicker() {
 initializeSourcePicker();
 }
 
+if (pageData.hasCollection && pageData.collection) {
+    openCollectionBrowser(pageData.collection, (pageData.collection && pageData.collection.default_media_kind) || "video", {dynamic: false});
+}
+
+function handleCollectionBrowserClick(event) {
+    const toggleButton = event.target.closest("[data-collection-media-kind]");
+    if (toggleButton && collectionBrowserState) {
+        event.preventDefault();
+        collectionBrowserState.mediaKind = String(toggleButton.getAttribute("data-collection-media-kind") || "video").toLowerCase() === "audio" ? "audio" : "video";
+        renderCollectionBrowser();
+        return;
+    }
+
+    const selectVisibleButton = event.target.closest("[data-collection-select-visible='true']");
+    if (selectVisibleButton && collectionBrowserState) {
+        event.preventDefault();
+        getVisibleCollectionEpisodes().forEach(function(item) {
+            collectionBrowserState.selectedEpisodeIds.add(String(item.id || ""));
+        });
+        renderCollectionBrowser();
+        return;
+    }
+
+    const clearVisibleButton = event.target.closest("[data-collection-clear-visible='true']");
+    if (clearVisibleButton && collectionBrowserState) {
+        event.preventDefault();
+        getVisibleCollectionEpisodes().forEach(function(item) {
+            collectionBrowserState.selectedEpisodeIds.delete(String(item.id || ""));
+        });
+        renderCollectionBrowser({resetScroll: true});
+        return;
+    }
+
+    const clearAllButton = event.target.closest("[data-collection-clear-all='true']");
+    if (clearAllButton && collectionBrowserState) {
+        event.preventDefault();
+        collectionBrowserState.selectedEpisodeIds.clear();
+        renderCollectionBrowser();
+        return;
+    }
+
+    const queueButton = event.target.closest("[data-collection-queue='true']");
+    if (queueButton && collectionBrowserState) {
+        event.preventDefault();
+        queueCollectionEpisodes();
+    }
+}
+
+function handleCollectionBrowserChange(event) {
+    const seasonSelect = event.target.closest("#collectionSeasonSelect");
+    if (seasonSelect && collectionBrowserState) {
+        collectionBrowserState.activeSeasonValue = String(seasonSelect.value || "");
+        renderCollectionBrowser({resetScroll: true});
+        return;
+    }
+
+    const episodeCheckbox = event.target.closest("[data-collection-episode-id]");
+    if (episodeCheckbox && collectionBrowserState) {
+        const episodeId = String(episodeCheckbox.getAttribute("data-collection-episode-id") || "");
+        if (!episodeId) {
+            return;
+        }
+        if (episodeCheckbox.checked) {
+            collectionBrowserState.selectedEpisodeIds.add(episodeId);
+        } else {
+            collectionBrowserState.selectedEpisodeIds.delete(episodeId);
+        }
+        renderCollectionBrowser();
+    }
+}
+
 function handleSourceServerDownloadClick(event) {
     const serverButton = event.target.closest(".js-source-server-download");
     if (!serverButton) {
@@ -753,12 +1170,17 @@ function handleQuickDownloadClick(event) {
 
 document.addEventListener("click", handleSourceServerDownloadClick);
 document.addEventListener("click", handleQuickDownloadClick);
+document.addEventListener("click", handleCollectionBrowserClick);
+document.addEventListener("change", handleCollectionBrowserChange);
 
 if (typeof window.registerPageCleanup === "function") {
     window.registerPageCleanup(function() {
         clearSourceContextToast();
         document.removeEventListener("click", handleSourceServerDownloadClick);
         document.removeEventListener("click", handleQuickDownloadClick);
+        document.removeEventListener("click", handleCollectionBrowserClick);
+        document.removeEventListener("change", handleCollectionBrowserChange);
+        collectionBrowserState = null;
     });
 }
 

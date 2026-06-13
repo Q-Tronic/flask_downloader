@@ -7,6 +7,8 @@ from urllib.parse import quote, urlparse
 class SourceMediaService:
     URL_PATTERN = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
     TVP_EPISODE_CODE_PATTERN = re.compile(r"(^|[,/_-])S(?P<season>\d{1,2})E(?P<episode>\d{1,4})(?=$|[,/_-])", re.IGNORECASE)
+    EPISODE_NUMBER_PATTERN = re.compile(r"\bodcinek\s+(?P<episode>\d+)\b", re.IGNORECASE)
+    COLLECTION_CACHE_PREFIX = "collection::"
 
     def __init__(
         self,
@@ -50,6 +52,30 @@ class SourceMediaService:
             return parsed.scheme in ("http", "https") and bool(parsed.netloc)
         except Exception:
             return False
+
+    @staticmethod
+    def _normalize_url_text(url):
+        return str(url or "").strip()
+
+    @classmethod
+    def _is_tvp_vod_url(cls, page_url):
+        try:
+            parsed = urlparse(cls._normalize_url_text(page_url))
+        except Exception:
+            return False
+        host = str(parsed.netloc or "").strip().lower()
+        return host.endswith("vod.tvp.pl")
+
+    @classmethod
+    def _looks_like_tvp_series_candidate_url(cls, page_url):
+        normalized_url = cls._normalize_url_text(page_url)
+        if not cls._is_tvp_vod_url(normalized_url):
+            return False
+        return not bool(cls.TVP_EPISODE_CODE_PATTERN.search(normalized_url))
+
+    @staticmethod
+    def _make_collection_cache_key(page_url):
+        return "%s%s" % (SourceMediaService.COLLECTION_CACHE_PREFIX, str(page_url or "").strip())
 
     @classmethod
     def extract_http_urls(cls, raw_text):
@@ -281,6 +307,13 @@ class SourceMediaService:
             return 0
 
     @classmethod
+    def _extract_episode_number_from_title(cls, title):
+        match = cls.EPISODE_NUMBER_PATTERN.search(str(title or ""))
+        if not match:
+            return 0
+        return cls._normalize_int(match.group("episode"))
+
+    @classmethod
     def _extract_tvp_episode_code(cls, info):
         season_number = cls._normalize_int((info or {}).get("season_number"))
         episode_number = cls._normalize_int((info or {}).get("episode_number"))
@@ -304,10 +337,66 @@ class SourceMediaService:
             return "E%02d" % episode_number
         return ""
 
+    @classmethod
+    def _extract_tvp_season_episode_parts(cls, info):
+        season_number = cls._normalize_int((info or {}).get("season_number"))
+        episode_number = cls._normalize_int((info or {}).get("episode_number"))
+        episode_code = ""
+
+        if season_number > 0 and episode_number > 0:
+            episode_code = "S%02dE%02d" % (season_number, episode_number)
+            return {
+                "season_number": season_number,
+                "episode_number": episode_number,
+                "episode_code": episode_code,
+            }
+
+        for candidate in (
+            (info or {}).get("webpage_url"),
+            (info or {}).get("original_url"),
+            (info or {}).get("url"),
+        ):
+            match = cls.TVP_EPISODE_CODE_PATTERN.search(str(candidate or ""))
+            if not match:
+                continue
+            season_number = cls._normalize_int(match.group("season"))
+            episode_number = cls._normalize_int(match.group("episode"))
+            if season_number > 0 and episode_number > 0:
+                episode_code = "S%02dE%02d" % (season_number, episode_number)
+                return {
+                    "season_number": season_number,
+                    "episode_number": episode_number,
+                    "episode_code": episode_code,
+                }
+
+        if episode_number <= 0:
+            episode_number = cls._normalize_int((info or {}).get("episode_number")) or cls._extract_episode_number_from_title((info or {}).get("title"))
+        if episode_number > 0:
+            episode_code = "E%02d" % episode_number
+
+        return {
+            "season_number": season_number,
+            "episode_number": episode_number,
+            "episode_code": episode_code,
+        }
+
     @staticmethod
     def _is_tvp_vod_extractor(extractor_name):
         text = str(extractor_name or "").strip().lower()
         return text.startswith("tvp") or "tvp:vod" in text or "tvpvod" in text
+
+    def build_collection_episode_title(self, entry):
+        item = dict(entry or {})
+        series = self._normalize_title_text(item.get("series"))
+        title = self._normalize_title_text(item.get("title") or item.get("display_title"))
+        episode_code = self._normalize_title_text(item.get("episode_code"))
+
+        if episode_code and title and not title.casefold().startswith(episode_code.casefold()):
+            title = "%s %s" % (episode_code, title)
+
+        if series and title:
+            return "%s - %s" % (series, title)
+        return title or series or "Odcinek"
 
     def _build_tvp_download_basename(self, title, item):
         if not self._is_tvp_vod_extractor((item or {}).get("extractor")):
@@ -579,6 +668,163 @@ class SourceMediaService:
         results = video_results + audio_results
         results.sort(key=sort_key)
         return results
+
+    def _build_flat_playlist_ydl_opts(self):
+        options = dict(self._ydl_opts_factory() or {})
+        options["extract_flat"] = True
+        options["skip_download"] = True
+        options["lazy_playlist"] = False
+        options.pop("noplaylist", None)
+        return options
+
+    def _build_collection_episode_rows(self, info):
+        info_title = self._normalize_title_text((info or {}).get("title") or "")
+        extractor_name = str((info or {}).get("extractor_key") or (info or {}).get("extractor") or "").strip()
+        rows = []
+        raw_entries = list((info or {}).get("entries") or [])
+
+        for original_order_index, raw_entry in enumerate(raw_entries):
+            entry = dict(raw_entry or {})
+            entry_url = self._normalize_url_text(entry.get("url") or entry.get("webpage_url"))
+            if not self.is_valid_http_url(entry_url):
+                continue
+
+            title = self._normalize_title_text(entry.get("title") or "")
+            series = self._normalize_title_text(entry.get("series") or info_title)
+            season_parts = self._extract_tvp_season_episode_parts({
+                "season_number": entry.get("season_number"),
+                "episode_number": entry.get("episode_number"),
+                "webpage_url": entry.get("webpage_url") or entry_url,
+                "original_url": entry.get("url") or entry_url,
+                "url": entry_url,
+                "title": title,
+            })
+            season_number = self._normalize_int(season_parts.get("season_number"))
+            episode_number = self._normalize_int(season_parts.get("episode_number"))
+            episode_code = self._normalize_title_text(season_parts.get("episode_code"))
+            season_value = str(season_number) if season_number > 0 else "unknown"
+            season_label = "Sezon %d" % season_number if season_number > 0 else "Pozostałe"
+
+            display_title = title or ("Odcinek %d" % episode_number if episode_number > 0 else "Odcinek")
+            if episode_code and not display_title.casefold().startswith(episode_code.casefold()):
+                display_title = "%s %s" % (episode_code, display_title)
+
+            queue_title = self.build_collection_episode_title({
+                "series": series,
+                "title": title,
+                "episode_code": episode_code,
+                "display_title": display_title,
+            })
+
+            entry_id = self._normalize_url_text(entry.get("id")) or entry_url
+            rows.append({
+                "id": entry_id,
+                "page_url": entry_url,
+                "title": title or display_title,
+                "display_title": display_title,
+                "queue_title": queue_title,
+                "series": series,
+                "season_number": season_number,
+                "season_value": season_value,
+                "season_label": season_label,
+                "episode_number": episode_number,
+                "episode_code": episode_code,
+                "extractor": entry.get("ie_key") or extractor_name,
+                "original_order_index": int(original_order_index),
+            })
+
+        rows.sort(
+            key=lambda item: (
+                1 if int(item.get("season_number") or 0) <= 0 else 0,
+                int(item.get("season_number") or 0),
+                1 if int(item.get("episode_number") or 0) <= 0 else 0,
+                int(item.get("episode_number") or 0),
+                self._title_compare_key(item.get("title") or item.get("display_title") or ""),
+                int(item.get("original_order_index") or 0),
+            )
+        )
+
+        seasons = []
+        season_index = {}
+        default_season_value = ""
+        for order_index, item in enumerate(rows):
+            season_value = str(item.get("season_value") or "unknown")
+            if season_value not in season_index:
+                season_index[season_value] = len(seasons)
+                seasons.append({
+                    "value": season_value,
+                    "label": str(item.get("season_label") or "Pozostałe"),
+                    "count": 0,
+                })
+                if not default_season_value:
+                    default_season_value = season_value
+            seasons[season_index[season_value]]["count"] += 1
+            item["order_index"] = int(order_index)
+            item.pop("original_order_index", None)
+
+        return {
+            "episodes": rows,
+            "seasons": seasons,
+            "default_season_value": default_season_value,
+        }
+
+    def extract_collection_data(self, page_url, force_refresh=False):
+        normalized_url = self._normalize_url_text(page_url)
+        cache_key = self._make_collection_cache_key(normalized_url)
+        now = time.time()
+
+        if not force_refresh and cache_key in self._cache:
+            cached = self._cache[cache_key]
+            if now - cached["ts"] < self._cache_ttl:
+                return cached["data"]
+
+        with self._ytdlp_module.YoutubeDL(self._build_flat_playlist_ydl_opts()) as ydl:
+            info = ydl.extract_info(normalized_url, download=False)
+
+        if str((info or {}).get("_type") or "").strip().lower() != "playlist":
+            raise ValueError("Podany link TVP VOD nie prowadzi do listy sezonów lub odcinków.")
+
+        collection_rows = self._build_collection_episode_rows(info)
+        episodes = list(collection_rows.get("episodes") or [])
+        if not episodes:
+            raise ValueError("Nie udało się odczytać listy odcinków z tej strony TVP VOD.")
+
+        seasons = list(collection_rows.get("seasons") or [])
+        data = {
+            "kind": "collection",
+            "title": self._normalize_title_text((info or {}).get("title") or "Kolekcja TVP VOD"),
+            "page_url": self._normalize_url_text((info or {}).get("webpage_url") or normalized_url),
+            "extractor": str((info or {}).get("extractor_key") or (info or {}).get("extractor") or "unknown"),
+            "episodes": episodes,
+            "episode_count": len(episodes),
+            "seasons": seasons,
+            "season_count": len(seasons),
+            "default_season_value": str(collection_rows.get("default_season_value") or ""),
+            "has_multiple_seasons": len(seasons) > 1,
+            "default_media_kind": "video",
+        }
+
+        self._cache[cache_key] = {
+            "ts": now,
+            "data": data,
+        }
+        return data
+
+    def extract_browser_data(self, page_url, force_refresh=False):
+        normalized_url = self._normalize_url_text(page_url)
+        if self._looks_like_tvp_series_candidate_url(normalized_url):
+            try:
+                return {
+                    "kind": "collection",
+                    "collection": self.extract_collection_data(normalized_url, force_refresh=force_refresh),
+                }
+            except ValueError as exc:
+                if "nie prowadzi do listy sezonów lub odcinków" not in str(exc or "").strip().lower():
+                    raise
+        return {
+            "kind": "single",
+            "result": self.extract_video_data(normalized_url, force_refresh=force_refresh),
+        }
 
     def extract_video_data(self, page_url, force_refresh=False):
         now = time.time()

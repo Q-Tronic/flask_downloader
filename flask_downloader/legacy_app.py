@@ -2123,6 +2123,8 @@ def normalize_saved_job_record(raw):
         "dlna_collection_id": str(raw.get("dlna_collection_id") or "").strip(),
         "dlna_collection_name": str(raw.get("dlna_collection_name") or "").strip(),
         "is_live_capture": bool(raw.get("is_live_capture")),
+        "auto_pick_best": bool(raw.get("auto_pick_best")),
+        "serial_download": bool(raw.get("serial_download")),
         "live_status": str(raw.get("live_status") or ""),
         "processing_stage": str(raw.get("processing_stage") or "").strip(),
     }
@@ -2189,6 +2191,8 @@ def serialize_job_for_storage(job):
         "dlna_collection_id": str(job.get("dlna_collection_id") or "").strip(),
         "dlna_collection_name": str(job.get("dlna_collection_name") or "").strip(),
         "is_live_capture": bool(job.get("is_live_capture")),
+        "auto_pick_best": bool(job.get("auto_pick_best")),
+        "serial_download": bool(job.get("serial_download")),
         "live_status": str(job.get("live_status") or ""),
         "processing_stage": str(job.get("processing_stage") or "").strip(),
     }
@@ -3768,6 +3772,10 @@ def extract_video_data(page_url, force_refresh=False):
     return SOURCE_MEDIA_SERVICE.extract_video_data(page_url, force_refresh=force_refresh)
 
 
+def extract_browser_data(page_url, force_refresh=False):
+    return SOURCE_MEDIA_SERVICE.extract_browser_data(page_url, force_refresh=force_refresh)
+
+
 def extract_http_urls(raw_text):
     return SOURCE_MEDIA_SERVICE.extract_http_urls(raw_text)
 
@@ -3782,6 +3790,10 @@ def build_download_url(page_url, format_id):
 
 def build_result_with_proxy_urls(result, request_root):
     return SOURCE_MEDIA_SERVICE.build_result_with_proxy_urls(result, request_root)
+
+
+def build_collection_episode_title(entry):
+    return SOURCE_MEDIA_SERVICE.build_collection_episode_title(entry)
 
 
 def find_format(result, format_id):
@@ -4160,9 +4172,11 @@ def get_user_download_slot_snapshot(owner_username, *, include_job_id=None):
 
     with DOWNLOAD_LOCK:
         include_is_live_capture = False
+        include_is_serial = False
         if include_job_id:
             current_job = DOWNLOAD_JOBS.get(str(include_job_id))
             include_is_live_capture = bool(current_job and current_job.get("is_live_capture"))
+            include_is_serial = bool(current_job and current_job.get("serial_download"))
         same_owner_jobs = [
             dict(job)
             for job in DOWNLOAD_JOBS.values()
@@ -4183,10 +4197,28 @@ def get_user_download_slot_snapshot(owner_username, *, include_job_id=None):
         for job in same_owner_jobs
         if job.get("status") == "downloading"
     ]
-    eligible_job_ids = [
-        str(job.get("job_id") or "")
-        for job in same_owner_jobs[:MAX_PARALLEL_DOWNLOADS_PER_USER]
-    ]
+    first_serial_index = next(
+        (
+            index
+            for index, job in enumerate(same_owner_jobs)
+            if bool(job.get("serial_download"))
+        ),
+        None,
+    )
+
+    if first_serial_index is None:
+        eligible_job_ids = [
+            str(job.get("job_id") or "")
+            for job in same_owner_jobs[:MAX_PARALLEL_DOWNLOADS_PER_USER]
+        ]
+    elif first_serial_index > 0:
+        eligible_job_ids = [
+            str(job.get("job_id") or "")
+            for job in same_owner_jobs[:min(MAX_PARALLEL_DOWNLOADS_PER_USER, first_serial_index)]
+        ]
+    else:
+        first_serial_job = same_owner_jobs[0] if same_owner_jobs else {}
+        eligible_job_ids = [str(first_serial_job.get("job_id") or "")] if first_serial_job else []
 
     return {
         "owner_username": owner,
@@ -4194,6 +4226,7 @@ def get_user_download_slot_snapshot(owner_username, *, include_job_id=None):
         "active_job_ids": active_job_ids,
         "eligible_job_ids": eligible_job_ids,
         "can_start": bool(include_is_live_capture or (include_job_id and str(include_job_id) in eligible_job_ids)),
+        "serial_mode": bool(include_is_serial or first_serial_index is not None),
     }
 
 
@@ -4317,6 +4350,7 @@ def download_worker(job_id):
             replace_paths = [str(path) for path in (job.get("replace_paths") or []) if path]
             overwrite_existing = bool(job.get("overwrite_existing"))
             is_live_capture_requested = bool(job.get("is_live_capture"))
+            auto_pick_best = bool(job.get("auto_pick_best"))
             resume_target_path = str(job.get("filepath") or "").strip()
             if not resume_target_path:
                 resume_target_path = str(
@@ -4349,6 +4383,12 @@ def download_worker(job_id):
             fmt = SOURCE_MEDIA_SERVICE.find_format_by_signature(
                 result,
                 job.get("selection_signature") or {},
+            )
+        if not fmt and auto_pick_best:
+            fmt = choose_best_source(
+                list(result.get("sources") or []),
+                preferred_media_kind=storage_kind,
+                extractor_name=result.get("extractor") or "",
             )
         if not fmt:
             raise RuntimeError("Nie znaleziono wskazanego formatu.")

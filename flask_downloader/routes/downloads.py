@@ -19,7 +19,9 @@ def register_download_routes(app, deps):
     is_valid_http_url = deps["is_valid_http_url"]
     extract_http_urls = deps["extract_http_urls"]
     extract_video_data = deps["extract_video_data"]
+    extract_browser_data = deps["extract_browser_data"]
     build_result_with_proxy_urls = deps["build_result_with_proxy_urls"]
+    build_collection_episode_title = deps["build_collection_episode_title"]
     find_format = deps["find_format"]
     choose_best_source = deps["choose_best_source"]
     public_source_download_match_state = deps["public_source_download_match_state"]
@@ -131,6 +133,31 @@ def register_download_routes(app, deps):
         )
         return job, duplicate_state
 
+    def enqueue_collection_best_job(*, page_url, owner_username, media_kind="video", auto_dlna_collection_id="", queue_title=""):
+        normalized_media_kind = normalize_storage_kind(media_kind or "video")
+        title = str(queue_title or "").strip() or page_url
+        label = "Audio BEST" if normalized_media_kind == "audio" else "Wideo BEST"
+        return create_job(
+            page_url,
+            "",
+            selection_signature={
+                "media_kind": normalized_media_kind,
+            },
+            owner_username=owner_username,
+            storage_kind=normalized_media_kind,
+            title=title,
+            label=label,
+            filename="",
+            planned_filename="",
+            overwrite_existing=False,
+            replace_paths=[],
+            auto_dlna_collection_id=auto_dlna_collection_id,
+            is_live_capture=False,
+            live_status="",
+            auto_pick_best=True,
+            serial_download=True,
+        )
+
     @app.route("/api/files", methods=["GET"])
     def api_files():
         auth_error = require_authenticated_json()
@@ -209,6 +236,35 @@ def register_download_routes(app, deps):
                 "title": result["title"],
                 "page_url": result["page_url"],
                 "item": item,
+            })
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+
+    @app.route("/api/source-browser", methods=["GET"])
+    def api_source_browser():
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        page_url = str(request.args.get("page_url") or "").strip()
+        if not is_valid_http_url(page_url):
+            return jsonify({"ok": False, "error": "Nieprawidłowy page_url."}), 400
+
+        try:
+            browser_payload = extract_browser_data(page_url, force_refresh=False)
+            if browser_payload.get("kind") == "collection":
+                return jsonify({
+                    "ok": True,
+                    "kind": "collection",
+                    "collection": browser_payload.get("collection") or {},
+                })
+
+            parsed = dict(browser_payload.get("result") or {})
+            result = build_result_with_proxy_urls(parsed, request.url_root)
+            return jsonify({
+                "ok": True,
+                "kind": "single",
+                "result": result,
             })
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 500
@@ -322,6 +378,20 @@ def register_download_routes(app, deps):
         if len(urls) > 50:
             return jsonify({"ok": False, "error": "Jednorazowo możesz dodać maksymalnie 50 linków."}), 400
 
+        if len(urls) == 1:
+            try:
+                browser_payload = extract_browser_data(urls[0], force_refresh=False)
+                if browser_payload.get("kind") == "collection":
+                    return jsonify({
+                        "ok": True,
+                        "selection_required": True,
+                        "kind": "collection",
+                        "collection": browser_payload.get("collection") or {},
+                        "media_kind": media_kind,
+                    })
+            except Exception as exc:
+                return jsonify({"ok": False, "error": str(exc)}), 500
+
         ok, message = ensure_share_ready(auto_remount=True)
         if not ok:
             return jsonify({
@@ -335,7 +405,15 @@ def register_download_routes(app, deps):
 
         for page_url in urls:
             try:
-                result = extract_video_data(page_url, force_refresh=False)
+                browser_payload = extract_browser_data(page_url, force_refresh=False)
+                if browser_payload.get("kind") == "collection":
+                    failed_items.append({
+                        "url": page_url,
+                        "error": "Ten link prowadzi do kolekcji odcinków TVP VOD. Otwórz go osobno i wybierz odcinki do pobrania.",
+                    })
+                    continue
+
+                result = dict(browser_payload.get("result") or {})
                 sources = list(result.get("sources") or [])
                 if not sources:
                     failed_items.append({
@@ -391,12 +469,98 @@ def register_download_routes(app, deps):
 
         return jsonify({
             "ok": bool(queued_jobs),
+            "selection_required": False,
             "queued_count": len(queued_jobs),
             "live_queued_count": sum(1 for item in queued_jobs if item.get("is_live_capture")),
             "failed_count": len(failed_items),
             "queued_jobs": queued_jobs,
             "failed_items": failed_items,
             "remaining_urls_text": "\n".join(item["url"] for item in failed_items if item.get("url")),
+            "media_kind": media_kind,
+        }), (202 if queued_jobs else 400)
+
+    @app.route("/api/collection-downloads", methods=["POST"])
+    def api_collection_downloads():
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        if not request.is_json:
+            return jsonify({"ok": False, "error": "Wymagany JSON."}), 400
+
+        payload = request.get_json(silent=True) or {}
+        media_kind = normalize_storage_kind(payload.get("media_kind") or "video")
+        raw_episodes = payload.get("episodes")
+
+        try:
+            auto_dlna_collection_id = normalize_requested_auto_dlna_collection_id(payload.get("auto_dlna_collection_id"))
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+
+        if not isinstance(raw_episodes, list) or not raw_episodes:
+            return jsonify({"ok": False, "error": "Zaznacz co najmniej jeden odcinek do pobrania."}), 400
+
+        if len(raw_episodes) > 200:
+            return jsonify({"ok": False, "error": "Jednorazowo możesz dodać maksymalnie 200 odcinków."}), 400
+
+        ok, message = ensure_share_ready(auto_remount=True)
+        if not ok:
+            return jsonify({
+                "ok": False,
+                "error": "Udział sieciowy offline. %s" % message
+            }), 503
+
+        owner_username = get_current_username()
+        seen_urls = set()
+        queued_jobs = []
+        failed_items = []
+
+        for raw_entry in raw_episodes:
+            entry = dict(raw_entry or {})
+            page_url = str(entry.get("page_url") or "").strip()
+            if not is_valid_http_url(page_url):
+                failed_items.append({
+                    "url": page_url,
+                    "error": "Pominięto odcinek z nieprawidłowym adresem URL.",
+                })
+                continue
+
+            dedupe_key = page_url.casefold()
+            if dedupe_key in seen_urls:
+                continue
+            seen_urls.add(dedupe_key)
+
+            queue_title = str(entry.get("queue_title") or "").strip()
+            if not queue_title:
+                queue_title = build_collection_episode_title(entry)
+
+            try:
+                job = enqueue_collection_best_job(
+                    page_url=page_url,
+                    owner_username=owner_username,
+                    media_kind=media_kind,
+                    auto_dlna_collection_id=auto_dlna_collection_id,
+                    queue_title=queue_title,
+                )
+                queued_jobs.append({
+                    "job_id": job["job_id"],
+                    "url": page_url,
+                    "title": job.get("title") or "",
+                    "label": job.get("label") or "",
+                })
+            except Exception as exc:
+                failed_items.append({
+                    "url": page_url,
+                    "error": str(exc),
+                })
+
+        return jsonify({
+            "ok": bool(queued_jobs),
+            "error": "" if queued_jobs else str((failed_items[0] or {}).get("error") or "Nie udało się dodać wybranych odcinków do kolejki."),
+            "queued_count": len(queued_jobs),
+            "failed_count": len(failed_items),
+            "queued_jobs": queued_jobs,
+            "failed_items": failed_items,
             "media_kind": media_kind,
         }), (202 if queued_jobs else 400)
 

@@ -43,7 +43,6 @@
                 </div>
             </div>
         </form>
-
         {% if error %}
             <div class="error">{{ error }}</div>
         {% endif %}
@@ -53,6 +52,40 @@
         </p>
     {% endif %}
 </section>
+{% if logged_in %}
+<div id="indexDynamicBrowserHost"></div>
+{% endif %}
+
+{% if logged_in and collection_result %}
+<section class="page-card">
+    <h2 class="section-title">Wykryta kolekcja odcinków</h2>
+    <div class="info-grid">
+        <div class="info-label">Tytuł</div>
+        <div class="info-value">{{ collection_result.title }}</div>
+
+        <div class="info-label">Adres strony</div>
+        <div class="info-value">
+            <a class="link" href="{{ collection_result.page_url }}" target="_blank" rel="noopener">{{ collection_result.page_url }}</a>
+        </div>
+
+        <div class="info-label">Extractor</div>
+        <div class="info-value">{{ collection_result.extractor }}</div>
+
+        <div class="info-label">Sezony</div>
+        <div class="info-value">{{ collection_result.season_count }}</div>
+
+        <div class="info-label">Odcinki</div>
+        <div class="info-value">{{ collection_result.episode_count }}</div>
+    </div>
+</section>
+
+<section class="page-card">
+    <h2 class="section-title">Sezony i odcinki</h2>
+    <div id="collectionBrowserPanel" class="collection-browser-panel">
+        <div class="source-detail-empty">Ładowanie listy odcinków...</div>
+    </div>
+</section>
+{% endif %}
 
 {% if logged_in and result %}
 <section class="page-card">
@@ -107,7 +140,9 @@
 <script>
 window.pageBootstrapData = {
     hasResult: {{ 'true' if result else 'false' }},
-    result: {% if result %}{{ {"sources": result.sources, "page_url": result.page_url, "extractor": result.extractor, "is_live_stream": result.is_live_stream, "live_status": result.live_status, "live_status_label": result.live_status_label, "supports_live_from_start": result.supports_live_from_start}|tojson }}{% else %}{}{% endif %}
+    hasCollection: {{ 'true' if collection_result else 'false' }},
+    result: {% if result %}{{ {"sources": result.sources, "page_url": result.page_url, "extractor": result.extractor, "is_live_stream": result.is_live_stream, "live_status": result.live_status, "live_status_label": result.live_status_label, "supports_live_from_start": result.supports_live_from_start}|tojson }}{% else %}{}{% endif %},
+    collection: {% if collection_result %}{{ collection_result|tojson }}{% else %}{}{% endif %}
 };
 </script>
 <script src="{{ url_for('static', filename='js/pages/index.js') }}?v={{ asset_version }}"></script>

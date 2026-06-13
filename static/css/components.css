@@ -465,6 +465,87 @@
             padding: 18px;
             color: var(--muted);
         }
+        .collection-browser-panel {
+            display: grid;
+            gap: 16px;
+        }
+        .collection-browser-shell {
+            display: grid;
+            gap: 16px;
+        }
+        .collection-browser-toolbar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px;
+            align-items: start;
+        }
+        .collection-static-value {
+            display: flex;
+            align-items: center;
+            min-height: 46px;
+            padding: 11px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.025);
+            color: var(--text);
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .collection-media-toggle {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .collection-browser-summary {
+            display: grid;
+            gap: 4px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.45;
+        }
+        .collection-browser-actions {
+            gap: 10px;
+        }
+        .collection-episode-list {
+            display: grid;
+            gap: 10px;
+            max-height: 560px;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+        .collection-episode-row {
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr);
+            gap: 12px;
+            align-items: center;
+            padding: 12px 14px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.025);
+            cursor: pointer;
+            transition: border-color 0.18s ease, background 0.18s ease;
+        }
+        .collection-episode-row:hover {
+            border-color: rgba(97, 173, 255, 0.24);
+            background: rgba(97, 173, 255, 0.07);
+        }
+        .collection-episode-row input[type="checkbox"] {
+            margin: 0;
+        }
+        .collection-episode-main {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            min-width: 0;
+        }
+        .collection-episode-title {
+            min-width: 0;
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 1.45;
+            word-break: break-word;
+        }
         .quality-item,
         .job,
         .file-item {
@@ -1977,5 +2058,22 @@
             }
             .search-form-actions {
                 display: grid;
+            }
+            .collection-browser-toolbar {
+                grid-template-columns: 1fr;
+            }
+            .collection-media-toggle {
+                display: grid;
+                grid-template-columns: 1fr;
+            }
+            .collection-episode-row {
+                grid-template-columns: 1fr;
+                align-items: start;
+            }
+            .collection-episode-row input[type="checkbox"] {
+                margin-top: 2px;
+            }
+            .collection-episode-main {
+                align-items: flex-start;
             }
         }

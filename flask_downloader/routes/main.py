@@ -9,6 +9,7 @@ def register_main_routes(app, deps):
     is_valid_http_url = deps["is_valid_http_url"]
     extract_http_urls = deps["extract_http_urls"]
     extract_video_data = deps["extract_video_data"]
+    extract_browser_data = deps["extract_browser_data"]
     build_result_with_proxy_urls = deps["build_result_with_proxy_urls"]
     get_assignable_dlna_collections_for_current_user = deps["get_assignable_dlna_collections_for_current_user"]
     get_daily_download_dir = deps["get_daily_download_dir"]
@@ -35,6 +36,7 @@ def register_main_routes(app, deps):
     def index():
         error = None
         result = None
+        collection_result = None
         input_url = ""
         mount = get_mount_info(auto_remount=False)
 
@@ -54,11 +56,15 @@ def register_main_routes(app, deps):
             else:
                 try:
                     input_url = parsed_urls[0]
-                    parsed = extract_video_data(input_url, force_refresh=True)
-                    if not parsed["sources"]:
-                        error = "yt-dlp nie zwrócił żadnych formatów wideo dla tej strony."
+                    browser_payload = extract_browser_data(input_url, force_refresh=True)
+                    if browser_payload.get("kind") == "collection":
+                        collection_result = dict(browser_payload.get("collection") or {})
                     else:
-                        result = build_result_with_proxy_urls(parsed, request.url_root)
+                        parsed = dict(browser_payload.get("result") or {})
+                        if not parsed.get("sources"):
+                            error = "yt-dlp nie zwrócił żadnych formatów wideo dla tej strony."
+                        else:
+                            result = build_result_with_proxy_urls(parsed, request.url_root)
                 except Exception as exc:
                     error = "Błąd ekstrakcji:\\n%s" % exc
 
@@ -68,6 +74,7 @@ def register_main_routes(app, deps):
             INDEX_CONTENT_TEMPLATE,
             error=error,
             result=result,
+            collection_result=collection_result,
             input_url=input_url,
             quick_dlna_collections=get_assignable_dlna_collections_for_current_user(),
             mount=mount,

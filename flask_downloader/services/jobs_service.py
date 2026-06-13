@@ -181,6 +181,8 @@ class DownloadJobsService:
             "dlna_collection_id": "",
             "dlna_collection_name": "",
             "is_live_capture": bool(kwargs.get("is_live_capture")),
+            "auto_pick_best": bool(kwargs.get("auto_pick_best")),
+            "serial_download": bool(kwargs.get("serial_download")),
             "live_status": str(kwargs.get("live_status") or ""),
             "processing_stage": "",
         }
@@ -369,6 +371,8 @@ class DownloadJobsService:
             storage_kind = self._normalize_storage_kind(job.get("storage_kind") or "video")
             job["storage_kind"] = storage_kind
             job["is_live_capture"] = bool(job.get("is_live_capture"))
+            job["auto_pick_best"] = bool(job.get("auto_pick_best"))
+            job["serial_download"] = bool(job.get("serial_download"))
             job["live_status"] = str(job.get("live_status") or "")
             if job.get("status") == "completed":
                 job["progress_percent"] = 100.0
