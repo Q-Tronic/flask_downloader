@@ -149,6 +149,7 @@ from flask_downloader.utils import auth as auth_utils
 from flask_downloader.utils.formatting import build_natural_sort_key, format_duration, format_ts
 from flask_downloader.utils.live import create_sse_json_response
 from flask_downloader.utils.responses import build_stateful_json_response
+from flask_downloader.utils.ytdlp_hotfixes import apply_ytdlp_hotfixes
 
 APP_STARTED_AT_TS = time.time()
 
@@ -156,6 +157,7 @@ USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 )
+apply_ytdlp_hotfixes(yt_dlp, user_agent=USER_AGENT)
 
 CACHE_TTL = 300
 CACHE = {}
@@ -4587,13 +4589,20 @@ def download_worker(job_id):
             fmt.get("live_download_format") if is_live_capture else fmt.get("download_format") or format_id
         )
 
+        download_http_headers = {
+            "User-Agent": USER_AGENT,
+        }
+        fmt_http_headers = fmt.get("http_headers") or {}
+        if isinstance(fmt_http_headers, dict):
+            for key, value in fmt_http_headers.items():
+                if value:
+                    download_http_headers[str(key)] = str(value)
+
         ydl_download_opts = apply_ffmpeg_location({
             "quiet": True,
             "no_warnings": True,
             "nocheckcertificate": True,
-            "http_headers": {
-                "User-Agent": USER_AGENT,
-            },
+            "http_headers": download_http_headers,
             "format": selected_download_format,
             "outtmpl": target_path,
             "noplaylist": True,
