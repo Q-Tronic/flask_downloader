@@ -296,6 +296,8 @@ DOWNLOAD_JOBS = {}
 DOWNLOAD_LOCK = threading.Lock()
 JOB_CANCEL_EVENTS = {}
 JOB_STOP_REQUESTS = {}
+DOWNLOAD_RETRY_SCHEDULER_LOCK = threading.Lock()
+DOWNLOAD_RETRY_SCHEDULER_STARTED = False
 FFMPEG_INSTALL_LOCK = threading.Lock()
 FFMPEG_SCHEDULER_LOCK = threading.Lock()
 FFMPEG_SCHEDULER_STARTED = False
@@ -2129,6 +2131,10 @@ def normalize_saved_job_record(raw):
         "delete_after_cancel": bool(raw.get("delete_after_cancel")),
         "live_status": str(raw.get("live_status") or ""),
         "processing_stage": str(raw.get("processing_stage") or "").strip(),
+        "auto_retry_pending": bool(raw.get("auto_retry_pending")),
+        "auto_retry_at": None,
+        "auto_retry_attempts": 0,
+        "auto_retry_max_attempts": 3,
     }
 
     if job["status"] not in allowed_statuses:
@@ -2152,6 +2158,22 @@ def normalize_saved_job_record(raw):
             job[key] = float(value) if value not in (None, "", False) else None
         except Exception:
             job[key] = None
+
+    try:
+        value = raw.get("auto_retry_at")
+        job["auto_retry_at"] = float(value) if value not in (None, "", False) else None
+    except Exception:
+        job["auto_retry_at"] = None
+
+    for key in ("auto_retry_attempts", "auto_retry_max_attempts"):
+        try:
+            value = raw.get(key)
+            job[key] = int(value) if value not in (None, "", False) else 0
+        except Exception:
+            job[key] = 0
+
+    if job["auto_retry_max_attempts"] <= 0:
+        job["auto_retry_max_attempts"] = 3
 
     if job["created_at"] is None:
         job["created_at"] = now_ts
@@ -2199,6 +2221,10 @@ def serialize_job_for_storage(job):
         "delete_after_cancel": bool(job.get("delete_after_cancel")),
         "live_status": str(job.get("live_status") or ""),
         "processing_stage": str(job.get("processing_stage") or "").strip(),
+        "auto_retry_pending": bool(job.get("auto_retry_pending")),
+        "auto_retry_at": float(job.get("auto_retry_at")) if job.get("auto_retry_at") not in (None, "", False) else None,
+        "auto_retry_attempts": int(job.get("auto_retry_attempts") or 0),
+        "auto_retry_max_attempts": int(job.get("auto_retry_max_attempts") or 3),
     }
 
 
@@ -3489,6 +3515,35 @@ def start_yt_dlp_scheduler_once():
     return YTDLP_SERVICE.start_scheduler_once()
 
 
+def is_download_retry_scheduler_started():
+    return bool(DOWNLOAD_RETRY_SCHEDULER_STARTED)
+
+
+def set_download_retry_scheduler_started(value):
+    global DOWNLOAD_RETRY_SCHEDULER_STARTED
+    DOWNLOAD_RETRY_SCHEDULER_STARTED = bool(value)
+
+
+def download_retry_scheduler():
+    while True:
+        try:
+            retry_due_auto_jobs()
+            sleep_for = 1.0
+        except Exception:
+            sleep_for = 5.0
+        time.sleep(sleep_for)
+
+
+def start_download_retry_scheduler_once():
+    global DOWNLOAD_RETRY_SCHEDULER_STARTED
+    with DOWNLOAD_RETRY_SCHEDULER_LOCK:
+        if DOWNLOAD_RETRY_SCHEDULER_STARTED:
+            return
+        thread = threading.Thread(target=download_retry_scheduler, name="download-retry-scheduler", daemon=True)
+        thread.start()
+        DOWNLOAD_RETRY_SCHEDULER_STARTED = True
+
+
 def classify_yt_dlp_pip_progress(output_line):
     return YTDLP_SERVICE.classify_pip_progress(output_line)
 
@@ -4557,6 +4612,14 @@ def retry_job_download(job_id):
     return DOWNLOAD_JOBS_SERVICE.retry_job(job_id)
 
 
+def schedule_failed_job_retry(job_id, error_text):
+    return DOWNLOAD_JOBS_SERVICE.schedule_failed_retry(job_id, error_text)
+
+
+def retry_due_auto_jobs(now_ts=None):
+    return DOWNLOAD_JOBS_SERVICE.retry_due_auto_jobs(now_ts=now_ts)
+
+
 def clear_canceled_jobs(scope_username=""):
     return DOWNLOAD_JOBS_SERVICE.clear_canceled_jobs(scope_username=scope_username)
 
@@ -4586,6 +4649,7 @@ def download_worker(job_id):
     is_live_capture_requested = False
     progress_components = {}
     resume_target_path = ""
+    queued_total_bytes = None
 
     try:
         def normalize_download_pathlike(value):
@@ -4623,6 +4687,7 @@ def download_worker(job_id):
             is_live_capture_requested = bool(job.get("is_live_capture"))
             auto_pick_best = bool(job.get("auto_pick_best"))
             resume_target_path = str(job.get("filepath") or "").strip()
+            queued_total_bytes = int(job.get("total_bytes") or 0) or None
             if not resume_target_path:
                 resume_target_path = str(
                     resolve_download_path(
@@ -4712,7 +4777,7 @@ def download_worker(job_id):
             filepath=target_path,
             relative_path=get_relative_download_path(target_path, storage_kind, owner_username),
             downloaded_bytes=0,
-            total_bytes=None,
+            total_bytes=queued_total_bytes,
             progress_percent=0.0,
             error="",
             live_status=str(result.get("live_status") or ""),
@@ -4789,7 +4854,12 @@ def download_worker(job_id):
                     aggregate_downloaded += part_downloaded
 
             downloaded = aggregate_downloaded or current_downloaded or downloaded
-            total_bytes = aggregate_total if has_known_total and aggregate_total > 0 else None
+            if has_known_total and aggregate_total > 0:
+                total_bytes = aggregate_total
+            elif queued_total_bytes and queued_total_bytes > 0:
+                total_bytes = max(int(queued_total_bytes), int(downloaded or 0))
+            else:
+                total_bytes = None
 
             progress_percent = None
             if total_bytes and downloaded is not None:
@@ -5102,6 +5172,7 @@ def download_worker(job_id):
             processing_stage="",
             persist=True,
         )
+        schedule_failed_job_retry(job_id, str(exc))
 
     finally:
         cleanup_job_cancel_handle(job_id)

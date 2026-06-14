@@ -76,6 +76,24 @@ function escapeCollectionHtml(value) {
         .replaceAll("'", "&#039;");
 }
 
+function formatApproxBytes(bytes) {
+    if (bytes === null || bytes === undefined) {
+        return "";
+    }
+    const numeric = Number(bytes);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        return "";
+    }
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let value = numeric;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+    return value.toFixed(unitIndex === 0 ? 0 : 2) + " " + units[unitIndex];
+}
+
 function formatCollectionCount(count, nounOne, nounFew, nounMany) {
     const numericCount = Number(count || 0);
     if (numericCount === 1) {
@@ -484,9 +502,14 @@ async function queueCollectionEpisodes() {
 
         const queuedCount = Number(data.queued_count || 0);
         const failedCount = Number(data.failed_count || 0);
+        const queuedTotalBytes = Number(data.queued_total_bytes || 0);
         let message = queuedCount === 1
             ? "Dodano 1 odcinek do kolejki."
             : "Dodano " + queuedCount + " odcinków do kolejki.";
+        const totalSizeLabel = formatApproxBytes(queuedTotalBytes);
+        if (totalSizeLabel) {
+            message += " Szacowany rozmiar: " + totalSizeLabel + ".";
+        }
         if (failedCount > 0) {
             message += " " + failedCount + " pozycji pominięto.";
         }
@@ -557,10 +580,15 @@ async function runQuickDownload(mediaKind, triggerButton) {
         const queuedCount = Number(data.queued_count || 0);
         const liveQueuedCount = Number(data.live_queued_count || 0);
         const failedCount = Number(data.failed_count || 0);
+        const queuedTotalBytes = Number(data.queued_total_bytes || 0);
         const noun = mediaKind === "audio" ? "audio" : "wideo";
         let toastMessage = queuedCount === 1
             ? "Dodano 1 pobieranie " + noun + " do kolejki."
             : "Dodano " + queuedCount + " pobrań " + noun + " do kolejki.";
+        const totalSizeLabel = formatApproxBytes(queuedTotalBytes);
+        if (totalSizeLabel) {
+            toastMessage += " Szacowany rozmiar: " + totalSizeLabel + ".";
+        }
 
         if (liveQueuedCount > 0) {
             const liveNoun = liveQueuedCount === 1 ? "1 nagranie LIVE" : (liveQueuedCount >= 2 && liveQueuedCount <= 4 ? liveQueuedCount + " nagrania LIVE" : liveQueuedCount + " nagrań LIVE");

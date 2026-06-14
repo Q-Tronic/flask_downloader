@@ -35,6 +35,8 @@ class JobViewService:
 
 
 class DownloadJobsService:
+    AUTO_RETRY_DELAYS_429_SECONDS = (60, 180, 600)
+
     def __init__(
         self,
         *,
@@ -97,6 +99,63 @@ class DownloadJobsService:
         thread.start()
 
     @staticmethod
+    def _coerce_int(value, default=None):
+        try:
+            if value in (None, "", False):
+                return default
+            return int(value)
+        except Exception:
+            return default
+
+    @staticmethod
+    def _is_rate_limited_error(error_text):
+        lowered = str(error_text or "").casefold()
+        return "429" in lowered or "too many requests" in lowered
+
+    @classmethod
+    def _detect_auto_retry_delay_seconds(cls, error_text, next_attempt):
+        if not cls._is_rate_limited_error(error_text):
+            return None
+
+        attempt_index = max(0, int(next_attempt or 1) - 1)
+        if attempt_index >= len(cls.AUTO_RETRY_DELAYS_429_SECONDS):
+            return None
+        return int(cls.AUTO_RETRY_DELAYS_429_SECONDS[attempt_index])
+
+    @staticmethod
+    def _format_retry_countdown(seconds):
+        total_seconds = max(0, int(seconds or 0))
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        if hours > 0:
+            return "%02d:%02d:%02d" % (hours, minutes, secs)
+        return "%02d:%02d" % (minutes, secs)
+
+    def _clear_auto_retry_state_locked(self, job, *, reset_attempts=False):
+        if not isinstance(job, dict):
+            return
+        job["auto_retry_pending"] = False
+        job["auto_retry_at"] = None
+        if reset_attempts:
+            job["auto_retry_attempts"] = 0
+        max_attempts = self._coerce_int(
+            job.get("auto_retry_max_attempts"),
+            default=len(self.AUTO_RETRY_DELAYS_429_SECONDS),
+        )
+        job["auto_retry_max_attempts"] = max(1, int(max_attempts or len(self.AUTO_RETRY_DELAYS_429_SECONDS)))
+
+    def _get_auto_retry_remaining_seconds(self, job, now_ts=None):
+        if not isinstance(job, dict) or not bool(job.get("auto_retry_pending")):
+            return None
+        retry_at = job.get("auto_retry_at")
+        try:
+            retry_at = float(retry_at)
+        except Exception:
+            return None
+        current_ts = float(now_ts or time.time())
+        return max(0, int(round(retry_at - current_ts)))
+
+    @staticmethod
     def _job_has_retry_payload(job):
         if not job:
             return False
@@ -148,6 +207,7 @@ class DownloadJobsService:
         job_id = uuid.uuid4().hex
         cancel_event = threading.Event()
         now_ts = time.time()
+        estimated_total_bytes = self._coerce_int(kwargs.get("total_bytes"))
         owner_username = self._normalize_username(
             kwargs.get("owner_username") or self._get_current_username() or self._default_admin_username
         )
@@ -167,7 +227,7 @@ class DownloadJobsService:
             "filepath": "",
             "relative_path": "",
             "downloaded_bytes": 0,
-            "total_bytes": None,
+            "total_bytes": estimated_total_bytes if estimated_total_bytes and estimated_total_bytes > 0 else None,
             "progress_percent": 0.0,
             "error": "",
             "created_at": now_ts,
@@ -187,6 +247,10 @@ class DownloadJobsService:
             "delete_after_cancel": bool(kwargs.get("delete_after_cancel")),
             "live_status": str(kwargs.get("live_status") or ""),
             "processing_stage": "",
+            "auto_retry_pending": False,
+            "auto_retry_at": None,
+            "auto_retry_attempts": 0,
+            "auto_retry_max_attempts": len(self.AUTO_RETRY_DELAYS_429_SECONDS),
         }
 
         with self._jobs_lock:
@@ -283,6 +347,7 @@ class DownloadJobsService:
             job["processing_stage"] = ""
             job["delete_after_cancel"] = False
             job["force_parallel_start"] = False
+            self._clear_auto_retry_state_locked(job, reset_attempts=True)
             self._write_download_jobs_locked()
 
         self._start_download_thread(job_id)
@@ -314,13 +379,13 @@ class DownloadJobsService:
 
         return True, "Wymuszono dodatkowe pobieranie poza limitem 3 jednoczesnych zadań."
 
-    def retry_job(self, job_id):
+    def retry_job(self, job_id, *, automatic=False):
         with self._jobs_lock:
             job = self._jobs_store.get(job_id)
             if not job:
                 return False, "Nie znaleziono zadania.", None
 
-            if not self._can_access_owner(job.get("owner_username") or self._default_admin_username):
+            if not automatic and not self._can_access_owner(job.get("owner_username") or self._default_admin_username):
                 return False, "Nie masz dostępu do tego zadania.", None
 
             if str(job.get("status") or "") != "failed":
@@ -329,6 +394,7 @@ class DownloadJobsService:
             if not self._job_has_retry_payload(job):
                 return False, "To zadanie nie ma już kompletu danych potrzebnych do ponowienia.", None
 
+            preserved_total_bytes = self._coerce_int(job.get("total_bytes"))
             self._cancel_events_store[job_id] = threading.Event()
             self._stop_requests_store[job_id] = ""
             job["status"] = "queued"
@@ -337,7 +403,7 @@ class DownloadJobsService:
             job["finished_at"] = None
             job["started_at"] = None
             job["downloaded_bytes"] = 0
-            job["total_bytes"] = None
+            job["total_bytes"] = preserved_total_bytes if preserved_total_bytes and preserved_total_bytes > 0 else None
             job["progress_percent"] = 0.0
             job["filepath"] = ""
             job["relative_path"] = ""
@@ -347,6 +413,7 @@ class DownloadJobsService:
             job["processing_stage"] = ""
             job["delete_after_cancel"] = False
             job["force_parallel_start"] = False
+            self._clear_auto_retry_state_locked(job, reset_attempts=not automatic)
             if not str(job.get("planned_filename") or "").strip():
                 job["planned_filename"] = str(job.get("filename") or "").strip()
             self._write_download_jobs_locked()
@@ -354,6 +421,73 @@ class DownloadJobsService:
 
         self._start_download_thread(job_id)
         return True, "Ponowiono zadanie.", resumed_job
+
+    def schedule_failed_retry(self, job_id, error_text, now_ts=None):
+        current_ts = float(now_ts or time.time())
+        with self._jobs_lock:
+            job = self._jobs_store.get(job_id)
+            if not job:
+                return False
+
+            next_attempt = self._coerce_int(job.get("auto_retry_attempts"), default=0) + 1
+            max_attempts = self._coerce_int(
+                job.get("auto_retry_max_attempts"),
+                default=len(self.AUTO_RETRY_DELAYS_429_SECONDS),
+            )
+            max_attempts = max(1, int(max_attempts or len(self.AUTO_RETRY_DELAYS_429_SECONDS)))
+
+            delay_seconds = self._detect_auto_retry_delay_seconds(error_text, next_attempt)
+            if delay_seconds is None or next_attempt > max_attempts:
+                self._clear_auto_retry_state_locked(job, reset_attempts=False)
+                self._write_download_jobs_locked()
+                return False
+
+            job["auto_retry_pending"] = True
+            job["auto_retry_at"] = current_ts + int(delay_seconds)
+            job["auto_retry_attempts"] = int(next_attempt)
+            job["auto_retry_max_attempts"] = max_attempts
+            self._write_download_jobs_locked()
+            return True
+
+    def retry_due_auto_jobs(self, now_ts=None):
+        current_ts = float(now_ts or time.time())
+        due_job_ids = []
+
+        with self._jobs_lock:
+            changed = False
+            for job_id, job in list(self._jobs_store.items()):
+                if str(job.get("status") or "") != "failed":
+                    if bool(job.get("auto_retry_pending")):
+                        self._clear_auto_retry_state_locked(job, reset_attempts=False)
+                        changed = True
+                    continue
+
+                if not bool(job.get("auto_retry_pending")):
+                    continue
+
+                if not self._job_has_retry_payload(job):
+                    self._clear_auto_retry_state_locked(job, reset_attempts=False)
+                    changed = True
+                    continue
+
+                remaining_seconds = self._get_auto_retry_remaining_seconds(job, now_ts=current_ts)
+                if remaining_seconds is None:
+                    self._clear_auto_retry_state_locked(job, reset_attempts=False)
+                    changed = True
+                    continue
+
+                if remaining_seconds <= 0:
+                    due_job_ids.append(str(job_id))
+
+            if changed:
+                self._write_download_jobs_locked()
+
+        retried_job_ids = []
+        for due_job_id in due_job_ids:
+            ok, _, _ = self.retry_job(due_job_id, automatic=True)
+            if ok:
+                retried_job_ids.append(due_job_id)
+        return retried_job_ids
 
     def cleanup_job_cancel_handle(self, job_id):
         with self._jobs_lock:
@@ -386,6 +520,7 @@ class DownloadJobsService:
 
     def get_jobs_snapshot(self):
         self.purge_expired_jobs()
+        now_ts = time.time()
 
         with self._jobs_lock:
             jobs = [dict(job) for job in self._jobs_store.values()]
@@ -403,6 +538,17 @@ class DownloadJobsService:
             job["force_parallel_start"] = bool(job.get("force_parallel_start"))
             job["delete_after_cancel"] = bool(job.get("delete_after_cancel"))
             job["live_status"] = str(job.get("live_status") or "")
+            job["auto_retry_pending"] = bool(job.get("auto_retry_pending"))
+            try:
+                job["auto_retry_at"] = float(job.get("auto_retry_at")) if job.get("auto_retry_at") not in (None, "", False) else None
+            except Exception:
+                job["auto_retry_at"] = None
+            job["auto_retry_attempts"] = self._coerce_int(job.get("auto_retry_attempts"), default=0) or 0
+            job["auto_retry_max_attempts"] = max(
+                1,
+                self._coerce_int(job.get("auto_retry_max_attempts"), default=len(self.AUTO_RETRY_DELAYS_429_SECONDS))
+                or len(self.AUTO_RETRY_DELAYS_429_SECONDS),
+            )
             if job.get("status") == "completed":
                 job["progress_percent"] = 100.0
             elif job.get("status") == "canceled":
@@ -481,6 +627,23 @@ class DownloadJobsService:
                 and not bool(job.get("force_parallel_start"))
             )
             job["failure_hint"] = self._build_failure_hint(job)
+
+            if str(job.get("status") or "") == "failed" and bool(job.get("auto_retry_pending")):
+                remaining_seconds = self._get_auto_retry_remaining_seconds(job, now_ts=now_ts)
+                if remaining_seconds is not None:
+                    countdown_label = self._format_retry_countdown(remaining_seconds)
+                    job["status_label"] = "Auto retry za %s" % countdown_label
+                    job["auto_retry_countdown_seconds"] = remaining_seconds
+                    job["failure_hint"] = (
+                        "Źródło chwilowo ogranicza liczbę żądań. Automatyczna próba %d/%d za %s."
+                        % (
+                            int(job.get("auto_retry_attempts") or 0),
+                            int(job.get("auto_retry_max_attempts") or len(self.AUTO_RETRY_DELAYS_429_SECONDS)),
+                            countdown_label,
+                        )
+                    )
+                else:
+                    job["auto_retry_pending"] = False
 
         return jobs
 

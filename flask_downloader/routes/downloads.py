@@ -134,25 +134,38 @@ def register_download_routes(app, deps):
             auto_dlna_collection_id=auto_dlna_collection_id,
             is_live_capture=is_live_capture,
             live_status=str(result.get("live_status") or ""),
+            total_bytes=fmt.get("estimated_total_bytes"),
         )
         return job, duplicate_state
 
-    def enqueue_collection_best_job(*, page_url, owner_username, media_kind="video", auto_dlna_collection_id="", queue_title=""):
+    def enqueue_collection_best_job(*, page_url, owner_username, media_kind="video", auto_dlna_collection_id="", queue_title="", result=None, selected_source=None):
         normalized_media_kind = normalize_storage_kind(media_kind or "video")
-        title = str(queue_title or "").strip() or page_url
-        label = "Audio BEST" if normalized_media_kind == "audio" else "Wideo BEST"
+        effective_result = dict(result or {})
+        effective_source = dict(selected_source or {})
+        title = str(queue_title or "").strip() or str(effective_result.get("title") or "").strip() or page_url
+        label = str(effective_source.get("label") or "").strip() or ("Audio BEST" if normalized_media_kind == "audio" else "Wideo BEST")
+        planned_filename = ""
+        if effective_result and effective_source:
+            planned_filename = build_download_filename(
+                effective_result.get("download_title") or effective_result.get("title") or title,
+                effective_source,
+            )
         return create_job(
             page_url,
-            "",
+            str(effective_source.get("format_id") or ""),
             selection_signature={
                 "media_kind": normalized_media_kind,
+                "label": str(effective_source.get("label") or "").strip(),
+                "height": int(effective_source.get("height") or 0),
+                "width": int(effective_source.get("width") or 0),
+                "ext": str(effective_source.get("ext") or "").strip().lower(),
             },
             owner_username=owner_username,
             storage_kind=normalized_media_kind,
             title=title,
             label=label,
             filename="",
-            planned_filename="",
+            planned_filename=planned_filename,
             overwrite_existing=False,
             replace_paths=[],
             auto_dlna_collection_id=auto_dlna_collection_id,
@@ -160,6 +173,7 @@ def register_download_routes(app, deps):
             live_status="",
             auto_pick_best=True,
             serial_download=False,
+            total_bytes=effective_source.get("estimated_total_bytes"),
         )
 
     def build_collection_payload(collection, owner_username=""):
@@ -420,6 +434,7 @@ def register_download_routes(app, deps):
         owner_username = current_owner_username
         queued_jobs = []
         failed_items = []
+        queued_total_bytes = 0
 
         for page_url in urls:
             try:
@@ -479,6 +494,7 @@ def register_download_routes(app, deps):
                     "label": job.get("label") or "",
                     "is_live_capture": bool(job.get("is_live_capture")),
                 })
+                queued_total_bytes += int(job.get("total_bytes") or 0)
             except Exception as exc:
                 failed_items.append({
                     "url": page_url,
@@ -492,6 +508,7 @@ def register_download_routes(app, deps):
             "live_queued_count": sum(1 for item in queued_jobs if item.get("is_live_capture")),
             "failed_count": len(failed_items),
             "queued_jobs": queued_jobs,
+            "queued_total_bytes": queued_total_bytes,
             "failed_items": failed_items,
             "remaining_urls_text": "\n".join(item["url"] for item in failed_items if item.get("url")),
             "media_kind": media_kind,
@@ -532,6 +549,7 @@ def register_download_routes(app, deps):
         seen_urls = set()
         queued_jobs = []
         failed_items = []
+        queued_total_bytes = 0
         state_map = build_collection_download_state_map(raw_episodes, owner_username=owner_username)
 
         for raw_entry in raw_episodes:
@@ -571,12 +589,35 @@ def register_download_routes(app, deps):
                 queue_title = build_collection_episode_title(entry)
 
             try:
+                result = extract_video_data(page_url, force_refresh=False)
+                sources = list(result.get("sources") or [])
+                if not sources:
+                    failed_items.append({
+                        "url": page_url,
+                        "error": "yt-dlp nie zwrócił żadnych źródeł dla tego odcinka.",
+                    })
+                    continue
+
+                best_source = choose_best_source(
+                    sources,
+                    preferred_media_kind=media_kind,
+                    extractor_name=result.get("extractor") or "",
+                )
+                if not best_source:
+                    failed_items.append({
+                        "url": page_url,
+                        "error": "Nie udało się dobrać odpowiedniego źródła dla tego odcinka.",
+                    })
+                    continue
+
                 job = enqueue_collection_best_job(
                     page_url=page_url,
                     owner_username=owner_username,
                     media_kind=media_kind,
                     auto_dlna_collection_id=auto_dlna_collection_id,
                     queue_title=queue_title,
+                    result=result,
+                    selected_source=best_source,
                 )
                 queued_jobs.append({
                     "job_id": job["job_id"],
@@ -584,6 +625,7 @@ def register_download_routes(app, deps):
                     "title": job.get("title") or "",
                     "label": job.get("label") or "",
                 })
+                queued_total_bytes += int(job.get("total_bytes") or 0)
             except Exception as exc:
                 failed_items.append({
                     "url": page_url,
@@ -596,6 +638,7 @@ def register_download_routes(app, deps):
             "queued_count": len(queued_jobs),
             "failed_count": len(failed_items),
             "queued_jobs": queued_jobs,
+            "queued_total_bytes": queued_total_bytes,
             "failed_items": failed_items,
             "media_kind": media_kind,
         }), (202 if queued_jobs else 400)

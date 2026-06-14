@@ -256,6 +256,53 @@ class SourceMediaService:
         return str(fmt.get("format_id") or "Źródło")
 
     @staticmethod
+    def estimate_format_size_bytes(fmt, duration_seconds=0):
+        try:
+            direct_size = int(fmt.get("filesize") or 0)
+        except Exception:
+            direct_size = 0
+        if direct_size > 0:
+            return direct_size
+
+        try:
+            approx_size = int(fmt.get("filesize_approx") or 0)
+        except Exception:
+            approx_size = 0
+        if approx_size > 0:
+            return approx_size
+
+        try:
+            duration_value = float(duration_seconds or fmt.get("duration") or 0)
+        except Exception:
+            duration_value = 0.0
+
+        if duration_value <= 0:
+            return None
+
+        bitrate_candidates = (
+            fmt.get("tbr"),
+            fmt.get("abr"),
+            fmt.get("vbr"),
+        )
+        bitrate_kbps = 0.0
+        for candidate in bitrate_candidates:
+            try:
+                bitrate_kbps = float(candidate or 0)
+            except Exception:
+                bitrate_kbps = 0.0
+            if bitrate_kbps > 0:
+                break
+
+        if bitrate_kbps <= 0:
+            return None
+
+        try:
+            estimated_bytes = int((bitrate_kbps * 1000.0 / 8.0) * duration_value)
+        except Exception:
+            return None
+        return estimated_bytes if estimated_bytes > 0 else None
+
+    @staticmethod
     def _normalize_title_text(value):
         return " ".join(str(value or "").strip().split())
 
@@ -539,10 +586,30 @@ class SourceMediaService:
         grouped_video = {}
         audio_results = []
         seen_audio_keys = set()
+        duration_seconds = 0.0
+        try:
+            duration_seconds = float(info.get("duration") or 0) or 0.0
+        except Exception:
+            duration_seconds = 0.0
 
         formats = info.get("formats") or []
         if not formats and info.get("url"):
             formats = [info]
+
+        best_audio_size_estimate = None
+        audio_size_candidates = []
+        for fmt in formats:
+            vcodec = fmt.get("vcodec")
+            acodec = fmt.get("acodec")
+            if vcodec != "none" or acodec in (None, "", "none"):
+                continue
+
+            estimated_size = self.estimate_format_size_bytes(fmt, duration_seconds=duration_seconds)
+            if estimated_size:
+                audio_size_candidates.append(int(estimated_size))
+
+        if audio_size_candidates:
+            best_audio_size_estimate = max(audio_size_candidates)
 
         for fmt in formats:
             url = fmt.get("url")
@@ -564,6 +631,7 @@ class SourceMediaService:
                     continue
 
                 label = self.make_label(fmt)
+                estimated_size = self.estimate_format_size_bytes(fmt, duration_seconds=duration_seconds)
                 item = {
                     "format_id": format_id or "default",
                     "label": label,
@@ -582,6 +650,9 @@ class SourceMediaService:
                     "series": info.get("series") or "",
                     "source_title": info.get("title") or "",
                     "episode_code": self._extract_tvp_episode_code(info),
+                    "duration_seconds": duration_seconds or None,
+                    "filesize_bytes": int(estimated_size) if estimated_size else None,
+                    "estimated_total_bytes": int(estimated_size) if estimated_size else None,
                     "_format_candidates": [{
                         "format_id": format_id or "default",
                         "has_audio": acodec not in (None, "", "none"),
@@ -591,6 +662,10 @@ class SourceMediaService:
 
                 if not item["has_audio"]:
                     item["download_format"] = "%s+bestaudio/best" % (format_id or "bestvideo")
+                    merged_size_estimate = estimated_size
+                    if best_audio_size_estimate:
+                        merged_size_estimate = int((merged_size_estimate or 0) + best_audio_size_estimate)
+                    item["estimated_total_bytes"] = int(merged_size_estimate) if merged_size_estimate else None
 
                 group_key = (
                     item["media_kind"],
@@ -635,6 +710,7 @@ class SourceMediaService:
             if audio_key in seen_audio_keys:
                 continue
             seen_audio_keys.add(audio_key)
+            audio_size_estimate = self.estimate_format_size_bytes(fmt, duration_seconds=duration_seconds)
 
             audio_results.append({
                 "format_id": format_id or "bestaudio",
@@ -651,6 +727,9 @@ class SourceMediaService:
                 "live_download_format": self.build_live_download_format({"media_kind": "audio"}),
                 "merge_ext": (fmt.get("ext") or "m4a").lower(),
                 "bitrate_kbps": float((fmt.get("abr") or fmt.get("tbr") or 0) or 0),
+                "duration_seconds": duration_seconds or None,
+                "filesize_bytes": int(audio_size_estimate) if audio_size_estimate else None,
+                "estimated_total_bytes": int(audio_size_estimate) if audio_size_estimate else None,
             })
 
         def sort_key(item):

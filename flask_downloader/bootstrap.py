@@ -238,6 +238,8 @@ def register_application_routes(app, context):
 
 
 def start_background_schedulers(context):
+    if context.get("start_download_retry_scheduler_once"):
+        context["start_download_retry_scheduler_once"]()
     context["start_ffmpeg_scheduler_once"]()
     context["start_yt_dlp_scheduler_once"]()
     context["start_dlna_scheduler_once"]()
