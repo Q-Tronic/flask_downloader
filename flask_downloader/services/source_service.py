@@ -2,6 +2,7 @@ import os
 import re
 import time
 from urllib.parse import quote, urlparse
+from urllib.request import Request, urlopen
 
 
 class SourceMediaService:
@@ -9,6 +10,15 @@ class SourceMediaService:
     TVP_EPISODE_CODE_PATTERN = re.compile(r"(^|[,/_-])S(?P<season>\d{1,2})E(?P<episode>\d{1,4})(?=$|[,/_-])", re.IGNORECASE)
     EPISODE_NUMBER_PATTERN = re.compile(r"\bodcinek\s+(?P<episode>\d+)\b", re.IGNORECASE)
     COLLECTION_CACHE_PREFIX = "collection::"
+    DRM_MANIFEST_MARKERS = (
+        "skd://",
+        "sample-aes",
+        "<contentprotection",
+        "widevine",
+        "playready",
+        "fairplay",
+        "com.apple.streamingkeydelivery",
+    )
 
     def __init__(
         self,
@@ -218,6 +228,60 @@ class SourceMediaService:
 
         return "/".join(deduped) or "best"
 
+    @classmethod
+    def build_resilient_download_selectors(cls, item, extractor_name=""):
+        source = dict(item or {})
+        media_kind = str(source.get("media_kind") or "video").strip().lower()
+        source_extractor = str(extractor_name or source.get("extractor") or "").strip()
+        selectors = []
+        seen = set()
+
+        def add_selector(value):
+            selector = str(value or "").strip()
+            if not selector or selector in seen:
+                return
+            seen.add(selector)
+            selectors.append(selector)
+
+        preferred_selector = str(source.get("download_format") or source.get("format_id") or "").strip()
+        if media_kind == "audio":
+            add_selector(preferred_selector)
+            add_selector("bestaudio/best")
+            add_selector("best")
+            return selectors or ["bestaudio/best"]
+
+        try:
+            height = int(source.get("height") or 0)
+        except Exception:
+            height = 0
+
+        add_selector(preferred_selector)
+
+        if cls._is_tvp_vod_extractor(source_extractor):
+            if height > 0:
+                add_selector("best*[height<=%d]/best" % height)
+                add_selector("b[height<=%d]/best" % height)
+                add_selector("best[height<=%d]/best" % height)
+            add_selector("best")
+            return selectors or ["best"]
+
+        has_audio = bool(source.get("has_audio"))
+        if height > 0:
+            add_selector("best*[height<=%d]/best" % height)
+            add_selector("b[height<=%d]/best" % height)
+
+        if has_audio:
+            add_selector("best")
+            return selectors or ["best"]
+
+        if height > 0:
+            add_selector("bv*[height<=%d]+ba/b[height<=%d]/best" % (height, height))
+            add_selector("bestvideo*[height<=%d]+bestaudio/best[height<=%d]/best" % (height, height))
+        add_selector("bestvideo+bestaudio/best")
+        add_selector("bv*+ba/best")
+        add_selector("best")
+        return selectors or ["bestvideo+bestaudio/best", "best"]
+
     @staticmethod
     def build_selection_signature(item):
         return {
@@ -322,6 +386,83 @@ class SourceMediaService:
             return True
         format_note = str(fmt.get("format_note") or "").strip().lower()
         return "drm" in format_note
+
+    @classmethod
+    def _manifest_text_looks_drm_protected(cls, text):
+        lowered = str(text or "").casefold()
+        if not lowered:
+            return False
+        return any(marker in lowered for marker in cls.DRM_MANIFEST_MARKERS)
+
+    @classmethod
+    def _read_manifest_probe_text(cls, manifest_url, headers=None, timeout_seconds=8, max_bytes=65536):
+        normalized_url = cls._normalize_url_text(manifest_url)
+        if not cls.is_valid_http_url(normalized_url):
+            return ""
+
+        request_headers = {}
+        for key, value in dict(headers or {}).items():
+            header_name = str(key or "").strip()
+            header_value = str(value or "").strip()
+            if header_name and header_value:
+                request_headers[header_name] = header_value
+        request_headers.setdefault("User-Agent", "Mozilla/5.0")
+
+        request = Request(normalized_url, headers=request_headers)
+        with urlopen(request, timeout=timeout_seconds) as response:
+            raw_payload = response.read(max_bytes)
+        try:
+            return raw_payload.decode("utf-8", errors="ignore")
+        except Exception:
+            return str(raw_payload or "")
+
+    def is_manifest_drm_protected(self, fmt, extractor_name="", probe_cache=None):
+        if not isinstance(fmt, dict):
+            return False
+
+        protocol = str(fmt.get("protocol") or "").strip().lower()
+        if "m3u8" not in protocol and "mpd" not in protocol and "dash" not in protocol:
+            return False
+
+        manifest_urls = []
+        for candidate in (fmt.get("url"), fmt.get("manifest_url")):
+            normalized_candidate = self._normalize_url_text(candidate)
+            if normalized_candidate and normalized_candidate not in manifest_urls:
+                manifest_urls.append(normalized_candidate)
+        if not manifest_urls:
+            return False
+
+        is_tvp_source = self._is_tvp_vod_extractor(extractor_name) or any(
+            self._is_tvp_vod_url(candidate_url) for candidate_url in manifest_urls
+        )
+        if not is_tvp_source and "m3u8" not in protocol:
+            for candidate_url in manifest_urls:
+                cache_key = "%s|%s" % (str(extractor_name or "").strip().lower(), candidate_url)
+                if isinstance(probe_cache, dict):
+                    probe_cache[cache_key] = False
+            return False
+
+        for candidate_url in manifest_urls:
+            cache_key = "%s|%s" % (str(extractor_name or "").strip().lower(), candidate_url)
+            if isinstance(probe_cache, dict) and cache_key in probe_cache:
+                if bool(probe_cache.get(cache_key)):
+                    return True
+                continue
+
+            try:
+                manifest_text = self._read_manifest_probe_text(
+                    candidate_url,
+                    headers=fmt.get("http_headers") or {},
+                )
+            except Exception:
+                manifest_text = ""
+
+            is_blocked = self._manifest_text_looks_drm_protected(manifest_text)
+            if isinstance(probe_cache, dict):
+                probe_cache[cache_key] = bool(is_blocked)
+            if is_blocked:
+                return True
+        return False
 
     @staticmethod
     def _normalize_title_text(value):
@@ -607,6 +748,8 @@ class SourceMediaService:
         grouped_video = {}
         audio_results = []
         seen_audio_keys = set()
+        manifest_probe_cache = {}
+        drm_blocked_format_count = 0
         duration_seconds = 0.0
         try:
             duration_seconds = float(info.get("duration") or 0) or 0.0
@@ -636,8 +779,6 @@ class SourceMediaService:
             url = fmt.get("url")
             if not url:
                 continue
-            if self.is_drm_protected_format(fmt):
-                continue
 
             vcodec = fmt.get("vcodec")
             acodec = fmt.get("acodec")
@@ -645,6 +786,14 @@ class SourceMediaService:
             protocol = str(fmt.get("protocol") or "").lower()
             format_id = str(fmt.get("format_id") or "")
             media_kind = "audio" if vcodec == "none" and acodec != "none" else "video"
+
+            if self.is_drm_protected_format(fmt) or self.is_manifest_drm_protected(
+                fmt,
+                extractor_name=extractor_name,
+                probe_cache=manifest_probe_cache,
+            ):
+                drm_blocked_format_count += 1
+                continue
 
             if media_kind == "video" and vcodec == "none":
                 continue
@@ -769,6 +918,12 @@ class SourceMediaService:
 
         results = video_results + audio_results
         results.sort(key=sort_key)
+        info["_drm_protected"] = bool(not results and drm_blocked_format_count > 0)
+        info["_blocked_reason"] = (
+            "Ten materiał jest chroniony DRM po stronie źródła i nie może zostać pobrany przez aplikację."
+            if info["_drm_protected"]
+            else ""
+        )
         return results
 
     def _build_flat_playlist_ydl_opts(self):
@@ -949,6 +1104,8 @@ class SourceMediaService:
             "page_url": info.get("webpage_url") or page_url,
             "extractor": extractor_name,
             "sources": self.filter_formats(info),
+            "drm_protected": bool(info.get("_drm_protected")),
+            "blocked_reason": str(info.get("_blocked_reason") or ""),
             **live_state,
         }
 
@@ -978,6 +1135,8 @@ class SourceMediaService:
             "download_title": result.get("download_title") or result["title"],
             "page_url": result["page_url"],
             "extractor": result["extractor"],
+            "drm_protected": bool(result.get("drm_protected")),
+            "blocked_reason": str(result.get("blocked_reason") or ""),
             "is_live_stream": bool(result.get("is_live_stream")),
             "live_status": str(result.get("live_status") or ""),
             "live_status_label": str(result.get("live_status_label") or ""),

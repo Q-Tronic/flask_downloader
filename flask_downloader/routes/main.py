@@ -67,7 +67,7 @@ def register_main_routes(app, deps):
                     else:
                         parsed = dict(browser_payload.get("result") or {})
                         if not parsed.get("sources"):
-                            error = "yt-dlp nie zwrócił żadnych formatów wideo dla tej strony."
+                            error = parsed.get("blocked_reason") or "yt-dlp nie zwrócił żadnych formatów wideo dla tej strony."
                         else:
                             result = build_result_with_proxy_urls(parsed, request.url_root)
                 except Exception as exc:

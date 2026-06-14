@@ -4878,6 +4878,11 @@ def download_worker(job_id):
         ensure_download_dir_ready(storage_kind, owner_username)
 
         result = extract_video_data(page_url, force_refresh=True)
+        if not result.get("sources"):
+            raise RuntimeError(
+                str(result.get("blocked_reason") or "").strip()
+                or "Nie znaleziono żadnych działających formatów dla tego źródła."
+            )
         fmt = find_format(result, format_id)
         if not fmt:
             fmt = SOURCE_MEDIA_SERVICE.find_format_by_signature(
@@ -5131,9 +5136,17 @@ def download_worker(job_id):
                 relative_path=relative_path or get_relative_download_path(target_path, storage_kind, owner_username),
             )
 
-        selected_download_format = str(
-            fmt.get("live_download_format") if is_live_capture else fmt.get("download_format") or format_id
-        )
+        def is_retryable_format_selection_error(exc):
+            lowered = str(exc or "").casefold()
+            return any(
+                marker in lowered
+                for marker in (
+                    "drm protected",
+                    "requested format is not available",
+                    "this format is drm protected",
+                    "format is not available",
+                )
+            )
 
         download_http_headers = {
             "User-Agent": USER_AGENT,
@@ -5144,43 +5157,93 @@ def download_worker(job_id):
                 if value:
                     download_http_headers[str(key)] = str(value)
 
-        enable_check_formats = not SOURCE_MEDIA_SERVICE._is_tvp_vod_extractor(
-            result.get("extractor") or fmt.get("extractor") or ""
+        def build_download_opts(selected_format):
+            ydl_download_opts = apply_ffmpeg_location({
+                "quiet": True,
+                "no_warnings": True,
+                "nocheckcertificate": True,
+                "http_headers": download_http_headers,
+                "format": str(selected_format or ""),
+                "outtmpl": target_path,
+                "noplaylist": True,
+                "overwrites": False,
+                "continuedl": True,
+                "progress_hooks": [progress_hook],
+                "postprocessor_hooks": [postprocessor_hook],
+            })
+
+            if is_live_capture:
+                ydl_download_opts["live_from_start"] = True
+
+            if storage_kind == "video" and not fmt.get("has_audio"):
+                merge_ext = str(fmt.get("merge_ext") or fmt.get("ext") or "mp4").lower()
+                if merge_ext in ("mp4", "mkv", "webm"):
+                    ydl_download_opts["merge_output_format"] = merge_ext
+            elif storage_kind == "audio":
+                ydl_download_opts["postprocessors"] = [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": AUDIO_DOWNLOAD_TARGET_CODEC,
+                    "preferredquality": AUDIO_DOWNLOAD_TARGET_QUALITY,
+                }]
+
+            return ydl_download_opts
+
+        selected_download_format = str(
+            fmt.get("live_download_format") if is_live_capture else fmt.get("download_format") or format_id
         )
+        extractor_name = result.get("extractor") or fmt.get("extractor") or ""
+        candidate_download_selectors = SOURCE_MEDIA_SERVICE.build_resilient_download_selectors(
+            fmt,
+            extractor_name=extractor_name,
+        )
+        if selected_download_format:
+            candidate_download_selectors = [
+                selector
+                for selector in candidate_download_selectors
+                if str(selector or "").strip() != selected_download_format
+            ]
+            candidate_download_selectors.insert(0, selected_download_format)
 
-        ydl_download_opts = apply_ffmpeg_location({
-            "quiet": True,
-            "no_warnings": True,
-            "nocheckcertificate": True,
-            "http_headers": download_http_headers,
-            "format": selected_download_format,
-            "outtmpl": target_path,
-            "noplaylist": True,
-            "overwrites": False,
-            "continuedl": True,
-            "progress_hooks": [progress_hook],
-            "postprocessor_hooks": [postprocessor_hook],
-        })
+        attempted_download_selectors = []
+        last_download_exception = None
+        download_info = None
 
-        if enable_check_formats:
-            ydl_download_opts["check_formats"] = True
+        for attempt_index, candidate_selector in enumerate(candidate_download_selectors):
+            attempted_download_selectors.append(str(candidate_selector or ""))
+            if attempt_index > 0:
+                cleanup_download_artifacts(seen_paths)
+                progress_components.clear()
+                downloaded = 0
+                total_bytes = queued_total_bytes if queued_total_bytes and queued_total_bytes > 0 else None
+                update_job(
+                    job_id,
+                    status="downloading",
+                    status_label="Dobieranie działającego wariantu",
+                    downloaded_bytes=0,
+                    total_bytes=total_bytes,
+                    progress_percent=0.0,
+                    error="",
+                    processing_stage="",
+                    persist=True,
+                )
 
-        if is_live_capture:
-            ydl_download_opts["live_from_start"] = True
+            try:
+                with yt_dlp.YoutubeDL(build_download_opts(candidate_selector)) as ydl:
+                    download_info = ydl.extract_info(page_url, download=True)
+                selected_download_format = str(candidate_selector or "")
+                break
+            except Exception as exc:
+                last_download_exception = exc
+                if not is_retryable_format_selection_error(exc):
+                    raise
 
-        if storage_kind == "video" and not fmt.get("has_audio"):
-            merge_ext = str(fmt.get("merge_ext") or fmt.get("ext") or "mp4").lower()
-            if merge_ext in ("mp4", "mkv", "webm"):
-                ydl_download_opts["merge_output_format"] = merge_ext
-        elif storage_kind == "audio":
-            ydl_download_opts["postprocessors"] = [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": AUDIO_DOWNLOAD_TARGET_CODEC,
-                "preferredquality": AUDIO_DOWNLOAD_TARGET_QUALITY,
-            }]
-
-        with yt_dlp.YoutubeDL(ydl_download_opts) as ydl:
-            download_info = ydl.extract_info(page_url, download=True)
+        if download_info is None:
+            if last_download_exception is not None:
+                raise last_download_exception
+            raise RuntimeError(
+                "Nie udało się dobrać działającego wariantu pobierania. Próbowano: %s"
+                % ", ".join(item for item in attempted_download_selectors if item)
+            )
 
         download_info = normalize_info(download_info)
 

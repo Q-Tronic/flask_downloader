@@ -289,6 +289,14 @@ def register_download_routes(app, deps):
                 })
 
             parsed = dict(browser_payload.get("result") or {})
+            if not parsed.get("sources"):
+                blocked_reason = str(parsed.get("blocked_reason") or "").strip()
+                if blocked_reason:
+                    return jsonify({
+                        "ok": False,
+                        "error": blocked_reason,
+                        "drm_protected": bool(parsed.get("drm_protected")),
+                    }), 409
             result = build_result_with_proxy_urls(parsed, request.url_root)
             return jsonify({
                 "ok": True,
@@ -352,6 +360,13 @@ def register_download_routes(app, deps):
         try:
             owner_username = get_current_username()
             result = extract_video_data(page_url, force_refresh=False)
+            if not result.get("sources"):
+                blocked_reason = str(result.get("blocked_reason") or "").strip()
+                return jsonify({
+                    "ok": False,
+                    "error": blocked_reason or "Nie znaleziono żadnych działających formatów dla tego źródła.",
+                    "drm_protected": bool(result.get("drm_protected")),
+                }), 409 if blocked_reason else 404
             fmt = find_format(result, format_id)
             if not fmt:
                 return jsonify({"ok": False, "error": "Nie znaleziono wskazanego formatu."}), 404
