@@ -37,6 +37,8 @@ def register_download_routes(app, deps):
     mark_job_cancel_requested = deps["mark_job_cancel_requested"]
     mark_job_pause_requested = deps["mark_job_pause_requested"]
     mark_job_force_start_requested = deps["mark_job_force_start_requested"]
+    adjust_job_queue_priority = deps["adjust_job_queue_priority"]
+    move_job_queue_order = deps["move_job_queue_order"]
     resume_job_download = deps["resume_job_download"]
     retry_job_download = deps["retry_job_download"]
     clear_canceled_jobs = deps["clear_canceled_jobs"]
@@ -668,6 +670,44 @@ def register_download_routes(app, deps):
             return jsonify({"ok": False, "error": message}), status_code
 
         return jsonify({"ok": True, "message": message})
+
+    @app.route("/api/jobs/<job_id>/priority", methods=["POST"])
+    def api_adjust_job_priority(job_id):
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        payload = request.get_json(silent=True) or {}
+        delta = payload.get("delta")
+        ok, message, job = adjust_job_queue_priority(job_id, delta)
+        if not ok:
+            status_code = 404 if "Nie znaleziono zadania" in message else 403 if "Nie masz dostępu" in message else 409
+            return jsonify({"ok": False, "error": message}), status_code
+
+        return jsonify({
+            "ok": True,
+            "message": message,
+            "job_id": str((job or {}).get("job_id") or ""),
+        })
+
+    @app.route("/api/jobs/<job_id>/move", methods=["POST"])
+    def api_move_job(job_id):
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        payload = request.get_json(silent=True) or {}
+        direction = str(payload.get("direction") or "").strip().lower()
+        ok, message, job = move_job_queue_order(job_id, direction)
+        if not ok:
+            status_code = 404 if "Nie znaleziono zadania" in message else 403 if "Nie masz dostępu" in message else 409
+            return jsonify({"ok": False, "error": message}), status_code
+
+        return jsonify({
+            "ok": True,
+            "message": message,
+            "job_id": str((job or {}).get("job_id") or ""),
+        })
 
     @app.route("/api/jobs/<job_id>/pause", methods=["POST"])
     def api_pause_job(job_id):

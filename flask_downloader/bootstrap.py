@@ -76,6 +76,8 @@ def register_application_routes(app, context):
         "mark_job_cancel_requested": context["mark_job_cancel_requested"],
         "mark_job_pause_requested": context["mark_job_pause_requested"],
         "mark_job_force_start_requested": context["mark_job_force_start_requested"],
+        "adjust_job_queue_priority": context["adjust_job_queue_priority"],
+        "move_job_queue_order": context["move_job_queue_order"],
         "resume_job_download": context["resume_job_download"],
         "retry_job_download": context["retry_job_download"],
         "clear_canceled_jobs": context["clear_canceled_jobs"],

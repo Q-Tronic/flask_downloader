@@ -2118,6 +2118,8 @@ def normalize_saved_job_record(raw):
         "created_at": now_ts,
         "started_at": None,
         "finished_at": None,
+        "queue_priority": 0,
+        "queue_order": now_ts,
         "overwrite_existing": bool(raw.get("overwrite_existing")),
         "replace_paths": [str(path) for path in (raw.get("replace_paths") or []) if path],
         "auto_dlna_collection_id": str(raw.get("auto_dlna_collection_id") or "").strip(),
@@ -2158,6 +2160,18 @@ def normalize_saved_job_record(raw):
             job[key] = float(value) if value not in (None, "", False) else None
         except Exception:
             job[key] = None
+
+    try:
+        value = raw.get("queue_priority")
+        job["queue_priority"] = int(value) if value not in (None, "", False) else 0
+    except Exception:
+        job["queue_priority"] = 0
+
+    try:
+        value = raw.get("queue_order")
+        job["queue_order"] = float(value) if value not in (None, "", False) else float(job["created_at"] or now_ts)
+    except Exception:
+        job["queue_order"] = float(job["created_at"] or now_ts)
 
     try:
         value = raw.get("auto_retry_at")
@@ -2208,6 +2222,8 @@ def serialize_job_for_storage(job):
         "created_at": float(job.get("created_at") or 0.0),
         "started_at": float(job.get("started_at")) if job.get("started_at") not in (None, "", False) else None,
         "finished_at": float(job.get("finished_at")) if job.get("finished_at") not in (None, "", False) else None,
+        "queue_priority": int(job.get("queue_priority") or 0),
+        "queue_order": float(job.get("queue_order") or job.get("created_at") or 0.0),
         "overwrite_existing": bool(job.get("overwrite_existing")),
         "replace_paths": [str(path) for path in (job.get("replace_paths") or []) if path],
         "auto_dlna_collection_id": str(job.get("auto_dlna_collection_id") or "").strip(),
@@ -4475,6 +4491,30 @@ def get_job_stop_action(job_id):
         return str(JOB_STOP_REQUESTS.get(job_id) or "").strip().lower()
 
 
+def normalize_job_queue_priority(value):
+    try:
+        priority = int(value or 0)
+    except Exception:
+        priority = 0
+    return max(-1, min(2, priority))
+
+
+def normalize_job_queue_order(value, fallback=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return float(fallback or 0.0)
+
+
+def build_job_queue_sort_key(job):
+    return (
+        -normalize_job_queue_priority((job or {}).get("queue_priority")),
+        normalize_job_queue_order((job or {}).get("queue_order"), fallback=float((job or {}).get("created_at") or 0.0)),
+        float((job or {}).get("created_at") or 0.0),
+        str((job or {}).get("job_id") or ""),
+    )
+
+
 def get_user_download_slot_snapshot(owner_username, *, include_job_id=None):
     owner = normalize_username(owner_username or DEFAULT_ADMIN_USERNAME)
 
@@ -4495,12 +4535,7 @@ def get_user_download_slot_snapshot(owner_username, *, include_job_id=None):
             and not bool(job.get("is_live_capture"))
         ]
 
-    same_owner_jobs.sort(
-        key=lambda item: (
-            float(item.get("created_at") or 0.0),
-            str(item.get("job_id") or ""),
-        )
-    )
+    same_owner_jobs.sort(key=build_job_queue_sort_key)
 
     active_job_ids = [
         str(job.get("job_id") or "")
@@ -4602,6 +4637,14 @@ def mark_job_pause_requested(job_id):
 
 def mark_job_force_start_requested(job_id):
     return DOWNLOAD_JOBS_SERVICE.mark_job_force_start_requested(job_id)
+
+
+def adjust_job_queue_priority(job_id, delta):
+    return DOWNLOAD_JOBS_SERVICE.adjust_job_queue_priority(job_id, delta)
+
+
+def move_job_queue_order(job_id, direction):
+    return DOWNLOAD_JOBS_SERVICE.move_job_queue_order(job_id, direction)
 
 
 def resume_job_download(job_id):

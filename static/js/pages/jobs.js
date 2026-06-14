@@ -109,6 +109,48 @@ async function forceStartJob(jobId) {
     }
 }
 
+async function adjustJobPriority(jobId, delta) {
+    try {
+        const response = await fetch("/api/jobs/" + encodeURIComponent(jobId) + "/priority", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({delta: delta}),
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            showToast(data.error || "Nie udało się zmienić priorytetu zadania.", "error");
+            return;
+        }
+
+        showToast(data.message || "Zmieniono priorytet zadania.", "success");
+        refreshData();
+    } catch (err) {
+        showToast("Błąd zmiany priorytetu zadania: " + err, "error");
+    }
+}
+
+async function moveJob(jobId, direction) {
+    try {
+        const response = await fetch("/api/jobs/" + encodeURIComponent(jobId) + "/move", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({direction: direction}),
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            showToast(data.error || "Nie udało się zmienić kolejności zadania.", "error");
+            return;
+        }
+
+        showToast(data.message || "Zmieniono kolejność zadania.", "success");
+        refreshData();
+    } catch (err) {
+        showToast("Błąd zmiany kolejności zadania: " + err, "error");
+    }
+}
+
 async function pauseJob(jobId) {
     if (!confirm("Wstrzymać to pobieranie i zachować dane do późniejszego wznowienia?")) {
         return;
@@ -321,6 +363,13 @@ function renderJobs(jobs, adminLoggedIn) {
             return !job.is_live_capture;
         }
         return true;
+    }).slice().sort(function(left, right) {
+        const leftQueuePosition = Number((left && left.queue_position) || 0);
+        const rightQueuePosition = Number((right && right.queue_position) || 0);
+        if (leftQueuePosition > 0 && rightQueuePosition > 0) {
+            return leftQueuePosition - rightQueuePosition;
+        }
+        return 0;
     });
 
     if (!filteredJobs.length) {
@@ -364,6 +413,11 @@ function renderJobs(jobs, adminLoggedIn) {
         const ownerHtml = adminLoggedIn
             ? '<div class="row"><div class="label">Właściciel</div><div class="value">' + escapeHtml(job.owner_username || "-") + '</div></div>'
             : '';
+        const queueInfoHtml = job.queue_position
+            ? '<div class="row"><div class="label">Kolejka</div><div class="value">Pozycja ' + escapeHtml(String(job.queue_position)) + ' z ' + escapeHtml(String(job.queue_total || 0)) + ' • Priorytet: ' + escapeHtml(job.queue_priority_label || "Normalny") + '</div></div>'
+            : ((job.can_priority_up || job.can_priority_down)
+                ? '<div class="row"><div class="label">Priorytet</div><div class="value">' + escapeHtml(job.queue_priority_label || "Normalny") + '</div></div>'
+                : '');
 
         let actionButtons = "";
 
@@ -373,6 +427,22 @@ function renderJobs(jobs, adminLoggedIn) {
 
         if (job.can_force_start) {
             actionButtons += '<button type="button" class="btn btn-download js-force-start-job" data-job-id="' + escapeHtml(job.job_id) + '">Wymuś pobieranie</button>';
+        }
+
+        if (job.can_priority_down) {
+            actionButtons += '<button type="button" class="btn btn-secondary js-priority-down-job" data-job-id="' + escapeHtml(job.job_id) + '">Priorytet -</button>';
+        }
+
+        if (job.can_priority_up) {
+            actionButtons += '<button type="button" class="btn btn-secondary js-priority-up-job" data-job-id="' + escapeHtml(job.job_id) + '">Priorytet +</button>';
+        }
+
+        if (job.can_move_up) {
+            actionButtons += '<button type="button" class="btn btn-secondary js-move-up-job" data-job-id="' + escapeHtml(job.job_id) + '">Wyżej</button>';
+        }
+
+        if (job.can_move_down) {
+            actionButtons += '<button type="button" class="btn btn-secondary js-move-down-job" data-job-id="' + escapeHtml(job.job_id) + '">Niżej</button>';
         }
 
         if (job.can_resume) {
@@ -420,6 +490,7 @@ function renderJobs(jobs, adminLoggedIn) {
                     <div class="label">Źródło</div>
                     <div class="value">${escapeHtml(job.page_url || "-")}</div>
                 </div>
+                ${queueInfoHtml}
                 ${ownerHtml}
                 ${fileHtml}
                 ${errorHtml}
@@ -498,6 +569,46 @@ async function handleJobsClick(event) {
         const jobId = forceStartBtn.dataset.jobId || "";
         if (jobId) {
             await forceStartJob(jobId);
+        }
+        return;
+    }
+
+    const priorityDownBtn = event.target.closest(".js-priority-down-job");
+    if (priorityDownBtn) {
+        event.preventDefault();
+        const jobId = priorityDownBtn.dataset.jobId || "";
+        if (jobId) {
+            await adjustJobPriority(jobId, -1);
+        }
+        return;
+    }
+
+    const priorityUpBtn = event.target.closest(".js-priority-up-job");
+    if (priorityUpBtn) {
+        event.preventDefault();
+        const jobId = priorityUpBtn.dataset.jobId || "";
+        if (jobId) {
+            await adjustJobPriority(jobId, 1);
+        }
+        return;
+    }
+
+    const moveUpBtn = event.target.closest(".js-move-up-job");
+    if (moveUpBtn) {
+        event.preventDefault();
+        const jobId = moveUpBtn.dataset.jobId || "";
+        if (jobId) {
+            await moveJob(jobId, "up");
+        }
+        return;
+    }
+
+    const moveDownBtn = event.target.closest(".js-move-down-job");
+    if (moveDownBtn) {
+        event.preventDefault();
+        const jobId = moveDownBtn.dataset.jobId || "";
+        if (jobId) {
+            await moveJob(jobId, "down");
         }
         return;
     }

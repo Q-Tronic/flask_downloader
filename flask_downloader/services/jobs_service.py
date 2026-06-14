@@ -36,6 +36,14 @@ class JobViewService:
 
 class DownloadJobsService:
     AUTO_RETRY_DELAYS_429_SECONDS = (60, 180, 600)
+    MIN_QUEUE_PRIORITY = -1
+    MAX_QUEUE_PRIORITY = 2
+    QUEUE_PRIORITY_LABELS = {
+        -1: "Niski",
+        0: "Normalny",
+        1: "Wysoki",
+        2: "Pilny",
+    }
 
     def __init__(
         self,
@@ -155,6 +163,59 @@ class DownloadJobsService:
         current_ts = float(now_ts or time.time())
         return max(0, int(round(retry_at - current_ts)))
 
+    @classmethod
+    def _normalize_queue_priority(cls, value):
+        try:
+            priority = int(value or 0)
+        except Exception:
+            priority = 0
+        return max(cls.MIN_QUEUE_PRIORITY, min(cls.MAX_QUEUE_PRIORITY, priority))
+
+    @staticmethod
+    def _normalize_queue_order(value, *, fallback):
+        try:
+            normalized = float(value)
+        except Exception:
+            normalized = float(fallback)
+        return normalized
+
+    @classmethod
+    def _get_queue_priority_label(cls, value):
+        return str(cls.QUEUE_PRIORITY_LABELS.get(cls._normalize_queue_priority(value), "Normalny"))
+
+    @classmethod
+    def _queue_sort_key(cls, job):
+        priority = cls._normalize_queue_priority((job or {}).get("queue_priority"))
+        queue_order = cls._normalize_queue_order(
+            (job or {}).get("queue_order"),
+            fallback=float((job or {}).get("created_at") or 0.0),
+        )
+        created_at = float((job or {}).get("created_at") or 0.0)
+        return (
+            -priority,
+            queue_order,
+            created_at,
+            str((job or {}).get("job_id") or ""),
+        )
+
+    def _get_owner_manual_queue_locked(self, owner_username):
+        owner = self._normalize_username(owner_username or self._default_admin_username)
+        queue_jobs = [
+            job
+            for job in self._jobs_store.values()
+            if self._normalize_username(job.get("owner_username") or self._default_admin_username) == owner
+            and str(job.get("status") or "") in ("queued", "paused")
+            and not bool(job.get("is_live_capture"))
+        ]
+        queue_jobs.sort(key=self._queue_sort_key)
+        return queue_jobs
+
+    @classmethod
+    def _job_can_be_reordered(cls, job):
+        if not isinstance(job, dict):
+            return False
+        return str(job.get("status") or "") in ("queued", "paused") and not bool(job.get("is_live_capture"))
+
     @staticmethod
     def _job_has_retry_payload(job):
         if not job:
@@ -233,6 +294,8 @@ class DownloadJobsService:
             "created_at": now_ts,
             "started_at": None,
             "finished_at": None,
+            "queue_priority": self._normalize_queue_priority(kwargs.get("queue_priority")),
+            "queue_order": self._normalize_queue_order(kwargs.get("queue_order"), fallback=now_ts),
             "planned_filename": str(kwargs.get("planned_filename") or ""),
             "overwrite_existing": bool(kwargs.get("overwrite_existing")),
             "replace_paths": [str(path) for path in (kwargs.get("replace_paths") or []) if path],
@@ -489,6 +552,84 @@ class DownloadJobsService:
                 retried_job_ids.append(due_job_id)
         return retried_job_ids
 
+    def adjust_job_queue_priority(self, job_id, delta):
+        with self._jobs_lock:
+            job = self._jobs_store.get(job_id)
+            if not job:
+                return False, "Nie znaleziono zadania.", None
+
+            if not self._can_access_owner(job.get("owner_username") or self._default_admin_username):
+                return False, "Nie masz dostępu do tego zadania.", None
+
+            if not self._job_can_be_reordered(job):
+                return False, "Priorytet można zmieniać tylko dla zwykłych zadań w kolejce lub wstrzymanych.", None
+
+            current_priority = self._normalize_queue_priority(job.get("queue_priority"))
+            next_priority = self._normalize_queue_priority(current_priority + int(delta or 0))
+            if next_priority == current_priority:
+                return False, "To zadanie ma już skrajny poziom priorytetu.", None
+
+            job["queue_priority"] = next_priority
+            self._write_download_jobs_locked()
+            return True, "Zmieniono priorytet zadania na %s." % self._get_queue_priority_label(next_priority).lower(), dict(job)
+
+    def move_job_queue_order(self, job_id, direction):
+        normalized_direction = str(direction or "").strip().lower()
+        if normalized_direction not in {"up", "down", "top", "bottom"}:
+            return False, "Nieprawidłowy kierunek zmiany kolejności.", None
+
+        with self._jobs_lock:
+            job = self._jobs_store.get(job_id)
+            if not job:
+                return False, "Nie znaleziono zadania.", None
+
+            if not self._can_access_owner(job.get("owner_username") or self._default_admin_username):
+                return False, "Nie masz dostępu do tego zadania.", None
+
+            if not self._job_can_be_reordered(job):
+                return False, "Kolejność można zmieniać tylko dla zwykłych zadań w kolejce lub wstrzymanych.", None
+
+            current_priority = self._normalize_queue_priority(job.get("queue_priority"))
+            owner_queue = [
+                item for item in self._get_owner_manual_queue_locked(job.get("owner_username") or self._default_admin_username)
+                if self._normalize_queue_priority(item.get("queue_priority")) == current_priority
+            ]
+            ordered_ids = [str(item.get("job_id") or "") for item in owner_queue]
+            if str(job_id) not in ordered_ids:
+                return False, "Nie udało się ustalić pozycji tego zadania w kolejce.", None
+
+            current_index = ordered_ids.index(str(job_id))
+            if normalized_direction == "up":
+                if current_index <= 0:
+                    return False, "To zadanie jest już najwyżej w swoim priorytecie.", None
+                target_index = current_index - 1
+            elif normalized_direction == "down":
+                if current_index >= len(owner_queue) - 1:
+                    return False, "To zadanie jest już najniżej w swoim priorytecie.", None
+                target_index = current_index + 1
+            elif normalized_direction == "top":
+                if current_index <= 0:
+                    return False, "To zadanie jest już najwyżej w swoim priorytecie.", None
+                target_index = 0
+            else:
+                if current_index >= len(owner_queue) - 1:
+                    return False, "To zadanie jest już najniżej w swoim priorytecie.", None
+                target_index = len(owner_queue) - 1
+
+            moved_job = owner_queue.pop(current_index)
+            owner_queue.insert(target_index, moved_job)
+
+            base_order = min(
+                self._normalize_queue_order(item.get("queue_order"), fallback=float(item.get("created_at") or 0.0))
+                for item in owner_queue
+            ) if owner_queue else float(job.get("created_at") or time.time())
+
+            for offset, item in enumerate(owner_queue):
+                item["queue_order"] = float(base_order + offset)
+
+            self._write_download_jobs_locked()
+            return True, "Zmieniono kolejność zadania.", dict(job)
+
     def cleanup_job_cancel_handle(self, job_id):
         with self._jobs_lock:
             if job_id in self._cancel_events_store:
@@ -525,6 +666,36 @@ class DownloadJobsService:
         with self._jobs_lock:
             jobs = [dict(job) for job in self._jobs_store.values()]
 
+        queue_positions_by_job_id = {}
+        queue_neighbors_by_job_id = {}
+        queue_priority_buckets_by_job_id = {}
+        owner_queue_jobs = {}
+        for job in jobs:
+            if not self._job_can_be_reordered(job):
+                continue
+            owner = self._normalize_username(job.get("owner_username") or self._default_admin_username)
+            owner_queue_jobs.setdefault(owner, []).append(job)
+
+        for owner, owner_jobs in owner_queue_jobs.items():
+            owner_jobs.sort(key=self._queue_sort_key)
+            for index, item in enumerate(owner_jobs):
+                queue_positions_by_job_id[str(item.get("job_id") or "")] = {
+                    "position": index + 1,
+                    "total": len(owner_jobs),
+                }
+
+            priority_groups = {}
+            for item in owner_jobs:
+                priority_groups.setdefault(self._normalize_queue_priority(item.get("queue_priority")), []).append(item)
+
+            for group_jobs in priority_groups.values():
+                for index, item in enumerate(group_jobs):
+                    queue_neighbors_by_job_id[str(item.get("job_id") or "")] = {
+                        "can_up": index > 0,
+                        "can_down": index < len(group_jobs) - 1,
+                    }
+                    queue_priority_buckets_by_job_id[str(item.get("job_id") or "")] = len(group_jobs)
+
         jobs.sort(key=lambda item: item.get("created_at") or 0, reverse=True)
 
         for job in jobs:
@@ -549,6 +720,9 @@ class DownloadJobsService:
                 self._coerce_int(job.get("auto_retry_max_attempts"), default=len(self.AUTO_RETRY_DELAYS_429_SECONDS))
                 or len(self.AUTO_RETRY_DELAYS_429_SECONDS),
             )
+            job["queue_priority"] = self._normalize_queue_priority(job.get("queue_priority"))
+            job["queue_order"] = self._normalize_queue_order(job.get("queue_order"), fallback=float(job.get("created_at") or 0.0))
+            job["queue_priority_label"] = self._get_queue_priority_label(job.get("queue_priority"))
             if job.get("status") == "completed":
                 job["progress_percent"] = 100.0
             elif job.get("status") == "canceled":
@@ -626,6 +800,15 @@ class DownloadJobsService:
                 and not bool(job.get("is_live_capture"))
                 and not bool(job.get("force_parallel_start"))
             )
+            queue_position_data = queue_positions_by_job_id.get(str(job.get("job_id") or "")) or {}
+            queue_neighbor_data = queue_neighbors_by_job_id.get(str(job.get("job_id") or "")) or {}
+            job["queue_position"] = int(queue_position_data.get("position") or 0)
+            job["queue_total"] = int(queue_position_data.get("total") or 0)
+            job["queue_priority_group_size"] = int(queue_priority_buckets_by_job_id.get(str(job.get("job_id") or "")) or 0)
+            job["can_priority_up"] = self._job_can_be_reordered(job) and self._can_access_owner(owner_username) and job["queue_priority"] < self.MAX_QUEUE_PRIORITY
+            job["can_priority_down"] = self._job_can_be_reordered(job) and self._can_access_owner(owner_username) and job["queue_priority"] > self.MIN_QUEUE_PRIORITY
+            job["can_move_up"] = self._job_can_be_reordered(job) and self._can_access_owner(owner_username) and bool(queue_neighbor_data.get("can_up"))
+            job["can_move_down"] = self._job_can_be_reordered(job) and self._can_access_owner(owner_username) and bool(queue_neighbor_data.get("can_down"))
             job["failure_hint"] = self._build_failure_hint(job)
 
             if str(job.get("status") or "") == "failed" and bool(job.get("auto_retry_pending")):
