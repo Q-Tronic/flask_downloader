@@ -11,6 +11,7 @@ def register_settings_routes(app, deps):
     SETTINGS_CONTENT_TEMPLATE = deps["SETTINGS_CONTENT_TEMPLATE"]
     get_settings_page_state = deps["get_settings_page_state"]
     save_app_config = deps["save_app_config"]
+    save_download_retry_config = deps["save_download_retry_config"]
     build_updated_storage_config = deps["build_updated_storage_config"]
     get_storage_config_snapshot = deps["get_storage_config_snapshot"]
     build_storage_network_signature = deps["build_storage_network_signature"]
@@ -68,6 +69,14 @@ def register_settings_routes(app, deps):
             network_updates=network_updates,
         )
         return storage_config, password, keep_existing_password
+
+    def build_download_retry_form_payload(form):
+        field_source = form or request.form
+        return {
+            "enabled": parse_boolean_flag(field_source.get("download_auto_retry_enabled"), default=False),
+            "max_attempts": field_source.get("download_auto_retry_max_attempts"),
+            "delays_seconds": field_source.get("download_auto_retry_delays"),
+        }
 
     def is_network_configured(storage_config):
         network = dict((storage_config or {}).get("network") or {})
@@ -214,6 +223,38 @@ def register_settings_routes(app, deps):
                     "message": message,
                     "kind": "success",
                     "state": get_settings_page_state(include_user_rows=True),
+                })
+            set_ui_flash(message, "success")
+        except Exception as exc:
+            if wants_json_response():
+                return jsonify({
+                    "ok": False,
+                    "error": str(exc),
+                    "kind": "error",
+                    "state": get_settings_page_state(include_user_rows=True),
+                }), 400
+            set_ui_flash(str(exc), "error")
+
+        return redirect(url_for("settings_page"))
+
+    @app.route("/settings/download-retry", methods=["POST"])
+    def settings_download_retry():
+        if not is_admin_authenticated():
+            if wants_json_response():
+                return require_admin_json()
+            set_ui_flash("Zaloguj się jako administrator, aby zmieniać auto retry 429.", "error")
+            return redirect(url_for("index"))
+
+        try:
+            retry_config = save_download_retry_config(build_download_retry_form_payload(request.form))
+            message = "Zapisano ustawienia auto retry 429."
+            if wants_json_response():
+                return jsonify({
+                    "ok": True,
+                    "message": message,
+                    "kind": "success",
+                    "state": get_settings_page_state(include_user_rows=True),
+                    "download_retry": retry_config,
                 })
             set_ui_flash(message, "success")
         except Exception as exc:

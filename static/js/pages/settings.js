@@ -462,6 +462,12 @@
         setText("settingsTodayDownloadDirValue", todayDownloadDir || "");
         setText("settingsTodayAudioDownloadDirValue", todayAudioDownloadDir || "");
         setText("settingsRetentionDaysValue", String(config.job_retention_days || "") + " dni");
+        const downloadRetry = config.download_retry || {};
+        const retryEnabled = !!downloadRetry.enabled;
+        const retryDelays = Array.isArray(downloadRetry.delays_seconds) ? downloadRetry.delays_seconds : [];
+        setPill("settingsDownloadRetryStatusPill", retryEnabled ? "success" : "muted", retryEnabled ? "Włączone" : "Wyłączone");
+        setText("settingsDownloadRetryMaxAttemptsValue", downloadRetry.max_attempts || "");
+        setText("settingsDownloadRetryDelaysValue", retryDelays.length ? (retryDelays.join(", ") + " s") : "-");
 
         applyStorageSummary(config, mount || {});
 
@@ -469,6 +475,7 @@
         const local = storage.local || {};
         const network = storage.network || {};
         const configFormDirty = isProtectedFormDirty("settingsConfigForm");
+        const downloadRetryFormDirty = isProtectedFormDirty("settingsDownloadRetryForm");
         latestSettingsState = latestSettingsState || {};
         latestSettingsState.config = config;
         latestSettingsState.mount = mount || {};
@@ -495,6 +502,15 @@
                 networkPassword.value = "";
             }
             lastValidatedNetworkSnapshot = mount && mount.network_last_test_ok ? buildNetworkFormSnapshot() : "";
+        }
+
+        if (!downloadRetryFormDirty) {
+            const retryEnabledInput = document.getElementById("downloadAutoRetryEnabled");
+            if (retryEnabledInput) {
+                retryEnabledInput.checked = retryEnabled;
+            }
+            setValue("downloadAutoRetryMaxAttempts", downloadRetry.max_attempts || "");
+            setValue("downloadAutoRetryDelays", retryDelays.join(","));
         }
 
         toggleNetworkManagedFields(network.mode || "managed_smb");

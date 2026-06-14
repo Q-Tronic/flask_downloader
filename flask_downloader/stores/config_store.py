@@ -15,6 +15,7 @@ def load_app_config(
     normalize_app_update_state,
     normalize_dlna_update_state,
     normalize_dlna_config,
+    normalize_download_retry_config,
 ):
     data = default_factory()
 
@@ -37,6 +38,7 @@ def load_app_config(
             data["app_update_state"] = normalize_app_update_state(raw.get("app_update_state", data["app_update_state"]))
             data["dlna_update_state"] = normalize_dlna_update_state(raw.get("dlna_update_state", data["dlna_update_state"]))
             data["dlna"] = normalize_dlna_config(raw.get("dlna", data["dlna"]))
+            data["download_retry"] = normalize_download_retry_config(raw.get("download_retry", data["download_retry"]))
     except Exception:
         data = default_factory()
 

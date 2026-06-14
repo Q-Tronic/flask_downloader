@@ -189,6 +189,9 @@ APP_REPO_BRANCH = CONFIG_REPO_BRANCH
 
 MOUNT_RETRY_COOLDOWN = 15
 DEFAULT_COMPLETED_JOB_RETENTION_DAYS = 3
+DEFAULT_DOWNLOAD_AUTO_RETRY_ENABLED = True
+DEFAULT_DOWNLOAD_AUTO_RETRY_MAX_ATTEMPTS = 3
+DEFAULT_DOWNLOAD_AUTO_RETRY_DELAYS_SECONDS = (60, 180, 600)
 MIN_VALID_FILE_SIZE_BYTES = 1024 * 1024
 YTDLP_CHECK_HOUR = 4
 YTDLP_PIP_PACKAGE_SPEC = "yt-dlp[default]"
@@ -1109,6 +1112,7 @@ def default_app_config():
         "storage": default_storage_config(),
         "user_storage_layout_version": USER_STORAGE_LAYOUT_VERSION,
         "job_retention_days": DEFAULT_COMPLETED_JOB_RETENTION_DAYS,
+        "download_retry": default_download_retry_config(),
         "yt_dlp_update_state": {
             "latest_version": "",
             "checked_at": 0.0,
@@ -1177,6 +1181,109 @@ def normalize_retention_days(value):
         raise ValueError("Liczba dni retencji musi mieścić się w zakresie 1-365.")
 
     return days
+
+
+def normalize_boolean_config_flag(value, default=False):
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on", "tak"):
+        return True
+    if text in ("0", "false", "no", "off", "nie"):
+        return False
+    return bool(default)
+
+
+def default_download_retry_config():
+    return {
+        "enabled": DEFAULT_DOWNLOAD_AUTO_RETRY_ENABLED,
+        "max_attempts": DEFAULT_DOWNLOAD_AUTO_RETRY_MAX_ATTEMPTS,
+        "delays_seconds": [int(value) for value in DEFAULT_DOWNLOAD_AUTO_RETRY_DELAYS_SECONDS],
+    }
+
+
+def normalize_download_retry_max_attempts(value, *, fallback=None):
+    default_value = int(
+        fallback
+        if fallback not in (None, "", False)
+        else DEFAULT_DOWNLOAD_AUTO_RETRY_MAX_ATTEMPTS
+    )
+    try:
+        attempts = int(str(value or "").strip())
+    except Exception as exc:
+        raise ValueError("Limit auto retry 429 musi być liczbą całkowitą.") from exc
+
+    if attempts < 1 or attempts > 10:
+        raise ValueError("Limit auto retry 429 musi mieścić się w zakresie 1-10.")
+
+    return attempts if attempts > 0 else default_value
+
+
+def normalize_download_retry_delays_seconds(value, *, fallback=None, strict=False):
+    fallback_values = list(fallback or DEFAULT_DOWNLOAD_AUTO_RETRY_DELAYS_SECONDS)
+    normalized_values = []
+
+    if isinstance(value, str):
+        raw_items = [item for item in re.split(r"[\s,;|]+", value.strip()) if item]
+    elif isinstance(value, (list, tuple)):
+        raw_items = list(value)
+    else:
+        raw_items = []
+
+    for raw_item in raw_items:
+        try:
+            delay_value = int(str(raw_item or "").strip())
+        except Exception:
+            if strict:
+                raise ValueError("Opóźnienia auto retry 429 muszą być listą sekund, np. 60,180,600.")
+            continue
+        if delay_value < 5 or delay_value > 86400:
+            if strict:
+                raise ValueError("Każde opóźnienie auto retry 429 musi mieścić się w zakresie 5-86400 sekund.")
+            continue
+        normalized_values.append(delay_value)
+
+    if not normalized_values:
+        if strict:
+            raise ValueError("Podaj przynajmniej jedno opóźnienie auto retry 429, np. 60,180,600.")
+        normalized_values = [int(item) for item in fallback_values]
+
+    return normalized_values[:10]
+
+
+def normalize_download_retry_config(value, *, strict=False):
+    defaults = default_download_retry_config()
+    if not isinstance(value, dict):
+        return defaults
+
+    normalized = dict(defaults)
+    normalized["enabled"] = normalize_boolean_config_flag(value.get("enabled"), default=defaults["enabled"])
+
+    try:
+        normalized["delays_seconds"] = normalize_download_retry_delays_seconds(
+            value.get("delays_seconds"),
+            fallback=defaults["delays_seconds"],
+            strict=strict,
+        )
+    except ValueError:
+        if strict:
+            raise
+        normalized["delays_seconds"] = list(defaults["delays_seconds"])
+
+    try:
+        max_attempts = normalize_download_retry_max_attempts(
+            value.get("max_attempts", defaults["max_attempts"]),
+            fallback=defaults["max_attempts"],
+        )
+    except ValueError:
+        if strict:
+            raise
+        max_attempts = int(defaults["max_attempts"])
+
+    normalized["max_attempts"] = max(1, min(len(normalized["delays_seconds"]), int(max_attempts)))
+    return normalized
 
 
 def normalize_yt_dlp_update_state(value):
@@ -1326,6 +1433,7 @@ def load_app_config():
         normalize_app_update_state,
         normalize_dlna_update_state,
         normalize_dlna_config,
+        normalize_download_retry_config,
     )
     return hydrate_storage_paths(loaded)
 
@@ -1636,6 +1744,11 @@ def remove_network_storage_config(storage_config=None, *, remove_credentials=Fal
 def get_config_snapshot():
     with APP_CONFIG_LOCK:
         return copy.deepcopy(APP_CONFIG)
+
+
+def get_download_retry_config_snapshot():
+    with APP_CONFIG_LOCK:
+        return normalize_download_retry_config(copy.deepcopy(APP_CONFIG.get("download_retry")))
 
 
 def get_dlna_config_snapshot():
@@ -2136,7 +2249,7 @@ def normalize_saved_job_record(raw):
         "auto_retry_pending": bool(raw.get("auto_retry_pending")),
         "auto_retry_at": None,
         "auto_retry_attempts": 0,
-        "auto_retry_max_attempts": 3,
+        "auto_retry_max_attempts": DEFAULT_DOWNLOAD_AUTO_RETRY_MAX_ATTEMPTS,
     }
 
     if job["status"] not in allowed_statuses:
@@ -2187,7 +2300,7 @@ def normalize_saved_job_record(raw):
             job[key] = 0
 
     if job["auto_retry_max_attempts"] <= 0:
-        job["auto_retry_max_attempts"] = 3
+        job["auto_retry_max_attempts"] = DEFAULT_DOWNLOAD_AUTO_RETRY_MAX_ATTEMPTS
 
     if job["created_at"] is None:
         job["created_at"] = now_ts
@@ -2240,7 +2353,7 @@ def serialize_job_for_storage(job):
         "auto_retry_pending": bool(job.get("auto_retry_pending")),
         "auto_retry_at": float(job.get("auto_retry_at")) if job.get("auto_retry_at") not in (None, "", False) else None,
         "auto_retry_attempts": int(job.get("auto_retry_attempts") or 0),
-        "auto_retry_max_attempts": int(job.get("auto_retry_max_attempts") or 3),
+        "auto_retry_max_attempts": int(job.get("auto_retry_max_attempts") or DEFAULT_DOWNLOAD_AUTO_RETRY_MAX_ATTEMPTS),
     }
 
 
@@ -3341,6 +3454,14 @@ def save_ffmpeg_update_state(latest_version, latest_build_id, checked_at, check_
             "check_error": check_error,
         })
         write_app_config_locked()
+
+
+def save_download_retry_config(download_retry):
+    normalized = normalize_download_retry_config(download_retry, strict=True)
+    with APP_CONFIG_LOCK:
+        APP_CONFIG["download_retry"] = normalized
+        write_app_config_locked()
+    return copy.deepcopy(normalized)
 
 
 def read_ffmpeg_update_state():
@@ -5027,6 +5148,7 @@ def download_worker(job_id):
             "quiet": True,
             "no_warnings": True,
             "nocheckcertificate": True,
+            "check_formats": True,
             "http_headers": download_http_headers,
             "format": selected_download_format,
             "outtmpl": target_path,
@@ -5289,6 +5411,7 @@ DOWNLOAD_JOBS_SERVICE = DownloadJobsService(
     get_current_username=get_current_username,
     is_admin_authenticated=is_admin_authenticated,
     get_completed_job_retention_seconds=get_completed_job_retention_seconds,
+    get_download_retry_config=get_download_retry_config_snapshot,
     write_download_jobs_locked=write_download_jobs_locked,
     download_worker=download_worker,
     can_access_owner=can_access_owner,
@@ -5638,6 +5761,7 @@ def normalize_imported_app_config(raw):
     payload["download_root"] = normalize_download_root(raw.get("download_root", payload["download_root"]))
     payload["audio_download_root"] = normalize_audio_download_root(raw.get("audio_download_root", payload["audio_download_root"]))
     payload["job_retention_days"] = normalize_retention_days(raw.get("job_retention_days", payload["job_retention_days"]))
+    payload["download_retry"] = normalize_download_retry_config(raw.get("download_retry", payload["download_retry"]))
     payload["yt_dlp_update_state"] = normalize_yt_dlp_update_state(raw.get("yt_dlp_update_state", payload["yt_dlp_update_state"]))
     payload["ffmpeg_update_state"] = normalize_ffmpeg_update_state(raw.get("ffmpeg_update_state", payload["ffmpeg_update_state"]))
     payload["dlna_update_state"] = normalize_dlna_update_state(raw.get("dlna_update_state", payload["dlna_update_state"]))

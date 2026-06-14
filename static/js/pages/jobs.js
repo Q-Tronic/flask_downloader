@@ -390,6 +390,9 @@ function renderJobs(jobs, adminLoggedIn) {
         const forcedBadge = String(job.status || "") === "queued" && !!job.force_parallel_start
             ? '<span class="badge" style="margin-left:8px;">WYMUSZONE</span>'
             : "";
+        const autoRetryBadge = job.auto_retry_badge_label
+            ? '<span class="badge" style="margin-left:8px;">' + escapeHtml(job.auto_retry_badge_label) + '</span>'
+            : "";
         const width = isProcessing
             ? 38
             : job.progress_percent === null || job.progress_percent === undefined
@@ -467,7 +470,7 @@ function renderJobs(jobs, adminLoggedIn) {
             <div class="job ${status}">
                 <div class="row">
                     <div class="label">Status</div>
-                    <div class="value"><span class="status ${statusClass}">${escapeHtml(job.status_label)}</span>${liveBadge}${pausedBadge}${forcedBadge}</div>
+                    <div class="value"><span class="status ${statusClass}">${escapeHtml(job.status_label)}</span>${liveBadge}${pausedBadge}${forcedBadge}${autoRetryBadge}</div>
                 </div>
                 <div class="row">
                     <div class="label">Tytuł</div>

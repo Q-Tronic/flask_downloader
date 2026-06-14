@@ -1280,6 +1280,11 @@ config_payload = load_example_json(config_example_path, {
     "download_root": os.path.join(user_root, "admin", "video"),
     "audio_download_root": os.path.join(user_root, "admin", "audio"),
     "job_retention_days": 3,
+    "download_retry": {
+        "enabled": True,
+        "max_attempts": 3,
+        "delays_seconds": [60, 180, 600],
+    },
     "yt_dlp_update_state": {"latest_version": "", "checked_at": 0.0, "check_error": ""},
     "ffmpeg_update_state": {"latest_version": "", "latest_build_id": "", "checked_at": 0.0, "check_error": ""},
     "dlna_update_state": {"latest_version": "", "checked_at": 0.0, "check_error": ""},

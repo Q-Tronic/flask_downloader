@@ -132,6 +132,13 @@
     "status": "",
     "detail": "Po uruchomieniu aktualizacji zobaczysz tutaj kolejne etapy pracy."
 } %}
+{% set download_retry = config.download_retry if config is defined and config.download_retry is defined else {
+    "enabled": true,
+    "max_attempts": 3,
+    "delays_seconds": [60, 180, 600]
+} %}
+{% set download_retry_status_kind = "success" if download_retry.enabled else "muted" %}
+{% set download_retry_status_label = "Włączone" if download_retry.enabled else "Wyłączone" %}
 <section class="page-card">
     <div class="page-title-row">
         <h1 class="page-title">Konfiguracja</h1>
@@ -432,6 +439,50 @@
 
     <section class="settings-panel" data-settings-panel="downloads" hidden>
         <div class="settings-panel-stack">
+            <div class="stack-card update-card">
+                <div class="card-heading">
+                    <div class="card-title">Auto retry 429</div>
+                    <div class="card-subtitle">
+                        Gdy źródło chwilowo zwróci <code>HTTP 429</code>, panel może sam zaplanować kolejne próby i oznaczyć takie zadanie badge'em <code>AUTO RETRY 429</code>.
+                    </div>
+                </div>
+
+                <div class="service-status-row">
+                    <span id="settingsDownloadRetryStatusPill" class="service-status-pill {{ download_retry_status_kind }}">{{ download_retry_status_label }}</span>
+                    <div class="small">Dotyczy wyłącznie błędów limitu żądań 429, a nie wszystkich niepowodzeń pobierania.</div>
+                </div>
+
+                <div class="settings-overview-grid">
+                    <div class="overview-tile">
+                        <span>Limit prób</span>
+                        <strong id="settingsDownloadRetryMaxAttemptsValue">{{ download_retry.max_attempts }}</strong>
+                    </div>
+                    <div class="overview-tile">
+                        <span>Opóźnienia</span>
+                        <strong id="settingsDownloadRetryDelaysValue">{{ download_retry.delays_seconds|join(", ") }} s</strong>
+                    </div>
+                </div>
+
+                <form id="settingsDownloadRetryForm" method="post" action="/settings/download-retry" class="auth-form" data-settings-async="true" data-protect-state="true">
+                    <label class="checkbox-row" for="downloadAutoRetryEnabled">
+                        <input id="downloadAutoRetryEnabled" type="checkbox" name="download_auto_retry_enabled" value="1" {% if download_retry.enabled %}checked{% endif %}>
+                        <span>Włącz automatyczne ponawianie po błędzie 429</span>
+                    </label>
+
+                    <label class="field-label" for="downloadAutoRetryMaxAttempts">Maksymalna liczba prób</label>
+                    <input id="downloadAutoRetryMaxAttempts" type="text" name="download_auto_retry_max_attempts" value="{{ download_retry.max_attempts }}" inputmode="numeric" required>
+
+                    <label class="field-label" for="downloadAutoRetryDelays">Opóźnienia kolejnych prób w sekundach</label>
+                    <input id="downloadAutoRetryDelays" type="text" name="download_auto_retry_delays" value="{{ download_retry.delays_seconds|join(',') }}" placeholder="np. 60,180,600" required>
+
+                    <div class="inline-note">
+                        Panel bierze kolejne wartości z tej listy i automatycznie tnie limit prób do liczby dostępnych opóźnień. Przykład <code>60,180,600</code> oznacza retry po <code>1</code>, <code>3</code> i <code>10</code> minutach.
+                    </div>
+
+                    <button type="submit" class="btn full-width" data-busy-label="Zapisywanie auto retry 429...">Zapisz auto retry 429</button>
+                </form>
+            </div>
+
             <div class="stack-card update-card">
                 <div class="card-heading">
                     <div class="card-title">Aktualizacja yt-dlp</div>

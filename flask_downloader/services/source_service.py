@@ -303,6 +303,18 @@ class SourceMediaService:
         return estimated_bytes if estimated_bytes > 0 else None
 
     @staticmethod
+    def is_drm_protected_format(fmt):
+        if not isinstance(fmt, dict):
+            return False
+        if bool(fmt.get("has_drm")):
+            return True
+        drm_family = str(fmt.get("drm_family") or "").strip().lower()
+        if drm_family:
+            return True
+        format_note = str(fmt.get("format_note") or "").strip().lower()
+        return "drm" in format_note
+
+    @staticmethod
     def _normalize_title_text(value):
         return " ".join(str(value or "").strip().split())
 
@@ -614,6 +626,8 @@ class SourceMediaService:
         for fmt in formats:
             url = fmt.get("url")
             if not url:
+                continue
+            if self.is_drm_protected_format(fmt):
                 continue
 
             vcodec = fmt.get("vcodec")

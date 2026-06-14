@@ -123,6 +123,7 @@ def register_application_routes(app, context):
         "SETTINGS_CONTENT_TEMPLATE": context["SETTINGS_CONTENT_TEMPLATE"],
         "get_settings_page_state": context["get_settings_page_state"],
         "save_app_config": context["save_app_config"],
+        "save_download_retry_config": context["save_download_retry_config"],
         "build_updated_storage_config": context["build_updated_storage_config"],
         "get_storage_config_snapshot": context["get_storage_config_snapshot"],
         "build_storage_network_signature": context["build_storage_network_signature"],
