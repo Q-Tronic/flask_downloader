@@ -172,6 +172,15 @@ class SourceMediaService:
         if item.get("media_kind") != "video":
             return str(item.get("format_id") or "best")
 
+        extractor_name = str(item.get("extractor") or "").strip().lower()
+        try:
+            height = int((item or {}).get("height") or 0)
+        except Exception:
+            height = 0
+
+        if SourceMediaService._is_tvp_vod_extractor(extractor_name) and height > 0:
+            return "best[height<=%d]/best" % height
+
         preferred_id = str(item.get("format_id") or "").strip()
         preferred_has_audio = bool(item.get("has_audio"))
         audio_candidates = [candidate for candidate in candidates if candidate["has_audio"]]

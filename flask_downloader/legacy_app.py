@@ -5144,11 +5144,14 @@ def download_worker(job_id):
                 if value:
                     download_http_headers[str(key)] = str(value)
 
+        enable_check_formats = not SOURCE_MEDIA_SERVICE._is_tvp_vod_extractor(
+            result.get("extractor") or fmt.get("extractor") or ""
+        )
+
         ydl_download_opts = apply_ffmpeg_location({
             "quiet": True,
             "no_warnings": True,
             "nocheckcertificate": True,
-            "check_formats": True,
             "http_headers": download_http_headers,
             "format": selected_download_format,
             "outtmpl": target_path,
@@ -5158,6 +5161,9 @@ def download_worker(job_id):
             "progress_hooks": [progress_hook],
             "postprocessor_hooks": [postprocessor_hook],
         })
+
+        if enable_check_formats:
+            ydl_download_opts["check_formats"] = True
 
         if is_live_capture:
             ydl_download_opts["live_from_start"] = True
