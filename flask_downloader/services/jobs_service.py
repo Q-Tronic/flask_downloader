@@ -183,6 +183,8 @@ class DownloadJobsService:
             "is_live_capture": bool(kwargs.get("is_live_capture")),
             "auto_pick_best": bool(kwargs.get("auto_pick_best")),
             "serial_download": bool(kwargs.get("serial_download")),
+            "force_parallel_start": bool(kwargs.get("force_parallel_start")),
+            "delete_after_cancel": bool(kwargs.get("delete_after_cancel")),
             "live_status": str(kwargs.get("live_status") or ""),
             "processing_stage": "",
         }
@@ -204,6 +206,9 @@ class DownloadJobsService:
             if not job:
                 return False, "Nie znaleziono zadania."
 
+            if not self._is_admin_authenticated():
+                return False, "Tylko administrator może przerwać i usunąć pobieranie."
+
             if not self._can_access_owner(job.get("owner_username") or self._default_admin_username):
                 return False, "Nie masz dostępu do tego zadania."
 
@@ -220,23 +225,15 @@ class DownloadJobsService:
                     ),
                 }
                 self._cleanup_download_artifacts(cleanup_paths)
-                job["status"] = "canceled"
-                job["status_label"] = "Anulowane"
-                job["error"] = "Pobieranie zostało anulowane po wstrzymaniu."
-                job["finished_at"] = time.time()
-                job["filepath"] = ""
-                job["relative_path"] = ""
-                job["processing_stage"] = ""
-                self._cancel_events_store.pop(job_id, None)
-                self._stop_requests_store.pop(job_id, None)
-                self._write_download_jobs_locked()
-                return True, "Anulowano wstrzymane pobieranie i usunięto jego dane tymczasowe."
+                self._remove_job_locked(job_id)
+                return True, "Anulowano wstrzymane pobieranie, usunięto dane tymczasowe i skasowano wpis z listy."
 
             if event is None:
                 return False, "Brak uchwytu anulowania dla zadania."
 
             self._stop_requests_store[job_id] = "cancel"
             event.set()
+            job["delete_after_cancel"] = True
             job["status_label"] = "Anulowanie..."
             self._write_download_jobs_locked()
             return True, "Wysłano żądanie anulowania."
@@ -284,10 +281,38 @@ class DownloadJobsService:
             job["error"] = ""
             job["finished_at"] = None
             job["processing_stage"] = ""
+            job["delete_after_cancel"] = False
+            job["force_parallel_start"] = False
             self._write_download_jobs_locked()
 
         self._start_download_thread(job_id)
         return True, "Wznowiono pobieranie."
+
+    def mark_job_force_start_requested(self, job_id):
+        with self._jobs_lock:
+            job = self._jobs_store.get(job_id)
+            if not job:
+                return False, "Nie znaleziono zadania."
+
+            if not self._is_admin_authenticated():
+                return False, "Tylko administrator może wymusić dodatkowe pobieranie."
+
+            if not self._can_access_owner(job.get("owner_username") or self._default_admin_username):
+                return False, "Nie masz dostępu do tego zadania."
+
+            if str(job.get("status") or "") != "queued":
+                return False, "Wymusić można tylko zadanie oczekujące w kolejce."
+
+            if bool(job.get("is_live_capture")):
+                return False, "Nagrania LIVE nie wymagają wymuszonego startu."
+
+            if bool(job.get("force_parallel_start")):
+                return False, "Dla tego zadania wymuszony start jest już aktywny."
+
+            job["force_parallel_start"] = True
+            self._write_download_jobs_locked()
+
+        return True, "Wymuszono dodatkowe pobieranie poza limitem 3 jednoczesnych zadań."
 
     def retry_job(self, job_id):
         with self._jobs_lock:
@@ -320,6 +345,8 @@ class DownloadJobsService:
             job["dlna_collection_id"] = ""
             job["dlna_collection_name"] = ""
             job["processing_stage"] = ""
+            job["delete_after_cancel"] = False
+            job["force_parallel_start"] = False
             if not str(job.get("planned_filename") or "").strip():
                 job["planned_filename"] = str(job.get("filename") or "").strip()
             self._write_download_jobs_locked()
@@ -373,6 +400,8 @@ class DownloadJobsService:
             job["is_live_capture"] = bool(job.get("is_live_capture"))
             job["auto_pick_best"] = bool(job.get("auto_pick_best"))
             job["serial_download"] = bool(job.get("serial_download"))
+            job["force_parallel_start"] = bool(job.get("force_parallel_start"))
+            job["delete_after_cancel"] = bool(job.get("delete_after_cancel"))
             job["live_status"] = str(job.get("live_status") or "")
             if job.get("status") == "completed":
                 job["progress_percent"] = 100.0
@@ -441,13 +470,26 @@ class DownloadJobsService:
                 job["file_display_name"] = job.get("filename") or ""
 
             job["can_delete_from_list"] = job.get("status") in ("completed", "failed", "canceled")
-            job["can_cancel"] = job.get("status") in ("queued", "downloading", "paused")
+            job["can_cancel"] = self._is_admin_authenticated() and job.get("status") in ("queued", "downloading", "paused")
             job["can_pause"] = job.get("status") in ("queued", "downloading") and not str(job.get("processing_stage") or "").strip()
             job["can_resume"] = job.get("status") == "paused"
             job["can_retry"] = str(job.get("status") or "") == "failed" and self._job_has_retry_payload(job)
+            job["can_force_start"] = (
+                self._is_admin_authenticated()
+                and str(job.get("status") or "") == "queued"
+                and not bool(job.get("is_live_capture"))
+                and not bool(job.get("force_parallel_start"))
+            )
             job["failure_hint"] = self._build_failure_hint(job)
 
         return jobs
+
+    def _remove_job_locked(self, job_id):
+        if job_id in self._jobs_store:
+            del self._jobs_store[job_id]
+        self._cancel_events_store.pop(job_id, None)
+        self._stop_requests_store.pop(job_id, None)
+        self._write_download_jobs_locked()
 
     def delete_job(self, job_id):
         with self._jobs_lock:
@@ -461,12 +503,43 @@ class DownloadJobsService:
             if job.get("status") in ("queued", "downloading", "paused"):
                 return False, "Najpierw przerwij aktywne pobieranie.", 409
 
-            del self._jobs_store[job_id]
-            self._cancel_events_store.pop(job_id, None)
-            self._stop_requests_store.pop(job_id, None)
-            self._write_download_jobs_locked()
+            self._remove_job_locked(job_id)
 
         return True, "", 200
+
+    def clear_canceled_jobs(self, scope_username=""):
+        viewer_username = self._get_current_username()
+        admin_view = self._is_admin_authenticated()
+        selected_owner = ""
+        if admin_view and scope_username:
+            try:
+                selected_owner = self._normalize_username(scope_username)
+            except Exception:
+                selected_owner = ""
+
+        removed_count = 0
+        with self._jobs_lock:
+            for job_id, job in list(self._jobs_store.items()):
+                if str(job.get("status") or "") != "canceled":
+                    continue
+                owner_username = self._normalize_username(job.get("owner_username") or self._default_admin_username)
+                if admin_view:
+                    if selected_owner and owner_username != selected_owner:
+                        continue
+                elif owner_username != viewer_username:
+                    continue
+                self._remove_job_locked(job_id)
+                removed_count += 1
+
+        return removed_count
+
+    def finalize_auto_removed_canceled_job(self, job_id):
+        with self._jobs_lock:
+            job = self._jobs_store.get(job_id)
+            if not job or not bool(job.get("delete_after_cancel")):
+                return False
+            self._remove_job_locked(job_id)
+            return True
 
     def delete_managed_file(self, relative_path, *, storage_kind="video", owner_username=None):
         safe_relative_path = self._safe_relative_download_path(relative_path)

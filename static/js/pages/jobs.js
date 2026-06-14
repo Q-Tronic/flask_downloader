@@ -63,6 +63,11 @@ function showToast(message, kind) {
     }
 }
 
+function getJobsScopeValue() {
+    const scopeSelect = document.getElementById("jobsScopeSelect");
+    return scopeSelect && scopeSelect.value ? String(scopeSelect.value) : "";
+}
+
 async function deleteJob(jobId) {
     if (!confirm("Usunąć to zadanie z listy?")) {
         return;
@@ -82,6 +87,25 @@ async function deleteJob(jobId) {
         refreshData();
     } catch (err) {
         alert("Błąd usuwania zadania: " + err);
+    }
+}
+
+async function forceStartJob(jobId) {
+    try {
+        const response = await fetch("/api/jobs/" + encodeURIComponent(jobId) + "/force-start", {
+            method: "POST"
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            showToast(data.error || "Nie udało się wymusić pobierania.", "error");
+            return;
+        }
+
+        showToast(data.message || "Wymuszono dodatkowe pobieranie.", "success");
+        refreshData();
+    } catch (err) {
+        showToast("Błąd wymuszania pobierania: " + err, "error");
     }
 }
 
@@ -175,6 +199,29 @@ async function cancelJob(jobId, jobStatus) {
     }
 }
 
+async function clearCanceledJobs() {
+    try {
+        const response = await fetch("/api/jobs/clear-canceled", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                user: getJobsScopeValue() || "all",
+            }),
+        });
+        const data = await response.json();
+
+        if (!response.ok || !data.ok) {
+            showToast(data.error || "Nie udało się usunąć anulowanych zadań.", "error");
+            return;
+        }
+
+        showToast(data.message || "Usunięto anulowane zadania.", "success");
+        refreshData();
+    } catch (err) {
+        showToast("Błąd usuwania anulowanych zadań: " + err, "error");
+    }
+}
+
 function renderScope(adminLoggedIn, availableUsers, scopeUsername, currentUser) {
     const wrap = document.getElementById("jobsScopeWrap");
     const select = document.getElementById("jobsScopeSelect");
@@ -240,6 +287,26 @@ function renderJobsTypeFilter(jobs) {
     select.value = currentValue || "all";
 }
 
+function renderJobsBulkActions(jobs) {
+    const wrap = document.getElementById("jobsBulkActionsWrap");
+    if (!wrap) {
+        return;
+    }
+
+    const canceledCount = (jobs || []).filter(function(job) {
+        return String((job || {}).status || "") === "canceled";
+    }).length;
+
+    if (canceledCount <= 0) {
+        wrap.hidden = true;
+        wrap.innerHTML = "";
+        return;
+    }
+
+    wrap.hidden = false;
+    wrap.innerHTML = '<button type="button" class="btn btn-delete js-clear-canceled-jobs">Usuń anulowane (' + escapeHtml(String(canceledCount)) + ')</button>';
+}
+
 function renderJobs(jobs, adminLoggedIn) {
     const container = document.getElementById("jobs");
     const activeFilter = getJobsTypeFilterValue();
@@ -271,6 +338,9 @@ function renderJobs(jobs, adminLoggedIn) {
         const pausedBadge = String(job.status || "") === "paused"
             ? '<span class="badge" style="margin-left:8px;">PAUSED</span>'
             : "";
+        const forcedBadge = String(job.status || "") === "queued" && !!job.force_parallel_start
+            ? '<span class="badge" style="margin-left:8px;">WYMUSZONE</span>'
+            : "";
         const width = isProcessing
             ? 38
             : job.progress_percent === null || job.progress_percent === undefined
@@ -301,6 +371,10 @@ function renderJobs(jobs, adminLoggedIn) {
             actionButtons += '<button type="button" class="btn btn-secondary js-pause-job" data-job-id="' + escapeHtml(job.job_id) + '">Pauza</button>';
         }
 
+        if (job.can_force_start) {
+            actionButtons += '<button type="button" class="btn btn-download js-force-start-job" data-job-id="' + escapeHtml(job.job_id) + '">Wymuś pobieranie</button>';
+        }
+
         if (job.can_resume) {
             actionButtons += '<button type="button" class="btn btn-secondary js-resume-job" data-job-id="' + escapeHtml(job.job_id) + '">Wznów</button>';
         }
@@ -323,7 +397,7 @@ function renderJobs(jobs, adminLoggedIn) {
             <div class="job ${status}">
                 <div class="row">
                     <div class="label">Status</div>
-                    <div class="value"><span class="status ${statusClass}">${escapeHtml(job.status_label)}</span>${liveBadge}${pausedBadge}</div>
+                    <div class="value"><span class="status ${statusClass}">${escapeHtml(job.status_label)}</span>${liveBadge}${pausedBadge}${forcedBadge}</div>
                 </div>
                 <div class="row">
                     <div class="label">Tytuł</div>
@@ -378,6 +452,7 @@ function applyJobsPayload(data) {
     renderMount(data.mount);
     renderScope(Boolean(data.admin_logged_in), data.available_users || [], data.scope_username || "", data.current_user || "");
     renderJobsTypeFilter(data.jobs || []);
+    renderJobsBulkActions(data.jobs || []);
     renderJobs(data.jobs || [], Boolean(data.admin_logged_in));
 }
 
@@ -400,12 +475,29 @@ async function handleJobsClick(event) {
         return;
     }
 
+    const clearCanceledBtn = event.target.closest(".js-clear-canceled-jobs");
+    if (clearCanceledBtn) {
+        event.preventDefault();
+        await clearCanceledJobs();
+        return;
+    }
+
     const pauseBtn = event.target.closest(".js-pause-job");
     if (pauseBtn) {
         event.preventDefault();
         const jobId = pauseBtn.dataset.jobId || "";
         if (jobId) {
             await pauseJob(jobId);
+        }
+        return;
+    }
+
+    const forceStartBtn = event.target.closest(".js-force-start-job");
+    if (forceStartBtn) {
+        event.preventDefault();
+        const jobId = forceStartBtn.dataset.jobId || "";
+        if (jobId) {
+            await forceStartJob(jobId);
         }
         return;
     }
@@ -452,8 +544,7 @@ async function handleJobsClick(event) {
 
 async function refreshData() {
     try {
-        const scopeSelect = document.getElementById("jobsScopeSelect");
-        const scopeValue = scopeSelect && scopeSelect.value ? scopeSelect.value : "";
+        const scopeValue = getJobsScopeValue();
         const query = scopeValue ? ("?user=" + encodeURIComponent(scopeValue)) : "";
         const response = await fetch("/api/jobs" + query);
         const data = await response.json();
@@ -467,8 +558,7 @@ async function refreshData() {
 }
 
 function buildStreamUrl() {
-    const scopeSelect = document.getElementById("jobsScopeSelect");
-    const scopeValue = scopeSelect && scopeSelect.value ? scopeSelect.value : "";
+    const scopeValue = getJobsScopeValue();
     return "/api/jobs/stream" + (scopeValue ? ("?user=" + encodeURIComponent(scopeValue)) : "");
 }
 

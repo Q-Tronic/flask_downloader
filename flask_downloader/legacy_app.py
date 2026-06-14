@@ -2125,6 +2125,8 @@ def normalize_saved_job_record(raw):
         "is_live_capture": bool(raw.get("is_live_capture")),
         "auto_pick_best": bool(raw.get("auto_pick_best")),
         "serial_download": bool(raw.get("serial_download")),
+        "force_parallel_start": bool(raw.get("force_parallel_start")),
+        "delete_after_cancel": bool(raw.get("delete_after_cancel")),
         "live_status": str(raw.get("live_status") or ""),
         "processing_stage": str(raw.get("processing_stage") or "").strip(),
     }
@@ -2193,6 +2195,8 @@ def serialize_job_for_storage(job):
         "is_live_capture": bool(job.get("is_live_capture")),
         "auto_pick_best": bool(job.get("auto_pick_best")),
         "serial_download": bool(job.get("serial_download")),
+        "force_parallel_start": bool(job.get("force_parallel_start")),
+        "delete_after_cancel": bool(job.get("delete_after_cancel")),
         "live_status": str(job.get("live_status") or ""),
         "processing_stage": str(job.get("processing_stage") or "").strip(),
     }
@@ -3796,6 +3800,255 @@ def build_collection_episode_title(entry):
     return SOURCE_MEDIA_SERVICE.build_collection_episode_title(entry)
 
 
+def _collection_page_url_key(value):
+    return str(value or "").strip().casefold()
+
+
+def collection_job_output_exists(job):
+    if not isinstance(job, dict):
+        return False
+
+    owner_username = normalize_username(job.get("owner_username") or DEFAULT_ADMIN_USERNAME)
+    storage_kind = normalize_storage_kind(job.get("storage_kind") or "video")
+    relative_path = safe_relative_download_path(job.get("relative_path") or "")
+    candidate_paths = set()
+
+    filepath = str(job.get("filepath") or "").strip()
+    if filepath:
+        candidate_paths.add(os.path.abspath(filepath))
+
+    if relative_path:
+        resolved_path = resolve_download_path(relative_path, storage_kind, owner_username=owner_username)
+        if resolved_path:
+            candidate_paths.add(os.path.abspath(resolved_path))
+
+    dlna_relative_path = safe_relative_download_path(job.get("dlna_current_relative_path") or "")
+    if dlna_relative_path:
+        parsed_relative_path = parse_managed_relative_path(relative_path) or {}
+        storage_id = normalize_storage_id(parsed_relative_path.get("storage_id") or "local", default="local")
+        dlna_path = DLNA_LIBRARY_SERVICE.get_collection_storage_path(storage_id, dlna_relative_path)
+        if dlna_path:
+            candidate_paths.add(os.path.abspath(dlna_path))
+
+    for path in candidate_paths:
+        try:
+            if path and os.path.isfile(path):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _normalize_collection_match_stem(value):
+    stem = safe_filename(os.path.splitext(str(value or "").strip())[0], default="file")
+    stem = re.sub(r"\s+", "_", stem)
+    stem = re.sub(r"_+", "_", stem).strip("._ ")
+    stem = re.sub(r"(?:_|\s)*\((?:\d{3,4}p|[248]k|sd|hd|fhd|qhd|uhd|4k|8k)\)$", "", stem, flags=re.IGNORECASE)
+    stem = re.sub(r"(?:_|\s)+(?:\d{3,4}p|sd|hd|fhd|qhd|uhd|4k|8k)$", "", stem, flags=re.IGNORECASE)
+    stem = re.sub(r"_+", "_", stem).strip("._ ")
+    return stem.casefold()
+
+
+def _build_collection_episode_match_variants(entry):
+    item = dict(entry or {})
+    queue_title = build_collection_episode_title(item)
+    raw_title = str(item.get("title") or item.get("display_title") or "").strip()
+    series = str(item.get("series") or "").strip()
+    episode_code = str(item.get("episode_code") or "").strip()
+
+    candidate_titles = []
+    for candidate in (
+        queue_title,
+        "%s - %s" % (series, raw_title) if series and raw_title else "",
+        "%s - %s %s" % (series, episode_code, raw_title) if series and episode_code and raw_title else "",
+        raw_title if raw_title and not series else "",
+    ):
+        text = str(candidate or "").strip()
+        if text and text not in candidate_titles:
+            candidate_titles.append(text)
+
+    variants = {"video": set(), "audio": set()}
+    for candidate_title in candidate_titles:
+        for media_kind in ("video", "audio"):
+            normalized = _normalize_collection_match_stem(safe_filename(candidate_title, default="odcinek"))
+            if normalized:
+                variants[media_kind].add(normalized)
+
+    return variants
+
+
+def _build_existing_collection_file_index(owner_username, media_kind):
+    normalized_owner = normalize_username(owner_username or DEFAULT_ADMIN_USERNAME)
+    normalized_kind = normalize_storage_kind(media_kind or "video")
+    extensions = {".mp3"} if normalized_kind == "audio" else DLNA_SUPPORTED_VIDEO_EXTENSIONS
+    known_stems = set()
+
+    def remember_file(path):
+        file_name = os.path.basename(str(path or "").strip())
+        if not file_name:
+            return
+        extension = os.path.splitext(file_name)[1].lower()
+        if extension not in extensions:
+            return
+        normalized_stem = _normalize_collection_match_stem(file_name)
+        if normalized_stem:
+            known_stems.add(normalized_stem)
+
+    for storage_id in iter_storage_ids():
+        try:
+            storage_root = os.path.abspath(get_user_storage_root(normalized_owner, normalized_kind, storage_id=storage_id))
+        except Exception:
+            continue
+        if not os.path.isdir(storage_root):
+            continue
+        for root_dir, _, file_names in os.walk(storage_root):
+            for file_name in file_names:
+                remember_file(os.path.join(root_dir, file_name))
+
+    if normalized_kind == "video":
+        try:
+            dlna_config = get_dlna_config_snapshot()
+        except Exception:
+            dlna_config = {}
+        for entry in dlna_config.get("entries") or []:
+            if normalize_username(entry.get("owner_username") or DEFAULT_ADMIN_USERNAME) != normalized_owner:
+                continue
+            if str(entry.get("media_kind") or "").strip().lower() != "video":
+                continue
+            current_relative_path = safe_relative_download_path(entry.get("current_relative_path") or "")
+            if not current_relative_path:
+                continue
+            storage_id = normalize_storage_id(entry.get("source_storage_id") or "local", default="local")
+            dlna_path = DLNA_LIBRARY_SERVICE.get_collection_storage_path(storage_id, current_relative_path)
+            if not dlna_path or not os.path.isfile(dlna_path):
+                continue
+            remember_file(dlna_path)
+
+    return known_stems
+
+
+def build_collection_download_state_map(collection_items, owner_username=None):
+    owner = normalize_username(owner_username or get_current_username() or DEFAULT_ADMIN_USERNAME)
+    normalized_items = []
+    for raw_item in (collection_items or []):
+        if isinstance(raw_item, dict):
+            page_url = str(raw_item.get("page_url") or "").strip()
+            item_payload = dict(raw_item)
+        else:
+            page_url = str(raw_item or "").strip()
+            item_payload = {"page_url": page_url}
+        if not page_url:
+            continue
+        normalized_items.append((page_url, item_payload))
+
+    state_map = {}
+    for page_url, _ in normalized_items:
+        page_key = _collection_page_url_key(page_url)
+        state_map[page_key] = {
+            "video": {"status": "none", "downloaded": False, "locked": False, "checked": False, "label": "", "job_id": ""},
+            "audio": {"status": "none", "downloaded": False, "locked": False, "checked": False, "label": "", "job_id": ""},
+        }
+
+    if not state_map:
+        return state_map
+
+    existing_file_index = {
+        "video": _build_existing_collection_file_index(owner, "video"),
+        "audio": _build_existing_collection_file_index(owner, "audio"),
+    }
+
+    for page_url, item_payload in normalized_items:
+        page_key = _collection_page_url_key(page_url)
+        match_variants = _build_collection_episode_match_variants(item_payload)
+        for media_kind in ("video", "audio"):
+            if state_map[page_key][media_kind].get("downloaded"):
+                continue
+            existing_roots = existing_file_index.get(media_kind) or set()
+            if any(variant in existing_roots for variant in (match_variants.get(media_kind) or set())):
+                state_map[page_key][media_kind] = {
+                    "status": "downloaded",
+                    "downloaded": True,
+                    "locked": True,
+                    "checked": True,
+                    "label": "Już na serwerze",
+                    "job_id": "",
+                }
+
+    active_priority = {
+        "queued": 1,
+        "paused": 2,
+        "downloading": 3,
+    }
+
+    for job in get_jobs_snapshot():
+        if normalize_username(job.get("owner_username") or DEFAULT_ADMIN_USERNAME) != owner:
+            continue
+
+        page_key = _collection_page_url_key(job.get("page_url") or "")
+        if page_key not in state_map:
+            continue
+
+        media_kind = normalize_storage_kind(job.get("storage_kind") or "video")
+        if media_kind not in ("video", "audio"):
+            continue
+
+        entry_state = state_map[page_key][media_kind]
+        status = str(job.get("status") or "").strip().lower()
+        job_id = str(job.get("job_id") or "").strip()
+
+        if status == "completed" and collection_job_output_exists(job):
+            state_map[page_key][media_kind] = {
+                "status": "downloaded",
+                "downloaded": True,
+                "locked": True,
+                "checked": True,
+                "label": "Już na serwerze",
+                "job_id": job_id,
+            }
+            continue
+
+        if entry_state.get("downloaded"):
+            continue
+
+        if status in active_priority:
+            current_priority = active_priority.get(str(entry_state.get("status") or ""), 0)
+            next_priority = active_priority.get(status, 0)
+            if next_priority >= current_priority:
+                label_map = {
+                    "queued": "Już w kolejce",
+                    "paused": "Już wstrzymane",
+                    "downloading": "Już się pobiera",
+                }
+                state_map[page_key][media_kind] = {
+                    "status": status,
+                    "downloaded": False,
+                    "locked": True,
+                    "checked": False,
+                    "label": label_map.get(status, "Już dodane"),
+                    "job_id": job_id,
+                }
+
+    return state_map
+
+
+def decorate_collection_download_state(collection, owner_username=None):
+    collection_payload = copy.deepcopy(collection or {})
+    episodes = list(collection_payload.get("episodes") or [])
+    state_map = build_collection_download_state_map(episodes, owner_username=owner_username)
+
+    for item in episodes:
+        page_key = _collection_page_url_key(item.get("page_url") or "")
+        item["availability"] = copy.deepcopy(
+            state_map.get(page_key) or {
+                "video": {"status": "none", "downloaded": False, "locked": False, "checked": False, "label": "", "job_id": ""},
+                "audio": {"status": "none", "downloaded": False, "locked": False, "checked": False, "label": "", "job_id": ""},
+            }
+        )
+
+    collection_payload["episodes"] = episodes
+    return collection_payload
+
+
 def find_format(result, format_id):
     return SOURCE_MEDIA_SERVICE.find_format(result, format_id)
 
@@ -4173,10 +4426,12 @@ def get_user_download_slot_snapshot(owner_username, *, include_job_id=None):
     with DOWNLOAD_LOCK:
         include_is_live_capture = False
         include_is_serial = False
+        include_force_parallel_start = False
         if include_job_id:
             current_job = DOWNLOAD_JOBS.get(str(include_job_id))
             include_is_live_capture = bool(current_job and current_job.get("is_live_capture"))
             include_is_serial = bool(current_job and current_job.get("serial_download"))
+            include_force_parallel_start = bool(current_job and current_job.get("force_parallel_start"))
         same_owner_jobs = [
             dict(job)
             for job in DOWNLOAD_JOBS.values()
@@ -4225,7 +4480,11 @@ def get_user_download_slot_snapshot(owner_username, *, include_job_id=None):
         "active_count": len(active_job_ids),
         "active_job_ids": active_job_ids,
         "eligible_job_ids": eligible_job_ids,
-        "can_start": bool(include_is_live_capture or (include_job_id and str(include_job_id) in eligible_job_ids)),
+        "can_start": bool(
+            include_is_live_capture
+            or include_force_parallel_start
+            or (include_job_id and str(include_job_id) in eligible_job_ids)
+        ),
         "serial_mode": bool(include_is_serial or first_serial_index is not None),
     }
 
@@ -4286,6 +4545,10 @@ def mark_job_pause_requested(job_id):
     return DOWNLOAD_JOBS_SERVICE.mark_job_pause_requested(job_id)
 
 
+def mark_job_force_start_requested(job_id):
+    return DOWNLOAD_JOBS_SERVICE.mark_job_force_start_requested(job_id)
+
+
 def resume_job_download(job_id):
     return DOWNLOAD_JOBS_SERVICE.resume_job(job_id)
 
@@ -4294,12 +4557,20 @@ def retry_job_download(job_id):
     return DOWNLOAD_JOBS_SERVICE.retry_job(job_id)
 
 
+def clear_canceled_jobs(scope_username=""):
+    return DOWNLOAD_JOBS_SERVICE.clear_canceled_jobs(scope_username=scope_username)
+
+
 def cleanup_job_cancel_handle(job_id):
     return DOWNLOAD_JOBS_SERVICE.cleanup_job_cancel_handle(job_id)
 
 
 def purge_expired_jobs(now_ts=None):
     return DOWNLOAD_JOBS_SERVICE.purge_expired_jobs(now_ts=now_ts)
+
+
+def finalize_auto_removed_canceled_job(job_id):
+    return DOWNLOAD_JOBS_SERVICE.finalize_auto_removed_canceled_job(job_id)
 
 
 def download_worker(job_id):
@@ -4445,6 +4716,7 @@ def download_worker(job_id):
             progress_percent=0.0,
             error="",
             live_status=str(result.get("live_status") or ""),
+            force_parallel_start=False,
             persist=True,
         )
 
@@ -4814,6 +5086,7 @@ def download_worker(job_id):
                 processing_stage="",
                 persist=True,
             )
+            finalize_auto_removed_canceled_job(job_id)
 
     except Exception as exc:
         cleanup_download_artifacts(seen_paths)

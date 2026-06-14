@@ -199,11 +199,63 @@ function compareCollectionEpisodesForCurrentMode(left, right) {
     return leftOrder - rightOrder;
 }
 
+function getCollectionEpisodeAvailability(item, mediaKindOverride) {
+    const mediaKind = String(mediaKindOverride || (collectionBrowserState && collectionBrowserState.mediaKind) || "video").toLowerCase() === "audio"
+        ? "audio"
+        : "video";
+    const availabilityMap = item && typeof item.availability === "object" && item.availability
+        ? item.availability
+        : {};
+    const rawState = availabilityMap[mediaKind] && typeof availabilityMap[mediaKind] === "object"
+        ? availabilityMap[mediaKind]
+        : {};
+    return {
+        status: String(rawState.status || "none"),
+        downloaded: Boolean(rawState.downloaded),
+        locked: Boolean(rawState.locked),
+        checked: Boolean(rawState.checked),
+        label: String(rawState.label || ""),
+        jobId: String(rawState.job_id || ""),
+    };
+}
+
 function getSelectedCollectionEpisodeIds() {
     if (!collectionBrowserState) {
         return [];
     }
-    return Array.from(collectionBrowserState.selectedEpisodeIds || []);
+    return collectionBrowserState.collection.episodes
+        .filter(function(item) {
+            return collectionBrowserState.selectedEpisodeIds.has(String(item.id || "")) && !getCollectionEpisodeAvailability(item).locked;
+        })
+        .map(function(item) {
+            return String(item.id || "");
+        });
+}
+
+async function refreshCollectionBrowserFromServer() {
+    if (!collectionBrowserState || !collectionBrowserState.collection || !collectionBrowserState.collection.page_url) {
+        return;
+    }
+
+    const activeSeasonValue = String(collectionBrowserState.activeSeasonValue || "");
+    const mediaKind = collectionBrowserState.mediaKind || "video";
+    const sortMode = collectionBrowserState.sortMode || "episode_asc";
+    const browserData = await inspectSingleUrlForCollection(collectionBrowserState.collection.page_url);
+    if (!browserData || browserData.kind !== "collection") {
+        return;
+    }
+
+    const normalizedCollection = normalizeCollectionPayload(browserData.collection || {});
+    const hasSeason = (normalizedCollection.seasons || []).some(function(season) {
+        return String(season.value || "") === activeSeasonValue;
+    });
+    collectionBrowserState.collection = normalizedCollection;
+    collectionBrowserState.activeSeasonValue = hasSeason
+        ? activeSeasonValue
+        : String(normalizedCollection.default_season_value || (normalizedCollection.seasons[0] && normalizedCollection.seasons[0].value) || "");
+    collectionBrowserState.mediaKind = mediaKind;
+    collectionBrowserState.sortMode = sortMode;
+    renderCollectionBrowser();
 }
 
 function renderCollectionBrowser(options) {
@@ -219,11 +271,18 @@ function renderCollectionBrowser(options) {
     const visibleEpisodes = getVisibleCollectionEpisodes();
     const selectedIds = collectionBrowserState.selectedEpisodeIds;
     const selectedVisibleCount = visibleEpisodes.filter(function(item) {
-        return selectedIds.has(String(item.id || ""));
+        return selectedIds.has(String(item.id || "")) && !getCollectionEpisodeAvailability(item).locked;
     }).length;
     const selectedTotalCount = getSelectedCollectionEpisodeIds().length;
     const mediaKind = collectionBrowserState.mediaKind || "video";
     const sortMode = collectionBrowserState.sortMode || "episode_asc";
+    const downloadedVisibleCount = visibleEpisodes.filter(function(item) {
+        return getCollectionEpisodeAvailability(item).downloaded;
+    }).length;
+    const lockedVisibleCount = visibleEpisodes.filter(function(item) {
+        const availability = getCollectionEpisodeAvailability(item);
+        return availability.locked && !availability.downloaded;
+    }).length;
 
     const seasonControlHtml = collection.has_multiple_seasons ? `
         <div class="stack-card">
@@ -257,17 +316,18 @@ function renderCollectionBrowser(options) {
                     </select>
                 </div>
                 <div class="stack-card">
-                    <label class="field-label">Tryb pobierania</label>
-                    <div class="collection-media-toggle">
-                        <button type="button" class="btn ${mediaKind === "video" ? "btn-green" : "btn-secondary"}" data-collection-media-kind="video">Wideo BEST</button>
-                        <button type="button" class="btn ${mediaKind === "audio" ? "btn-download" : "btn-secondary"}" data-collection-media-kind="audio">Audio BEST</button>
-                    </div>
+                    <label class="field-label" for="collectionMediaKindSelect">Tryb pobierania</label>
+                    <select id="collectionMediaKindSelect">
+                        <option value="video"${mediaKind === "video" ? " selected" : ""}>Wideo BEST</option>
+                        <option value="audio"${mediaKind === "audio" ? " selected" : ""}>Audio BEST</option>
+                    </select>
                 </div>
             </div>
 
             <div class="collection-browser-summary">
-                <div>Zaznaczono ${escapeCollectionHtml(String(selectedVisibleCount))} z ${escapeCollectionHtml(String(visibleEpisodes.length))} widocznych oraz ${escapeCollectionHtml(String(selectedTotalCount))} łącznie.</div>
-                <div>Wybrane odcinki zostaną dodane do kolejki i pobiorą się po kolei bez pełnego odświeżania strony.</div>
+                <div>Do pobrania zaznaczono ${escapeCollectionHtml(String(selectedVisibleCount))} z ${escapeCollectionHtml(String(visibleEpisodes.length))} widocznych oraz ${escapeCollectionHtml(String(selectedTotalCount))} łącznie.</div>
+                <div>Już na serwerze: ${escapeCollectionHtml(String(downloadedVisibleCount))}. Już w kolejce lub w trakcie: ${escapeCollectionHtml(String(lockedVisibleCount))}.</div>
+                <div>Wybrane odcinki trafią do kolejki i pobiorą się bez pełnego odświeżania strony, z limitem 3 równoległych pobrań na użytkownika.</div>
             </div>
 
             <div class="actions collection-browser-actions">
@@ -280,13 +340,23 @@ function renderCollectionBrowser(options) {
             <div class="collection-episode-list" role="list">
                 ${visibleEpisodes.map(function(item) {
                     const itemId = String(item.id || "");
-                    const checked = selectedIds.has(itemId) ? " checked" : "";
+                    const availability = getCollectionEpisodeAvailability(item);
+                    const isLocked = availability.locked;
+                    const isDownloaded = availability.downloaded;
+                    const checked = (isDownloaded || (!isLocked && selectedIds.has(itemId))) ? " checked" : "";
+                    const disabled = isLocked ? " disabled" : "";
+                    const rowClass = isDownloaded
+                        ? " collection-episode-row is-downloaded"
+                        : isLocked
+                        ? " collection-episode-row is-locked"
+                        : " collection-episode-row";
                     return `
-                        <label class="collection-episode-row" role="listitem">
-                            <input type="checkbox" data-collection-episode-id="${escapeCollectionHtml(itemId)}"${checked}>
+                        <label class="${rowClass}" role="listitem">
+                            <input type="checkbox" data-collection-episode-id="${escapeCollectionHtml(itemId)}"${checked}${disabled}>
                             <span class="collection-episode-main">
                                 ${item.episode_code ? `<span class="badge">${escapeCollectionHtml(item.episode_code)}</span>` : ""}
                                 <span class="collection-episode-title">${escapeCollectionHtml(item.title || item.display_title || "Odcinek")}</span>
+                                ${availability.label ? `<span class="badge">${escapeCollectionHtml(availability.label)}</span>` : ""}
                             </span>
                         </label>
                     `;
@@ -353,7 +423,7 @@ async function queueCollectionEpisodes() {
     }
 
     const selectedEpisodes = collectionBrowserState.collection.episodes.filter(function(item) {
-        return collectionBrowserState.selectedEpisodeIds.has(String(item.id || ""));
+        return collectionBrowserState.selectedEpisodeIds.has(String(item.id || "")) && !getCollectionEpisodeAvailability(item).locked;
     }).sort(function(left, right) {
         return Number(left.order_index || 0) - Number(right.order_index || 0);
     });
@@ -393,6 +463,11 @@ async function queueCollectionEpisodes() {
         });
 
         if (!response.ok || !data.ok) {
+            try {
+                await refreshCollectionBrowserFromServer();
+            } catch (refreshErr) {
+                console.warn("Nie udało się odświeżyć stanu kolekcji po błędzie kolejki:", refreshErr);
+            }
             showUiToastMessage((data && data.error) || "Nie udało się dodać odcinków do kolejki.", "error");
             return;
         }
@@ -400,7 +475,12 @@ async function queueCollectionEpisodes() {
         selectedEpisodes.forEach(function(item) {
             collectionBrowserState.selectedEpisodeIds.delete(String(item.id || ""));
         });
-        renderCollectionBrowser();
+        try {
+            await refreshCollectionBrowserFromServer();
+        } catch (refreshErr) {
+            console.warn("Nie udało się odświeżyć stanu kolekcji po zapisaniu kolejki:", refreshErr);
+            renderCollectionBrowser();
+        }
 
         const queuedCount = Number(data.queued_count || 0);
         const failedCount = Number(data.failed_count || 0);
@@ -1151,7 +1231,9 @@ function handleCollectionBrowserClick(event) {
     if (selectVisibleButton && collectionBrowserState) {
         event.preventDefault();
         getVisibleCollectionEpisodes().forEach(function(item) {
-            collectionBrowserState.selectedEpisodeIds.add(String(item.id || ""));
+            if (!getCollectionEpisodeAvailability(item).locked) {
+                collectionBrowserState.selectedEpisodeIds.add(String(item.id || ""));
+            }
         });
         renderCollectionBrowser();
         return;
@@ -1193,6 +1275,13 @@ function handleCollectionBrowserChange(event) {
     const sortSelect = event.target.closest("#collectionSortSelect");
     if (sortSelect && collectionBrowserState) {
         collectionBrowserState.sortMode = String(sortSelect.value || "episode_asc");
+        renderCollectionBrowser({resetScroll: true});
+        return;
+    }
+
+    const mediaKindSelect = event.target.closest("#collectionMediaKindSelect");
+    if (mediaKindSelect && collectionBrowserState) {
+        collectionBrowserState.mediaKind = String(mediaKindSelect.value || "video").toLowerCase() === "audio" ? "audio" : "video";
         renderCollectionBrowser({resetScroll: true});
         return;
     }

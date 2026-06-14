@@ -20,6 +20,8 @@ def register_download_routes(app, deps):
     extract_http_urls = deps["extract_http_urls"]
     extract_video_data = deps["extract_video_data"]
     extract_browser_data = deps["extract_browser_data"]
+    decorate_collection_download_state = deps["decorate_collection_download_state"]
+    build_collection_download_state_map = deps["build_collection_download_state_map"]
     build_result_with_proxy_urls = deps["build_result_with_proxy_urls"]
     build_collection_episode_title = deps["build_collection_episode_title"]
     find_format = deps["find_format"]
@@ -34,8 +36,10 @@ def register_download_routes(app, deps):
     normalize_requested_download_filename = deps["normalize_requested_download_filename"]
     mark_job_cancel_requested = deps["mark_job_cancel_requested"]
     mark_job_pause_requested = deps["mark_job_pause_requested"]
+    mark_job_force_start_requested = deps["mark_job_force_start_requested"]
     resume_job_download = deps["resume_job_download"]
     retry_job_download = deps["retry_job_download"]
+    clear_canceled_jobs = deps["clear_canceled_jobs"]
     delete_job = deps["delete_job"]
     delete_managed_file = deps["delete_managed_file"]
     build_m3u = deps["build_m3u"]
@@ -155,7 +159,13 @@ def register_download_routes(app, deps):
             is_live_capture=False,
             live_status="",
             auto_pick_best=True,
-            serial_download=True,
+            serial_download=False,
+        )
+
+    def build_collection_payload(collection, owner_username=""):
+        return decorate_collection_download_state(
+            collection or {},
+            owner_username=owner_username or get_current_username(),
         )
 
     @app.route("/api/files", methods=["GET"])
@@ -256,7 +266,10 @@ def register_download_routes(app, deps):
                 return jsonify({
                     "ok": True,
                     "kind": "collection",
-                    "collection": browser_payload.get("collection") or {},
+                    "collection": build_collection_payload(
+                        browser_payload.get("collection") or {},
+                        owner_username=get_current_username(),
+                    ),
                 })
 
             parsed = dict(browser_payload.get("result") or {})
@@ -378,6 +391,8 @@ def register_download_routes(app, deps):
         if len(urls) > 50:
             return jsonify({"ok": False, "error": "Jednorazowo możesz dodać maksymalnie 50 linków."}), 400
 
+        current_owner_username = get_current_username()
+
         if len(urls) == 1:
             try:
                 browser_payload = extract_browser_data(urls[0], force_refresh=False)
@@ -386,7 +401,10 @@ def register_download_routes(app, deps):
                         "ok": True,
                         "selection_required": True,
                         "kind": "collection",
-                        "collection": browser_payload.get("collection") or {},
+                        "collection": build_collection_payload(
+                            browser_payload.get("collection") or {},
+                            owner_username=current_owner_username,
+                        ),
                         "media_kind": media_kind,
                     })
             except Exception as exc:
@@ -399,7 +417,7 @@ def register_download_routes(app, deps):
                 "error": "Udział sieciowy offline. %s" % message
             }), 503
 
-        owner_username = get_current_username()
+        owner_username = current_owner_username
         queued_jobs = []
         failed_items = []
 
@@ -514,6 +532,7 @@ def register_download_routes(app, deps):
         seen_urls = set()
         queued_jobs = []
         failed_items = []
+        state_map = build_collection_download_state_map(raw_episodes, owner_username=owner_username)
 
         for raw_entry in raw_episodes:
             entry = dict(raw_entry or {})
@@ -529,6 +548,23 @@ def register_download_routes(app, deps):
             if dedupe_key in seen_urls:
                 continue
             seen_urls.add(dedupe_key)
+
+            current_state = dict(
+                ((state_map.get(dedupe_key) or {}).get(media_kind) or {})
+            )
+            current_status = str(current_state.get("status") or "").strip().lower()
+            if current_status == "downloaded":
+                failed_items.append({
+                    "url": page_url,
+                    "error": "Ten odcinek jest już zapisany na serwerze.",
+                })
+                continue
+            if current_status in ("queued", "downloading", "paused"):
+                failed_items.append({
+                    "url": page_url,
+                    "error": str(current_state.get("label") or "Ten odcinek jest już dodany do pobrania."),
+                })
+                continue
 
             queue_title = str(entry.get("queue_title") or "").strip()
             if not queue_title:
@@ -572,7 +608,20 @@ def register_download_routes(app, deps):
 
         ok, message = mark_job_cancel_requested(job_id)
         if not ok:
-            status_code = 404 if "Nie znaleziono zadania" in message else 403 if "Nie masz dostępu" in message else 409
+            status_code = 404 if "Nie znaleziono zadania" in message else 403 if "Nie masz dostępu" in message or "Tylko administrator" in message else 409
+            return jsonify({"ok": False, "error": message}), status_code
+
+        return jsonify({"ok": True, "message": message})
+
+    @app.route("/api/jobs/<job_id>/force-start", methods=["POST"])
+    def api_force_start_job(job_id):
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        ok, message = mark_job_force_start_requested(job_id)
+        if not ok:
+            status_code = 404 if "Nie znaleziono zadania" in message else 403 if "Tylko administrator" in message or "Nie masz dostępu" in message else 409
             return jsonify({"ok": False, "error": message}), status_code
 
         return jsonify({"ok": True, "message": message})
@@ -626,6 +675,25 @@ def register_download_routes(app, deps):
             "message": message,
             "job_id": str((job or {}).get("job_id") or ""),
         }), 202
+
+    @app.route("/api/jobs/clear-canceled", methods=["POST"])
+    def api_clear_canceled_jobs():
+        auth_error = require_authenticated_json()
+        if auth_error:
+            return auth_error
+
+        payload = request.get_json(silent=True) or {}
+        scope_username = resolve_view_scope_username(payload.get("user"), "jobs_view_scope")
+        removed_count = int(clear_canceled_jobs(scope_username=scope_username) or 0)
+        return jsonify({
+            "ok": True,
+            "removed_count": removed_count,
+            "message": (
+                "Usunięto %d anulowane zadanie z listy." % removed_count
+                if removed_count == 1
+                else "Usunięto %d anulowanych zadań z listy." % removed_count
+            ),
+        })
 
     @app.route("/api/jobs/<job_id>/delete", methods=["POST"])
     def api_delete_job(job_id):

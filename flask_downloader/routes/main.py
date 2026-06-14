@@ -5,11 +5,13 @@ def register_main_routes(app, deps):
     FAVICON_SVG = deps["FAVICON_SVG"]
     render_page = deps["render_page"]
     get_mount_info = deps["get_mount_info"]
+    get_current_username = deps["get_current_username"]
     require_authenticated_page = deps["require_authenticated_page"]
     is_valid_http_url = deps["is_valid_http_url"]
     extract_http_urls = deps["extract_http_urls"]
     extract_video_data = deps["extract_video_data"]
     extract_browser_data = deps["extract_browser_data"]
+    decorate_collection_download_state = deps["decorate_collection_download_state"]
     build_result_with_proxy_urls = deps["build_result_with_proxy_urls"]
     get_assignable_dlna_collections_for_current_user = deps["get_assignable_dlna_collections_for_current_user"]
     get_daily_download_dir = deps["get_daily_download_dir"]
@@ -58,7 +60,10 @@ def register_main_routes(app, deps):
                     input_url = parsed_urls[0]
                     browser_payload = extract_browser_data(input_url, force_refresh=True)
                     if browser_payload.get("kind") == "collection":
-                        collection_result = dict(browser_payload.get("collection") or {})
+                        collection_result = decorate_collection_download_state(
+                            browser_payload.get("collection") or {},
+                            owner_username=get_current_username(),
+                        )
                     else:
                         parsed = dict(browser_payload.get("result") or {})
                         if not parsed.get("sources"):
