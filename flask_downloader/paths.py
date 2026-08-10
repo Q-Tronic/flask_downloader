@@ -16,6 +16,9 @@ CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 JOBS_FILE = os.path.join(DATA_DIR, "jobs.json")
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
 RADIOS_FILE = os.path.join(DATA_DIR, "radios.json")
+IPTV_FILE = os.path.join(DATA_DIR, "iptv.json")
+RUNTIME_DIR = os.path.join(DATA_DIR, "runtime")
+IPTV_RUNTIME_DIR = os.path.join(RUNTIME_DIR, "iptv")
 
 
 def ensure_data_layout():
@@ -48,5 +51,8 @@ __all__ = [
     "JOBS_FILE",
     "USERS_FILE",
     "RADIOS_FILE",
+    "IPTV_FILE",
+    "RUNTIME_DIR",
+    "IPTV_RUNTIME_DIR",
     "ensure_data_layout",
 ]

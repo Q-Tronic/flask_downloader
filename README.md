@@ -6,6 +6,7 @@ Panel WWW w `Flask` do:
 - przeglądania własnych plików audio i wideo,
 - zarządzania serwerem `DLNA`,
 - tworzenia własnych stacji radiowych `Icecast + Liquidsoap`.
+- udostępniania kanałów z dekoderów Enigma2 jako `M3U + XMLTV` i konto zgodne z API Xtream.
 
 Interfejs i komunikaty są po polsku.
 
@@ -32,6 +33,7 @@ Instalator:
 - przy nieudanej instalacji może usunąć pliki i usługi utworzone przez instalator, bez ruszania pakietów systemowych,
 - startuje domyślnie na lokalnym serwerze danych, więc panel działa od razu po instalacji bez udziału sieciowego,
 - tworzy usługę `systemd`,
+- tworzy odseparowaną usługę bramki IPTV na porcie `9988`,
 - instaluje `yt-dlp`,
 - instaluje zarządzany `ffmpeg`,
 - instaluje backend `DLNA` oparty o `Gerbera`,
@@ -102,6 +104,15 @@ http://IP_SERWERA:9999/
 - tylko dla administratora,
 - zarządzanie klientami, kolekcjami i eksportem mediów,
 - backend oparty o `Gerbera`.
+
+### IPTV
+- tylko dla administratora,
+- osobne profile dekoderów i osobne konta dla każdego profilu,
+- automatyczne pobieranie bukietów i EPG przez OpenWebif,
+- zgodność z klientami M3U/XMLTV oraz Xtream, m.in. Ultimate IPTV Playlist Loader i IBO,
+- opcjonalny katalog VOD z istniejących plików w lokalnym lub sieciowym storage,
+- codzienna aktualizacja list o 02:00 z zachowaniem ostatniego poprawnego katalogu, jeśli dekoder jest offline,
+- ręczne odświeżanie i sterowanie bramką bez przeładowania panelu.
 
 ### Konfiguracja
 - tylko dla administratora,

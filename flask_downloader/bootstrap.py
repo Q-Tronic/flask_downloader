@@ -2,6 +2,7 @@ from flask_downloader.routes.auth import register_auth_routes
 from flask_downloader.routes.dlna import register_dlna_routes
 from flask_downloader.routes.downloads import register_download_routes
 from flask_downloader.routes.main import register_main_routes
+from flask_downloader.routes.iptv import register_iptv_routes
 from flask_downloader.routes.radio import register_radio_routes
 from flask_downloader.routes.settings import register_settings_routes
 from flask_downloader.routes.users import register_user_management_routes
@@ -239,6 +240,17 @@ def register_application_routes(app, context):
         "RADIO_LOG_BROWSER_MAX_BYTES": context["RADIO_LOG_BROWSER_MAX_BYTES"],
     })
 
+    register_iptv_routes(app, {
+        "require_admin_json": context["require_admin_json"],
+        "require_authenticated_page": context["require_authenticated_page"],
+        "is_admin_authenticated": context["is_admin_authenticated"],
+        "create_sse_json_response": context["create_sse_json_response"],
+        "render_page": context["render_page"],
+        "IPTV_CONTENT_TEMPLATE": context["IPTV_CONTENT_TEMPLATE"],
+        "IPTV_SERVICE_NAME": context["IPTV_SERVICE_NAME"],
+        "IPTV_SERVICE": context["IPTV_SERVICE"],
+    })
+
 
 def start_background_schedulers(context):
     if context.get("start_download_retry_scheduler_once"):
@@ -252,6 +264,8 @@ def start_background_schedulers(context):
         context["start_dlna_autoheal_scheduler_once"]()
     if context.get("start_radio_metadata_scheduler_once"):
         context["start_radio_metadata_scheduler_once"]()
+    if context.get("start_iptv_scheduler_once"):
+        context["start_iptv_scheduler_once"]()
 
 
 __all__ = [

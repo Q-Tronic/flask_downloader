@@ -1,0 +1,272 @@
+<section id="iptvPageRoot" data-access-denied="{{ 'true' if iptv_access_denied else 'false' }}">
+    <section class="page-card">
+        <div class="page-title-row">
+            <div>
+                <h1 class="page-title">IPTV i Xtream</h1>
+                <p class="muted">Kanały z dekoderów, EPG i VOD z plików serwera dla aplikacji M3U/Xtream.</p>
+            </div>
+            <div id="iptvTopStatus" class="page-status-inline is-offline">
+                <span class="page-status-icon" aria-hidden="true"></span>
+                <span id="iptvTopStatusText" class="page-status-text">Sprawdzanie bramki...</span>
+            </div>
+        </div>
+        {% if iptv_access_denied %}
+        <div class="error">Konfiguracja IPTV jest dostępna wyłącznie dla administratora.</div>
+        {% else %}
+        <div id="iptvSummaryGrid" class="settings-overview-grid"></div>
+        {% endif %}
+    </section>
+
+    {% if not iptv_access_denied %}
+    <section class="page-card iptv-workspace-card">
+        <div class="iptv-workspace-head">
+            <div>
+                <h2 class="section-title">Panel IPTV</h2>
+                <p id="iptvWorkspaceNote" class="muted">Źródła, konta i katalogi są rozdzielone na krótkie zakładki.</p>
+            </div>
+            <div id="iptvTabStrip" class="iptv-tab-strip">
+                <button type="button" class="iptv-tab-button" data-iptv-tab="status">Status</button>
+                <button type="button" class="iptv-tab-button" data-iptv-tab="sources">Źródła</button>
+                <button type="button" class="iptv-tab-button" data-iptv-tab="users">Użytkownicy</button>
+                <button type="button" class="iptv-tab-button" data-iptv-tab="catalog">Kanały i EPG</button>
+                <button type="button" class="iptv-tab-button" data-iptv-tab="vod">VOD</button>
+            </div>
+        </div>
+
+        <section class="iptv-panel" data-iptv-panel="status">
+            <div class="stack-card">
+                <div class="card-heading">
+                    <div class="card-title">Bramka IPTV</div>
+                    <div class="card-subtitle">Osobna usługa streamingu nie blokuje panelu działającego na porcie 9999.</div>
+                </div>
+                <div class="service-status-row">
+                    <span id="iptvServicePill" class="service-status-pill muted">Sprawdzanie...</span>
+                    <span id="iptvServiceMeta" class="small"></span>
+                </div>
+                <div id="iptvGatewayMetrics" class="settings-overview-grid"></div>
+                <div id="iptvServiceError" class="error" hidden></div>
+                <div class="dlna-item-actions">
+                    <button type="button" class="btn btn-green" data-iptv-service="start">Start</button>
+                    <button type="button" class="btn btn-secondary" data-iptv-service="restart">Restart</button>
+                    <button type="button" class="btn btn-stop" data-iptv-service="stop">Stop</button>
+                </div>
+            </div>
+
+            <form id="iptvSettingsForm" class="stack-card auth-form">
+                <div class="card-heading">
+                    <div class="card-title">Ustawienia bramki</div>
+                    <div class="card-subtitle">Domyślny port to 9988, a listy odświeżają się codziennie o 02:00.</div>
+                </div>
+                <div class="iptv-form-grid">
+                    <div class="field-group">
+                        <label class="field-label" for="iptvBindHost">Adres nasłuchu</label>
+                        <input id="iptvBindHost" name="bind_host" type="text" placeholder="0.0.0.0" required>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvPort">Port</label>
+                        <input id="iptvPort" name="port" type="number" min="1" max="65535" required>
+                    </div>
+                    <div class="field-group iptv-span-2">
+                        <label class="field-label" for="iptvPublicBaseUrl">Publiczny adres bazowy</label>
+                        <input id="iptvPublicBaseUrl" name="public_base_url" type="url" placeholder="opcjonalnie, np. http://192.168.1.100:9988">
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvRefreshHour">Godzina aktualizacji</label>
+                        <input id="iptvRefreshHour" name="refresh_hour" type="number" min="0" max="23">
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvRefreshMinute">Minuta</label>
+                        <input id="iptvRefreshMinute" name="refresh_minute" type="number" min="0" max="59">
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvEpgDays">Zakres EPG (dni)</label>
+                        <input id="iptvEpgDays" name="epg_days" type="number" min="1" max="14">
+                    </div>
+                    <label class="iptv-check-row">
+                        <input id="iptvEnabled" name="enabled" type="checkbox">
+                        <span><strong>Bramka aktywna</strong><small>Wyłącza logowanie kont bez usuwania konfiguracji.</small></span>
+                    </label>
+                </div>
+                <div class="dlna-item-actions">
+                    <button type="submit" class="btn">Zapisz ustawienia</button>
+                </div>
+            </form>
+        </section>
+
+        <section class="iptv-panel" data-iptv-panel="sources" hidden>
+            <div class="iptv-panel-toolbar">
+                <div>
+                    <h3 class="card-title">Dekodery</h3>
+                    <p class="card-subtitle">Każdy profil ma własne bukiety, limity tunerów i konta.</p>
+                </div>
+                <div class="dlna-item-actions">
+                    <button id="iptvRefreshAllButton" type="button" class="btn btn-secondary">Odśwież wszystkie</button>
+                    <button id="iptvAddProfileButton" type="button" class="btn">Dodaj źródło</button>
+                </div>
+            </div>
+            <div id="iptvProfileList" class="dlna-compact-list"></div>
+        </section>
+
+        <section class="iptv-panel" data-iptv-panel="users" hidden>
+            <div class="iptv-panel-toolbar">
+                <div>
+                    <h3 class="card-title">Konta IPTV</h3>
+                    <p class="card-subtitle">Oddzielne loginy dla Salonu i Sypialni, z datą ważności i limitem połączeń.</p>
+                </div>
+                <button id="iptvAddUserButton" type="button" class="btn">Dodaj konto</button>
+            </div>
+            <div id="iptvUserList" class="dlna-compact-list"></div>
+        </section>
+
+        <section class="iptv-panel" data-iptv-panel="catalog" hidden>
+            <div class="iptv-panel-toolbar">
+                <div>
+                    <h3 class="card-title">Kanały i EPG</h3>
+                    <p class="card-subtitle">W razie awarii dekodera bramka zachowuje ostatni poprawny katalog.</p>
+                </div>
+                <button id="iptvRefreshCatalogButton" type="button" class="btn btn-secondary">Aktualizuj teraz</button>
+            </div>
+            <div id="iptvCatalogList" class="dlna-compact-list"></div>
+        </section>
+
+        <section class="iptv-panel" data-iptv-panel="vod" hidden>
+            <div class="card-heading">
+                <div class="card-title">VOD z serwera</div>
+                <div class="card-subtitle">Pliki są indeksowane w istniejących katalogach. Bramka niczego nie przenosi ani nie kopiuje.</div>
+            </div>
+            <div id="iptvVodList" class="dlna-compact-list"></div>
+        </section>
+    </section>
+
+    <div id="iptvProfileModal" class="app-modal" hidden>
+        <div class="app-modal-backdrop" data-iptv-modal-close="profile"></div>
+        <div class="app-modal-card app-modal-card--wide">
+            <div class="app-modal-head">
+                <div>
+                    <div id="iptvProfileModalTitle" class="card-title">Nowe źródło IPTV</div>
+                    <div class="card-subtitle">Najpierw sprawdź połączenie, potem wybierz bukiety i zapisz.</div>
+                </div>
+                <button type="button" class="btn btn-secondary" data-iptv-modal-close="profile">Zamknij</button>
+            </div>
+            <form id="iptvProfileForm" class="auth-form">
+                <input id="iptvProfileExistingId" type="hidden">
+                <div class="iptv-form-grid">
+                    <div class="field-group">
+                        <label class="field-label" for="iptvProfileId">Identyfikator</label>
+                        <input id="iptvProfileId" name="id" type="text" placeholder="np. salon" required>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvProfileName">Nazwa</label>
+                        <input id="iptvProfileName" name="name" type="text" placeholder="np. Salon" required>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvProfileHost">Adres dekodera</label>
+                        <input id="iptvProfileHost" name="host" type="text" placeholder="192.168.1.20" required>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvProfileUsername">Login OpenWebif</label>
+                        <input id="iptvProfileUsername" name="username" type="text" value="root" required>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvProfileWebPort">Port OpenWebif</label>
+                        <input id="iptvProfileWebPort" name="web_port" type="number" min="1" max="65535" value="1234" required>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvProfileStreamPort">Port streamingu</label>
+                        <input id="iptvProfileStreamPort" name="stream_port" type="number" min="1" max="65535" value="8001" required>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvProfilePassword">Hasło OpenWebif</label>
+                        <input id="iptvProfilePassword" name="password" type="password" autocomplete="new-password" placeholder="zostaw puste, aby zachować zapisane">
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvProfileMaxStreams">Limit strumieni źródła</label>
+                        <input id="iptvProfileMaxStreams" name="max_streams" type="number" min="1" max="16" value="2">
+                    </div>
+                </div>
+                <div class="iptv-option-grid">
+                    <label class="iptv-check-row"><input id="iptvProfileEnabled" type="checkbox" checked><span><strong>Źródło aktywne</strong><small>Konta tego profilu mogą się logować.</small></span></label>
+                    <label class="iptv-check-row"><input id="iptvProfileDvbOnly" type="checkbox" checked><span><strong>Tylko kanały DVB</strong><small>Pomija importowane listy sieciowe z dekodera.</small></span></label>
+                    <label class="iptv-check-row"><input id="iptvProfileVodEnabled" type="checkbox"><span><strong>Udostępniaj VOD</strong><small>Indeksuj wybrane pliki z serwera.</small></span></label>
+                </div>
+                <div class="dlna-item-actions">
+                    <button id="iptvTestProfileButton" type="button" class="btn btn-secondary">Sprawdź źródło</button>
+                </div>
+                <div id="iptvProfileTestResult" class="inline-note"></div>
+                <div id="iptvBouquetSection" hidden>
+                    <div class="field-label">Bukiety kanałów</div>
+                    <div id="iptvBouquetList" class="iptv-choice-grid"></div>
+                </div>
+                <div id="iptvVodSourceSection" hidden>
+                    <div class="field-label">Katalogi VOD</div>
+                    <div id="iptvVodSourceChoices" class="iptv-choice-grid"></div>
+                </div>
+                <div class="app-modal-actions">
+                    <button id="iptvSaveProfileButton" type="submit" class="btn" disabled>Zapisz źródło</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="iptvUserModal" class="app-modal" hidden>
+        <div class="app-modal-backdrop" data-iptv-modal-close="user"></div>
+        <div class="app-modal-card">
+            <div class="app-modal-head">
+                <div>
+                    <div id="iptvUserModalTitle" class="card-title">Nowe konto IPTV</div>
+                    <div class="card-subtitle">Login i hasło działają jako konto Xtream oraz w linku M3U.</div>
+                </div>
+                <button type="button" class="btn btn-secondary" data-iptv-modal-close="user">Zamknij</button>
+            </div>
+            <form id="iptvUserForm" class="auth-form">
+                <input id="iptvUserId" type="hidden">
+                <div class="field-group">
+                    <label class="field-label" for="iptvUserProfile">Źródło</label>
+                    <select id="iptvUserProfile" required></select>
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="iptvUsername">Login IPTV</label>
+                    <input id="iptvUsername" type="text" autocomplete="off" required>
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="iptvUserPassword">Hasło IPTV</label>
+                    <div class="iptv-password-row">
+                        <input id="iptvUserPassword" type="password" autocomplete="new-password">
+                        <button id="iptvGeneratePassword" type="button" class="btn btn-secondary">Generuj</button>
+                    </div>
+                    <div id="iptvPasswordHelp" class="small">Hasło musi mieć co najmniej 6 znaków bez spacji.</div>
+                </div>
+                <div class="iptv-form-grid">
+                    <div class="field-group">
+                        <label class="field-label" for="iptvUserExpires">Ważne do</label>
+                        <input id="iptvUserExpires" type="date">
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="iptvUserMaxConnections">Maks. połączeń</label>
+                        <input id="iptvUserMaxConnections" type="number" min="1" max="8" value="1">
+                    </div>
+                </div>
+                <div class="iptv-option-grid">
+                    <label class="iptv-check-row"><input id="iptvUserEnabled" type="checkbox" checked><span><strong>Konto aktywne</strong></span></label>
+                    <label class="iptv-check-row"><input id="iptvUserVodEnabled" type="checkbox" checked><span><strong>Dostęp do VOD</strong></span></label>
+                </div>
+                <div id="iptvCreatedAccess" class="iptv-access-box" hidden></div>
+                <div class="app-modal-actions">
+                    <button id="iptvSaveUserButton" type="submit" class="btn">Utwórz konto</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+</section>
+
+<script>
+window.pageBootstrapData = {
+    initialState: {{ iptv_initial_state|tojson }},
+    serviceName: {{ iptv_service_name|tojson }},
+    accessDenied: {{ iptv_access_denied|tojson }}
+};
+</script>
+{% if not iptv_access_denied %}
+<script src="{{ url_for('static', filename='js/pages/iptv.js') }}?v={{ asset_version }}"></script>
+{% endif %}

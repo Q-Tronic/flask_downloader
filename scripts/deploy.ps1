@@ -5,6 +5,7 @@ param(
     [string]$Password = "",
     [string]$AppDir = "/opt/flask_downloader",
     [string]$ServiceName = "flask-downloader",
+    [string]$IptvServiceName = "",
     [int]$BackupRetentionCount = 5
 )
 
@@ -17,6 +18,7 @@ $remoteScriptFile = Join-Path $tempRoot "remote_deploy.sh"
 $remoteArchive = "/tmp/flask_downloader_deploy_$PID.tgz"
 $remoteScriptPath = "/tmp/flask_downloader_remote_deploy_$PID.sh"
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$effectiveIptvServiceName = if ($IptvServiceName) { $IptvServiceName } else { "$ServiceName-iptv" }
 $plink = "C:\Program Files\PuTTY\plink.exe"
 $pscp = "C:\Program Files\PuTTY\pscp.exe"
 
@@ -36,6 +38,8 @@ try {
         --exclude=data/jobs.json `
         --exclude=data/users.json `
         --exclude=data/radios.json `
+        --exclude=data/iptv.json `
+        --exclude=data/iptv.json.bak `
         -czf $archiveFile `
         -C $projectRoot .
 
@@ -60,8 +64,46 @@ rm -f '$remoteArchive'
 if [ -x '$AppDir/.venv/bin/pip' ]; then
   '$AppDir/.venv/bin/pip' install -r '$AppDir/requirements.txt' >/dev/null
 fi
+ENV_FILE='$AppDir/.env'
+APP_USER=''
+APP_GROUP=''
+if [ -f "`$ENV_FILE" ]; then
+  APP_USER=`$(awk -F= '/^FLASK_DOWNLOADER_SERVICE_USER=/{print `$2}' "`$ENV_FILE" | tail -n1 | xargs)
+  APP_GROUP=`$(awk -F= '/^FLASK_DOWNLOADER_SERVICE_GROUP=/{print `$2}' "`$ENV_FILE" | tail -n1 | xargs)
+fi
+SERVICE_LOAD_STATE=`$(systemctl show '$ServiceName.service' --property=LoadState --value 2>/dev/null || true)
+if [ -z "`$APP_USER" ]; then
+  APP_USER=`$(systemctl show '$ServiceName.service' --property=User --value 2>/dev/null || true)
+  if [ -z "`$APP_USER" ] && [ -n "`$SERVICE_LOAD_STATE" ] && [ "`$SERVICE_LOAD_STATE" != 'not-found' ]; then
+    APP_USER=root
+  fi
+fi
+if [ -z "`$APP_GROUP" ]; then
+  APP_GROUP=`$(systemctl show '$ServiceName.service' --property=Group --value 2>/dev/null || true)
+  if [ -z "`$APP_GROUP" ] && [ -n "`$SERVICE_LOAD_STATE" ] && [ "`$SERVICE_LOAD_STATE" != 'not-found' ]; then
+    APP_GROUP=root
+  fi
+fi
+if [ -z "`$APP_USER" ] && [ -e "`$ENV_FILE" ]; then
+  APP_USER=`$(stat -c '%U' "`$ENV_FILE" 2>/dev/null || true)
+fi
+if [ -z "`$APP_GROUP" ] && [ -e "`$ENV_FILE" ]; then
+  APP_GROUP=`$(stat -c '%G' "`$ENV_FILE" 2>/dev/null || true)
+fi
+APP_USER="`${APP_USER:-flaskdl}"
+APP_GROUP="`${APP_GROUP:-`$APP_USER}"
+IPTV_SERVICE_NAME='$effectiveIptvServiceName'
+if [ -f "`$ENV_FILE" ] && grep -q '^FLASK_DOWNLOADER_IPTV_SERVICE_NAME=' "`$ENV_FILE"; then
+  IPTV_SERVICE_NAME=`$(awk -F= '/^FLASK_DOWNLOADER_IPTV_SERVICE_NAME=/{print `$2}' "`$ENV_FILE" | tail -n1 | xargs)
+else
+  printf '\nFLASK_DOWNLOADER_IPTV_SERVICE_NAME=%s\n' "`$IPTV_SERVICE_NAME" >> "`$ENV_FILE"
+fi
+sed -e "s|__APP_USER__|`$APP_USER|g" -e "s|__APP_GROUP__|`$APP_GROUP|g" -e "s|__APP_DIR__|$AppDir|g" -e "s|__ENV_FILE__|`$ENV_FILE|g" -e "s|__PYTHON_BIN__|$AppDir/.venv/bin/python|g" '$AppDir/deploy/flask-downloader-iptv.service.template' > "/etc/systemd/system/`$IPTV_SERVICE_NAME.service"
+systemctl daemon-reload
+systemctl enable --now "`$IPTV_SERVICE_NAME.service"
 systemctl restart '$ServiceName.service'
 systemctl is-active '$ServiceName.service'
+systemctl is-active "`$IPTV_SERVICE_NAME.service"
 "@
     $remoteScript = $remoteScript -replace "`r`n", "`n"
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

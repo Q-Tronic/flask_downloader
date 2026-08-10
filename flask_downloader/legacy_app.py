@@ -69,6 +69,7 @@ from flask_downloader.config import (
     DLNA_PREFERRED_REPO_CHANNEL as CONFIG_DLNA_PREFERRED_REPO_CHANNEL,
     RADIO_SERVICE_NAME as CONFIG_RADIO_SERVICE_NAME,
     RADIO_STATION_SERVICE_TEMPLATE as CONFIG_RADIO_STATION_SERVICE_TEMPLATE,
+    IPTV_SERVICE_NAME as CONFIG_IPTV_SERVICE_NAME,
     DLNA_SERVICE_NAME as CONFIG_DLNA_SERVICE_NAME,
     DOWNLOAD_DIR as CONFIG_DOWNLOAD_DIR,
     MOUNT_POINT as CONFIG_MOUNT_POINT,
@@ -87,6 +88,8 @@ from flask_downloader.paths import (
     CONFIG_FILE,
     DATA_DIR,
     JOBS_FILE,
+    IPTV_FILE,
+    IPTV_RUNTIME_DIR,
     LEGACY_CONFIG_FILE,
     PROJECT_ROOT,
     RADIOS_FILE,
@@ -117,6 +120,7 @@ from flask_downloader.services.dlna_update_service import DlnaUpdateService
 from flask_downloader.services.page_state_service import PageStateService
 from flask_downloader.services.radio_runtime_service import RadioRuntimeService
 from flask_downloader.services.radio_service import RadioService
+from flask_downloader.services.iptv_service import IptvService
 from flask_downloader.services.storage_stats_service import StorageStatsService
 from flask_downloader.stores.config_store import (
     load_app_config as config_store_load_app_config,
@@ -144,6 +148,10 @@ from flask_downloader.stores.users_store import (
 from flask_downloader.stores.radios_store import (
     load_radio_store as radios_store_load_radio_store,
     write_radio_store as radios_store_write_radio_store,
+)
+from flask_downloader.stores.iptv_store import (
+    normalize_iptv_store,
+    write_iptv_store,
 )
 from flask_downloader.utils import auth as auth_utils
 from flask_downloader.utils.formatting import build_natural_sort_key, format_duration, format_ts
@@ -211,6 +219,7 @@ DLNA_AUTOHEAL_INTERVAL_SECONDS = 30
 DLNA_SERVICE_NAME = CONFIG_DLNA_SERVICE_NAME
 RADIO_SERVICE_NAME = CONFIG_RADIO_SERVICE_NAME
 RADIO_STATION_SERVICE_TEMPLATE = CONFIG_RADIO_STATION_SERVICE_TEMPLATE
+IPTV_SERVICE_NAME = CONFIG_IPTV_SERVICE_NAME
 DLNA_OFFICIAL_REPO_KEY_URL = "https://pkg.gerbera.io/public.asc"
 DLNA_OFFICIAL_REPO_KEYRING_FILE = os.path.join("/usr", "share", "keyrings", "gerbera-keyring.gpg")
 DLNA_OFFICIAL_REPO_LIST_FILE = os.path.join("/etc", "apt", "sources.list.d", "gerbera.list")
@@ -371,6 +380,25 @@ DLNA_CONTENT_TEMPLATE = 'pages/dlna.html'
 
 
 RADIO_CONTENT_TEMPLATE = 'pages/radio.html'
+
+
+IPTV_CONTENT_TEMPLATE = 'pages/iptv.html'
+
+
+IPTV_SERVICE = IptvService(
+    store_file=IPTV_FILE,
+    runtime_dir=IPTV_RUNTIME_DIR,
+    app_config_file=CONFIG_FILE,
+    service_name=IPTV_SERVICE_NAME,
+)
+
+
+def get_iptv_page_state():
+    return IPTV_SERVICE.get_page_state()
+
+
+def start_iptv_scheduler_once():
+    return IPTV_SERVICE.start_scheduler_once()
 
 
 APP_CONFIG_LOCK = threading.Lock()
@@ -5566,6 +5594,7 @@ def schedule_flask_update_finalize(pip_path="", requirements_file=""):
         pip_path=pip_path,
         requirements_file=requirements_file,
         log_file=log_path,
+        additional_service_names=[IPTV_SERVICE_NAME],
     )
 
 
@@ -5782,6 +5811,7 @@ def build_named_config_export_bundle(filename_prefix="flask-downloader-config", 
         ("data/jobs.json", JOBS_FILE),
         ("data/users.json", USERS_FILE),
         ("data/radios.json", RADIOS_FILE),
+        ("data/iptv.json", IPTV_FILE),
     ]
     missing_files = []
     buffer = io.BytesIO()
@@ -5907,6 +5937,24 @@ def _load_json_from_bundle(bundle, required_name):
         raise ValueError("Plik %s nie zawiera poprawnego JSON-a UTF-8." % required_name) from exc
 
 
+def _load_optional_json_from_bundle(bundle, optional_name):
+    normalized_optional_name = _normalize_zip_member_name(optional_name)
+    basename = normalized_optional_name.split("/")[-1]
+    available = {
+        _normalize_zip_member_name(member_name)
+        for member_name in bundle.namelist()
+        if _normalize_zip_member_name(member_name)
+    }
+    if not any(
+        member_name == normalized_optional_name
+        or member_name == basename
+        or member_name.endswith("/" + basename)
+        for member_name in available
+    ):
+        return None
+    return _load_json_from_bundle(bundle, optional_name)
+
+
 def _load_normalized_store_from_temp(raw_payload, loader, *, temp_suffix=".json"):
     temp_path = ""
     try:
@@ -5945,6 +5993,7 @@ def restore_config_bundle(bundle_bytes):
         raw_jobs = _load_json_from_bundle(bundle, "data/jobs.json")
         raw_users = _load_json_from_bundle(bundle, "data/users.json")
         raw_radios = _load_json_from_bundle(bundle, "data/radios.json")
+        raw_iptv = _load_optional_json_from_bundle(bundle, "data/iptv.json")
 
     normalized_config = normalize_imported_app_config(raw_config)
     normalized_jobs = normalize_imported_jobs_payload(raw_jobs)
@@ -5961,10 +6010,12 @@ def restore_config_bundle(bundle_bytes):
             canonicalize_relative_path=canonicalize_managed_relative_path,
         ),
     )
+    normalized_iptv_store = normalize_iptv_store(raw_iptv) if raw_iptv is not None else IPTV_SERVICE.snapshot()
 
     previous_config = get_config_snapshot()
     previous_user_store = get_user_store_snapshot()
     previous_radio_store = get_radio_store_snapshot()
+    previous_iptv_store = IPTV_SERVICE.snapshot()
     with DOWNLOAD_LOCK:
         previous_jobs_payload = [serialize_job_for_storage(job) for job in DOWNLOAD_JOBS.values()]
         previous_jobs_map = copy.deepcopy(DOWNLOAD_JOBS)
@@ -5979,12 +6030,14 @@ def restore_config_bundle(bundle_bytes):
         jobs_store_write_jobs_payload(JOBS_FILE, normalized_jobs["payload"])
         users_store_write_user_store(USERS_FILE, normalized_user_store)
         radios_store_write_radio_store(RADIOS_FILE, normalized_radio_store)
+        write_iptv_store(IPTV_FILE, normalized_iptv_store)
     except Exception:
         try:
             config_store_write_app_config(CONFIG_FILE, previous_config)
             jobs_store_write_jobs_payload(JOBS_FILE, previous_jobs_payload)
             users_store_write_user_store(USERS_FILE, previous_user_store)
             radios_store_write_radio_store(RADIOS_FILE, previous_radio_store)
+            write_iptv_store(IPTV_FILE, previous_iptv_store)
         except Exception:
             pass
         raise
@@ -6001,6 +6054,7 @@ def restore_config_bundle(bundle_bytes):
     with RADIO_STORE_LOCK:
         RADIO_STORE.clear()
         RADIO_STORE.update(copy.deepcopy(normalized_radio_store))
+    IPTV_SERVICE.invalidate_state_cache()
 
     warnings = []
     try:
@@ -6027,10 +6081,11 @@ def restore_config_bundle(bundle_bytes):
             "data/jobs.json",
             "data/users.json",
             "data/radios.json",
-        ],
+        ] + (["data/iptv.json"] if raw_iptv is not None else []),
         "job_count": len(normalized_jobs["jobs_map"]),
         "user_count": len(list((normalized_user_store or {}).get("users") or [])),
         "station_count": len(dict((normalized_radio_store or {}).get("stations") or {})),
+        "iptv_profile_count": len(normalized_iptv_store.get("profiles") or []),
         "warnings": warnings,
     }
 

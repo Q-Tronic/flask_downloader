@@ -1,0 +1,20 @@
+[Unit]
+Description=VLC Stream Extractor IPTV Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_GROUP__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=-__ENV_FILE__
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__PYTHON_BIN__ -m flask_downloader.iptv_gateway
+Restart=always
+RestartSec=3
+TimeoutStopSec=20
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

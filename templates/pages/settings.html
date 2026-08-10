@@ -943,7 +943,7 @@
                 <div class="settings-overview-grid">
                     <div class="overview-tile">
                         <span>Zawartość eksportu</span>
-                        <strong><code>config / jobs / users / radios</code></strong>
+                        <strong><code>config / jobs / users / radios / iptv</code></strong>
                     </div>
                     <div class="overview-tile">
                         <span>Sekrety .env</span>
@@ -952,7 +952,7 @@
                 </div>
 
                 <div class="inline-note">
-                    To jest szybki snapshot konfiguracji panelu. Plik <code>.env</code> i systemowe poświadczenia montowania udziału sieciowego nie są dołączane automatycznie.
+                    To jest szybki snapshot konfiguracji panelu. Plik <code>.env</code>, systemowe poświadczenia SMB i hasła OpenWebif dekoderów nie są dołączane automatycznie.
                 </div>
 
                 <div class="actions" style="margin-top: 4px;">
@@ -971,7 +971,7 @@
                 <div class="settings-overview-grid">
                     <div class="overview-tile">
                         <span>Obsługiwane pliki</span>
-                        <strong><code>config / jobs / users / radios</code></strong>
+                        <strong><code>config / jobs / users / radios / iptv</code></strong>
                     </div>
                     <div class="overview-tile">
                         <span>Aktywne pobrania</span>
@@ -980,7 +980,7 @@
                 </div>
 
                 <div class="inline-note">
-                    Import nie przywraca automatycznie <code>.env</code> ani systemowych poświadczeń montowania SMB. ZIP powinien pochodzić z tego panelu lub zachowywać ten sam układ plików.
+                    Import nie przywraca automatycznie <code>.env</code>, poświadczeń SMB ani haseł OpenWebif. Po imporcie profili IPTV trzeba ponownie zapisać hasła dekoderów.
                 </div>
 
                 <form id="settingsImportConfigForm" method="post" action="/settings/import-config" enctype="multipart/form-data" class="auth-form" data-settings-async="true" data-reset-after-success="true" data-busy-label="Przywracanie konfiguracji..." data-confirm-message="Przywrócić konfigurację z wybranego archiwum ZIP?">

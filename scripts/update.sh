@@ -6,6 +6,9 @@ BRANCH="${FLASK_DOWNLOADER_UPDATE_BRANCH:-main}"
 REPO_OWNER="${FLASK_DOWNLOADER_REPO_OWNER:-Q-Tronic}"
 REPO_NAME="${FLASK_DOWNLOADER_REPO_NAME:-flask_downloader}"
 SERVICE_NAME="${FLASK_DOWNLOADER_UPDATE_SERVICE_NAME:-}"
+IPTV_SERVICE_NAME="${FLASK_DOWNLOADER_UPDATE_IPTV_SERVICE_NAME:-}"
+APP_USER=""
+APP_GROUP=""
 SKIP_RESTART="${FLASK_DOWNLOADER_UPDATE_SKIP_RESTART:-0}"
 TMP_DIR=""
 
@@ -87,6 +90,34 @@ main() {
         SERVICE_NAME="$(read_env_value "$env_file" "FLASK_DOWNLOADER_SERVICE_NAME" || true)"
     fi
     SERVICE_NAME="${SERVICE_NAME:-flask-downloader}"
+    if [[ -z "$IPTV_SERVICE_NAME" ]]; then
+        IPTV_SERVICE_NAME="$(read_env_value "$env_file" "FLASK_DOWNLOADER_IPTV_SERVICE_NAME" || true)"
+    fi
+    IPTV_SERVICE_NAME="${IPTV_SERVICE_NAME:-${SERVICE_NAME}-iptv}"
+    APP_USER="$(read_env_value "$env_file" "FLASK_DOWNLOADER_SERVICE_USER" || true)"
+    APP_GROUP="$(read_env_value "$env_file" "FLASK_DOWNLOADER_SERVICE_GROUP" || true)"
+    local service_load_state
+    service_load_state="$(systemctl show "${SERVICE_NAME}.service" --property=LoadState --value 2>/dev/null || true)"
+    if [[ -z "$APP_USER" ]]; then
+        APP_USER="$(systemctl show "${SERVICE_NAME}.service" --property=User --value 2>/dev/null || true)"
+        if [[ -z "$APP_USER" && -n "$service_load_state" && "$service_load_state" != "not-found" ]]; then
+            APP_USER="root"
+        fi
+    fi
+    if [[ -z "$APP_GROUP" ]]; then
+        APP_GROUP="$(systemctl show "${SERVICE_NAME}.service" --property=Group --value 2>/dev/null || true)"
+        if [[ -z "$APP_GROUP" && -n "$service_load_state" && "$service_load_state" != "not-found" ]]; then
+            APP_GROUP="root"
+        fi
+    fi
+    if [[ -z "$APP_USER" && -e "$env_file" ]]; then
+        APP_USER="$(stat -c '%U' "$env_file" 2>/dev/null || true)"
+    fi
+    if [[ -z "$APP_GROUP" && -e "$env_file" ]]; then
+        APP_GROUP="$(stat -c '%G' "$env_file" 2>/dev/null || true)"
+    fi
+    APP_USER="${APP_USER:-flaskdl}"
+    APP_GROUP="${APP_GROUP:-$APP_USER}"
 
     TMP_DIR="$(mktemp -d)"
     local archive_url="https://codeload.github.com/${REPO_OWNER}/${REPO_NAME}/tar.gz/refs/heads/${BRANCH}"
@@ -127,6 +158,8 @@ main() {
         --exclude='data/jobs.json' \
         --exclude='data/users.json' \
         --exclude='data/radios.json' \
+        --exclude='data/iptv.json' \
+        --exclude='data/iptv.json.bak' \
         --exclude='data/calendar_cache.json' \
         --exclude='data/name_days_pl.json' \
         --exclude='data/unusual_holidays_pl.json' \
@@ -149,7 +182,30 @@ main() {
         log "UWAGA: nie znaleziono $APP_DIR/.venv/bin/pip, pomijam aktualizację zależności."
     fi
 
+    local iptv_template="$APP_DIR/deploy/flask-downloader-iptv.service.template"
+    local iptv_unit="/etc/systemd/system/${IPTV_SERVICE_NAME}.service"
+    [[ -f "$iptv_template" ]] || fail "Brakuje szablonu usługi IPTV: $iptv_template"
+    sed \
+        -e "s|__APP_USER__|$APP_USER|g" \
+        -e "s|__APP_GROUP__|$APP_GROUP|g" \
+        -e "s|__APP_DIR__|$APP_DIR|g" \
+        -e "s|__ENV_FILE__|$env_file|g" \
+        -e "s|__PYTHON_BIN__|$APP_DIR/.venv/bin/python|g" \
+        "$iptv_template" > "$iptv_unit"
+    if ! grep -q '^FLASK_DOWNLOADER_IPTV_SERVICE_NAME=' "$env_file"; then
+        printf '\nFLASK_DOWNLOADER_IPTV_SERVICE_NAME=%s\n' "$IPTV_SERVICE_NAME" >> "$env_file"
+    fi
+    chown "$APP_USER:$APP_GROUP" "$env_file" 2>/dev/null || true
+    mkdir -p "$APP_DIR/data/runtime/iptv"
+    chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/data/runtime/iptv" 2>/dev/null || true
+    systemctl daemon-reload
+    systemctl enable "${IPTV_SERVICE_NAME}.service" >/dev/null
+
     if [[ "$SKIP_RESTART" != "1" ]]; then
+        log "Restartuję usługę ${IPTV_SERVICE_NAME}.service..."
+        if ! systemctl restart "${IPTV_SERVICE_NAME}.service"; then
+            log "UWAGA: nie udało się uruchomić bramki IPTV. Główna aplikacja zostanie zaktualizowana, a diagnostyka będzie dostępna w panelu IPTV."
+        fi
         log "Restartuję usługę ${SERVICE_NAME}.service..."
         systemctl restart "${SERVICE_NAME}.service"
         systemctl is-active "${SERVICE_NAME}.service" >/dev/null
@@ -162,6 +218,7 @@ main() {
     log "Backup kodu: $APP_DIR/backups/code-update-${timestamp}.tgz"
     if [[ "$SKIP_RESTART" != "1" ]]; then
         log "Usługa: ${SERVICE_NAME}.service jest aktywna."
+        log "Bramka IPTV: $(systemctl is-active "${IPTV_SERVICE_NAME}.service" 2>/dev/null || true)."
     fi
 }
 

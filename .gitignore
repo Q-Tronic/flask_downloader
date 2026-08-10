@@ -9,6 +9,7 @@ AGENTS.md
 REFACTOR_INSTALL_CHECKLIST.md
 
 data/*.json
+data/*.json.bak
 !data/.gitkeep
 !data/*.example.json
 data/runtime/

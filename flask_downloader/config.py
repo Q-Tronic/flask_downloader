@@ -60,6 +60,7 @@ APP_SERVICE_NAME = read_env("FLASK_DOWNLOADER_SERVICE_NAME", "flask-downloader")
 DLNA_SERVICE_NAME = read_env("FLASK_DOWNLOADER_DLNA_SERVICE_NAME", "flask-downloader-dlna")
 RADIO_SERVICE_NAME = read_env("FLASK_DOWNLOADER_RADIO_SERVICE_NAME", "flask-downloader-radio")
 RADIO_STATION_SERVICE_TEMPLATE = read_env("FLASK_DOWNLOADER_RADIO_STATION_SERVICE_TEMPLATE", "flask-downloader-radio-station@")
+IPTV_SERVICE_NAME = read_env("FLASK_DOWNLOADER_IPTV_SERVICE_NAME", "flask-downloader-iptv")
 MOUNT_POINT = read_env("FLASK_DOWNLOADER_MOUNT_POINT", "/srv/flask_downloader/share")
 DOWNLOAD_DIR = read_env("FLASK_DOWNLOADER_DOWNLOAD_DIR", os.path.join(MOUNT_POINT, "flask_downloader"))
 AUDIO_DOWNLOAD_DIR = read_env("FLASK_DOWNLOADER_AUDIO_DOWNLOAD_DIR", os.path.join(MOUNT_POINT, "flask_downloader_audio"))
@@ -103,6 +104,7 @@ __all__ = [
     "DLNA_SERVICE_NAME",
     "RADIO_SERVICE_NAME",
     "RADIO_STATION_SERVICE_TEMPLATE",
+    "IPTV_SERVICE_NAME",
     "MOUNT_POINT",
     "DOWNLOAD_DIR",
     "AUDIO_DOWNLOAD_DIR",

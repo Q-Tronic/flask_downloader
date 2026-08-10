@@ -28,6 +28,7 @@ SERVICE_NAME_DEFAULT="${FLASK_DOWNLOADER_SERVICE_NAME:-flask-downloader}"
 DLNA_SERVICE_NAME_DEFAULT="${FLASK_DOWNLOADER_DLNA_SERVICE_NAME:-}"
 RADIO_SERVICE_NAME_DEFAULT="${FLASK_DOWNLOADER_RADIO_SERVICE_NAME:-}"
 RADIO_STATION_TEMPLATE_DEFAULT="${FLASK_DOWNLOADER_RADIO_STATION_SERVICE_TEMPLATE:-}"
+IPTV_SERVICE_NAME_DEFAULT="${FLASK_DOWNLOADER_IPTV_SERVICE_NAME:-}"
 DLNA_PORT_DEFAULT="49152"
 DLNA_CHANNEL_DEFAULT="latest"
 NON_INTERACTIVE=0
@@ -41,6 +42,7 @@ SERVICE_NAME_FROM_ARG=0
 DLNA_SERVICE_NAME_FROM_ARG=0
 RADIO_SERVICE_NAME_FROM_ARG=0
 RADIO_STATION_TEMPLATE_FROM_ARG=0
+IPTV_SERVICE_NAME_FROM_ARG=0
 
 REPO_URL="$REPO_URL_DEFAULT"
 BRANCH="$BRANCH_DEFAULT"
@@ -54,6 +56,7 @@ SERVICE_NAME="$SERVICE_NAME_DEFAULT"
 DLNA_SERVICE_NAME="$DLNA_SERVICE_NAME_DEFAULT"
 RADIO_SERVICE_NAME="$RADIO_SERVICE_NAME_DEFAULT"
 RADIO_STATION_TEMPLATE="$RADIO_STATION_TEMPLATE_DEFAULT"
+IPTV_SERVICE_NAME="$IPTV_SERVICE_NAME_DEFAULT"
 INTERACTIVE_INPUT_FD=""
 STATUS_LINE_VISIBLE=0
 EXISTING_INSTALL=0
@@ -70,6 +73,7 @@ FLASK_SERVICE_FILE_EXISTED_BEFORE=0
 DLNA_SERVICE_FILE_EXISTED_BEFORE=0
 RADIO_SERVICE_FILE_EXISTED_BEFORE=0
 RADIO_STATION_TEMPLATE_FILE_EXISTED_BEFORE=0
+IPTV_SERVICE_FILE_EXISTED_BEFORE=0
 DLNA_EXPORT_ROOT_EXISTED_BEFORE=0
 GERBERA_REPO_KEY_EXISTED_BEFORE=0
 GERBERA_REPO_LIST_EXISTED_BEFORE=0
@@ -413,6 +417,7 @@ record_preinstall_state() {
     [[ -f "/etc/systemd/system/${DLNA_SERVICE_NAME}.service" ]] && DLNA_SERVICE_FILE_EXISTED_BEFORE=1
     [[ -f "/etc/systemd/system/${RADIO_SERVICE_NAME}.service" ]] && RADIO_SERVICE_FILE_EXISTED_BEFORE=1
     [[ -f "/etc/systemd/system/${RADIO_STATION_TEMPLATE}.service" ]] && RADIO_STATION_TEMPLATE_FILE_EXISTED_BEFORE=1
+    [[ -f "/etc/systemd/system/${IPTV_SERVICE_NAME}.service" ]] && IPTV_SERVICE_FILE_EXISTED_BEFORE=1
     [[ -e "/dlna" ]] && DLNA_EXPORT_ROOT_EXISTED_BEFORE=1
     [[ -f "/usr/share/keyrings/gerbera-keyring.gpg" ]] && GERBERA_REPO_KEY_EXISTED_BEFORE=1
     [[ -f "/etc/apt/sources.list.d/gerbera.list" ]] && GERBERA_REPO_LIST_EXISTED_BEFORE=1
@@ -456,6 +461,9 @@ cleanup_candidates_exist() {
     if (( RADIO_STATION_TEMPLATE_FILE_EXISTED_BEFORE == 0 )) && [[ -f "/etc/systemd/system/${RADIO_STATION_TEMPLATE}.service" ]]; then
         return 0
     fi
+    if (( IPTV_SERVICE_FILE_EXISTED_BEFORE == 0 )) && [[ -f "/etc/systemd/system/${IPTV_SERVICE_NAME}.service" ]]; then
+        return 0
+    fi
     if (( DLNA_EXPORT_ROOT_EXISTED_BEFORE == 0 )) && [[ -e "/dlna" ]]; then
         return 0
     fi
@@ -489,6 +497,7 @@ perform_install_cleanup() {
     systemctl disable --now "${SERVICE_NAME}.service" >/dev/null 2>&1 || true
     systemctl disable --now "${DLNA_SERVICE_NAME}.service" >/dev/null 2>&1 || true
     systemctl disable --now "${RADIO_SERVICE_NAME}.service" >/dev/null 2>&1 || true
+    systemctl disable --now "${IPTV_SERVICE_NAME}.service" >/dev/null 2>&1 || true
 
     if (( FLASK_SERVICE_FILE_EXISTED_BEFORE == 0 )); then
         rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
@@ -501,6 +510,9 @@ perform_install_cleanup() {
     fi
     if (( RADIO_STATION_TEMPLATE_FILE_EXISTED_BEFORE == 0 )); then
         rm -f "/etc/systemd/system/${RADIO_STATION_TEMPLATE}.service"
+    fi
+    if (( IPTV_SERVICE_FILE_EXISTED_BEFORE == 0 )); then
+        rm -f "/etc/systemd/system/${IPTV_SERVICE_NAME}.service"
     fi
     if (( SUDOERS_RULE_FILE_EXISTED_BEFORE == 0 )) && [[ -n "$SUDOERS_RULE_FILE" ]]; then
         rm -f "$SUDOERS_RULE_FILE"
@@ -914,6 +926,14 @@ load_existing_install_defaults() {
         fi
     fi
 
+    if [[ "$IPTV_SERVICE_NAME_FROM_ARG" -eq 0 ]]; then
+        value="$(read_env_value "$env_file" "FLASK_DOWNLOADER_IPTV_SERVICE_NAME" || true)"
+        if [[ -n "$value" ]]; then
+            IPTV_SERVICE_NAME="$value"
+            IPTV_SERVICE_NAME_DEFAULT="$value"
+        fi
+    fi
+
     value="$(read_env_value "$env_file" "FLASK_DOWNLOADER_NETWORK_STORAGE_MOUNT_DIR" || true)"
     if [[ -n "$value" ]]; then
         NETWORK_STORAGE_ROOT="$value"
@@ -1082,6 +1102,8 @@ safe_update_app_code() {
         --exclude='data/jobs.json' \
         --exclude='data/users.json' \
         --exclude='data/radios.json' \
+        --exclude='data/iptv.json' \
+        --exclude='data/iptv.json.bak' \
         --exclude='data/calendar_cache.json' \
         --exclude='data/name_days_pl.json' \
         --exclude='data/unusual_holidays_pl.json' \
@@ -1170,6 +1192,9 @@ write_env_file() {
 
     if [[ -f "$env_file" ]]; then
         log_warn ".env już istnieje. Zostawiam bez nadpisywania."
+        if ! grep -q '^FLASK_DOWNLOADER_IPTV_SERVICE_NAME=' "$env_file"; then
+            printf '\nFLASK_DOWNLOADER_IPTV_SERVICE_NAME=%s\n' "$IPTV_SERVICE_NAME" >> "$env_file"
+        fi
         return
     fi
 
@@ -1185,6 +1210,7 @@ FLASK_DOWNLOADER_SERVICE_NAME=${SERVICE_NAME}
 FLASK_DOWNLOADER_DLNA_SERVICE_NAME=${DLNA_SERVICE_NAME}
 FLASK_DOWNLOADER_RADIO_SERVICE_NAME=${RADIO_SERVICE_NAME}
 FLASK_DOWNLOADER_RADIO_STATION_SERVICE_TEMPLATE=${RADIO_STATION_TEMPLATE}
+FLASK_DOWNLOADER_IPTV_SERVICE_NAME=${IPTV_SERVICE_NAME}
 
 FLASK_DOWNLOADER_MOUNT_POINT=${NETWORK_STORAGE_ROOT}
 FLASK_DOWNLOADER_DOWNLOAD_DIR=${STORAGE_ROOT}/flask_downloader
@@ -1219,6 +1245,7 @@ network_storage_root = os.environ["NETWORK_STORAGE_ROOT"]
 sys.path.insert(0, app_dir)
 
 from flask_downloader.stores.radios_store import default_radio_store
+from flask_downloader.stores.iptv_store import default_iptv_store
 
 data_dir = os.path.join(app_dir, "data")
 os.makedirs(data_dir, exist_ok=True)
@@ -1227,6 +1254,7 @@ config_path = os.path.join(data_dir, "config.json")
 jobs_path = os.path.join(data_dir, "jobs.json")
 users_path = os.path.join(data_dir, "users.json")
 radios_path = os.path.join(data_dir, "radios.json")
+iptv_path = os.path.join(data_dir, "iptv.json")
 config_example_path = os.path.join(data_dir, "config.example.json")
 users_example_path = os.path.join(data_dir, "users.example.json")
 jobs_example_path = os.path.join(data_dir, "jobs.example.json")
@@ -1365,6 +1393,10 @@ if not os.path.isfile(radios_path):
         global_payload["admin_password"] = generate_runtime_secret(32)
     with open(radios_path, "w", encoding="utf-8") as fh:
         json.dump(radios_payload, fh, ensure_ascii=False, indent=2)
+
+if not os.path.isfile(iptv_path):
+    with open(iptv_path, "w", encoding="utf-8") as fh:
+        json.dump(default_iptv_store(), fh, ensure_ascii=False, indent=2)
 PY
 }
 
@@ -1420,6 +1452,8 @@ PY
 install_systemd_service() {
     local service_file="/etc/systemd/system/${SERVICE_NAME}.service"
     local template_file="$APP_DIR/deploy/flask-downloader.service.template"
+    local iptv_service_file="/etc/systemd/system/${IPTV_SERVICE_NAME}.service"
+    local iptv_template_file="$APP_DIR/deploy/flask-downloader-iptv.service.template"
     local python_bin="$APP_DIR/.venv/bin/python"
     local env_file="$APP_DIR/.env"
 
@@ -1431,9 +1465,19 @@ install_systemd_service() {
         -e "s|__PYTHON_BIN__|$python_bin|g" \
         "$template_file" > "$service_file"
 
+    sed \
+        -e "s|__APP_USER__|$APP_USER|g" \
+        -e "s|__APP_GROUP__|$APP_GROUP|g" \
+        -e "s|__APP_DIR__|$APP_DIR|g" \
+        -e "s|__ENV_FILE__|$env_file|g" \
+        -e "s|__PYTHON_BIN__|$python_bin|g" \
+        "$iptv_template_file" > "$iptv_service_file"
+
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}.service" >/dev/null
     systemctl restart "${SERVICE_NAME}.service"
+    systemctl enable "${IPTV_SERVICE_NAME}.service" >/dev/null
+    systemctl restart "${IPTV_SERVICE_NAME}.service"
 }
 
 show_summary() {
@@ -1456,6 +1500,7 @@ show_summary() {
     printf "${C_MUTED}Log instalacji:${C_RESET} %s\n" "$INSTALL_LOG"
     printf "${C_MUTED}Status usługi:${C_RESET} "
     systemctl is-active "${SERVICE_NAME}.service" || true
+    printf "${C_MUTED}Bramka IPTV:${C_RESET} http://%s:9988/ (%s)\n" "$primary_ip" "$(systemctl is-active "${IPTV_SERVICE_NAME}.service" 2>/dev/null || true)"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -1513,6 +1558,11 @@ while [[ $# -gt 0 ]]; do
             RADIO_STATION_TEMPLATE_FROM_ARG=1
             shift 2
             ;;
+        --iptv-service-name)
+            IPTV_SERVICE_NAME="$2"
+            IPTV_SERVICE_NAME_FROM_ARG=1
+            shift 2
+            ;;
         --admin-password)
             ADMIN_PASSWORD="$2"
             shift 2
@@ -1560,6 +1610,7 @@ if (( EXISTING_INSTALL == 1 )); then
     DLNA_SERVICE_NAME_FROM_ARG=1
     RADIO_SERVICE_NAME_FROM_ARG=1
     RADIO_STATION_TEMPLATE_FROM_ARG=1
+    IPTV_SERVICE_NAME_FROM_ARG=1
 fi
 STORAGE_ROOT="$(resolve_install_value "$STORAGE_ROOT" "$STORAGE_ROOT_FROM_ARG" 'Katalog bazowy danych użytkowników' "$STORAGE_ROOT_DEFAULT")"
 APP_USER="$(resolve_install_value "$APP_USER" "$APP_USER_FROM_ARG" 'Użytkownik Linux dla usługi' "$APP_USER_DEFAULT")"
@@ -1575,9 +1626,13 @@ fi
 if [[ -z "$RADIO_STATION_TEMPLATE_DEFAULT" ]]; then
     RADIO_STATION_TEMPLATE_DEFAULT="${SERVICE_NAME}-radio-station@"
 fi
+if [[ -z "$IPTV_SERVICE_NAME_DEFAULT" ]]; then
+    IPTV_SERVICE_NAME_DEFAULT="${SERVICE_NAME}-iptv"
+fi
 DLNA_SERVICE_NAME="$(resolve_install_value "${DLNA_SERVICE_NAME:-$DLNA_SERVICE_NAME_DEFAULT}" "$DLNA_SERVICE_NAME_FROM_ARG" 'Nazwa usługi DLNA w systemd' "$DLNA_SERVICE_NAME_DEFAULT")"
 RADIO_SERVICE_NAME="$(resolve_install_value "${RADIO_SERVICE_NAME:-$RADIO_SERVICE_NAME_DEFAULT}" "$RADIO_SERVICE_NAME_FROM_ARG" 'Nazwa backendu radia w systemd' "$RADIO_SERVICE_NAME_DEFAULT")"
 RADIO_STATION_TEMPLATE="$(resolve_install_value "${RADIO_STATION_TEMPLATE:-$RADIO_STATION_TEMPLATE_DEFAULT}" "$RADIO_STATION_TEMPLATE_FROM_ARG" 'Prefiks szablonu usług stacji radia' "$RADIO_STATION_TEMPLATE_DEFAULT")"
+IPTV_SERVICE_NAME="${IPTV_SERVICE_NAME:-$IPTV_SERVICE_NAME_DEFAULT}"
 while ! validate_port_value "$APP_PORT"; do
     if [[ "$NON_INTERACTIVE" -eq 1 || "$APP_PORT_FROM_ARG" -eq 1 ]]; then
         log_fail "Port musi być liczbą z zakresu 1-65535."
@@ -1669,7 +1724,7 @@ begin_step "Inicjalizacja danych aplikacji"
 run_logged "Tworzę początkowe pliki danych aplikacji" initialize_data_files
 run_logged "Pilnuję losowych sekretów backendu radia w data/radios.json" ensure_random_radio_runtime_secrets
 chown -R "$APP_USER:$APP_GROUP" "$APP_DIR/data"
-log_ok "Pliki data/config.json, data/jobs.json, data/users.json i data/radios.json są gotowe."
+log_ok "Pliki danych aplikacji, radia i IPTV są gotowe."
 
 begin_step "Aktualizacja yt-dlp"
 run_logged_streamed "Aktualizuję yt-dlp w środowisku aplikacji" run_app_bootstrap_task yt_dlp
@@ -1698,6 +1753,7 @@ log_ok "Usługa systemd została zainstalowana."
 begin_step "Weryfikacja działania"
 sleep 2
 run_logged "Sprawdzam status usługi ${SERVICE_NAME}.service" systemctl --no-pager --full status "${SERVICE_NAME}.service"
+run_logged "Sprawdzam status usługi ${IPTV_SERVICE_NAME}.service" systemctl --no-pager --full status "${IPTV_SERVICE_NAME}.service"
 log_ok "Usługa Flask Downloader działa poprawnie."
 
 begin_step "Podsumowanie"

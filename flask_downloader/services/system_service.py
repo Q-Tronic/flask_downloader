@@ -405,6 +405,7 @@ class SystemServiceHelper:
         pip_path="",
         requirements_file="",
         log_file="",
+        additional_service_names=None,
         delay_seconds=1.5,
     ):
         if os.name == "nt":
@@ -432,6 +433,25 @@ class SystemServiceHelper:
 
         stop_command = cls._build_systemctl_command("stop", normalized_service_name)
         start_command = cls._build_systemctl_command("start", normalized_service_name)
+        additional_services = []
+        for raw_name in additional_service_names or []:
+            name = str(raw_name or "").strip()
+            if name and name != normalized_service_name and name not in additional_services:
+                additional_services.append(name)
+
+        additional_restart_block = ""
+        for service in additional_services:
+            restart_command = cls._build_systemctl_command("restart", service)
+            additional_restart_block += (
+                'echo "[app-update] Restartuję usługę {service}." >> {log}\n'
+                '{command} >> {log} 2>&1\n'
+                'extra_rc=$?\n'
+                'echo "[app-update] Restart usługi {service}, kod=$extra_rc" >> {log}\n'
+            ).format(
+                service=service,
+                log=shlex.quote(log_path),
+                command=shlex.join(restart_command),
+            )
 
         install_block = 'echo "[app-update] Pomijam pip install (brak requirements lub pip)." >> {log}\n'.format(
             log=shlex.quote(log_path),
@@ -456,6 +476,7 @@ echo "[app-update] Start finalizacji: $(date '+%Y-%m-%d %H:%M:%S')" >> {log}
 stop_rc=$?
 echo "[app-update] Zatrzymano usługę {service}, kod=$stop_rc" >> {log}
 {install_block}
+{additional_restart_block}
 {start_cmd} >> {log} 2>&1
 start_rc=$?
 echo "[app-update] Uruchomiono usługę {service}, kod=$start_rc" >> {log}
@@ -467,6 +488,7 @@ exit 0
             service=normalized_service_name,
             stop_cmd=shlex.join(stop_command),
             install_block=install_block.rstrip(),
+            additional_restart_block=additional_restart_block.rstrip(),
             start_cmd=shlex.join(start_command),
         )
 
