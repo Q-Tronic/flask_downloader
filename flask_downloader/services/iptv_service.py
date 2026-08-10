@@ -125,6 +125,20 @@ class IptvService:
         os.makedirs(self.credentials_dir, exist_ok=True)
         with self._lock:
             store = load_iptv_store(self.store_file)
+            interrupted_at = time.time()
+            for profile in store.get("profiles") or []:
+                runtime = dict(profile.get("runtime") or default_profile_runtime())
+                if runtime.get("status") != "refreshing":
+                    continue
+                runtime.update({
+                    "status": "error",
+                    "status_label": "Odświeżanie przerwane",
+                    "progress_percent": 0.0,
+                    "detail": "Poprzednie odświeżanie przerwał restart aplikacji. Ostatni poprawny katalog pozostał aktywny; uruchom aktualizację ponownie.",
+                    "last_error": "Odświeżanie zostało przerwane przez restart aplikacji.",
+                    "refresh_finished_at": interrupted_at,
+                })
+                profile["runtime"] = runtime
             write_iptv_store(self.store_file, store)
 
     def _credential_path(self, profile_id):

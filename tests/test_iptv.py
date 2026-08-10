@@ -11,6 +11,7 @@ from flask_downloader.services.iptv_openwebif import (
     is_dvb_service_reference,
     is_network_service_reference,
 )
+from flask_downloader.services.iptv_service import IptvService
 from flask_downloader.services.system_service import SystemServiceHelper
 from flask_downloader.stores.iptv_store import (
     default_iptv_store,
@@ -110,6 +111,41 @@ class CatalogTests(unittest.TestCase):
             result = scanner.scan("salon", [sources[0]["id"]])
             self.assertEqual(["Film 2"], [item["name"] for item in result["movies"]])
             self.assertEqual(os.path.abspath(movie_path), result["movies"][0]["path"])
+
+
+class IptvServiceTests(unittest.TestCase):
+    def test_startup_marks_interrupted_refresh_without_removing_last_good_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store_path = os.path.join(directory, "iptv.json")
+            config_path = os.path.join(directory, "config.json")
+            with open(config_path, "w", encoding="utf-8") as handle:
+                json.dump({}, handle)
+            store = default_iptv_store()
+            store["profiles"] = [{
+                "id": "salon",
+                "name": "Salon",
+                "host": "192.0.2.10",
+                "selected_bouquets": [{"reference": "bouquet", "name": "Polskie"}],
+                "runtime": {
+                    "status": "refreshing",
+                    "status_label": "Aktualizacja EPG",
+                    "progress_percent": 44,
+                    "last_success_at": 1700000000,
+                    "channel_count": 200,
+                },
+            }]
+            write_iptv_store(store_path, store)
+
+            service = IptvService(
+                store_file=store_path,
+                runtime_dir=os.path.join(directory, "runtime"),
+                app_config_file=config_path,
+            )
+            runtime = service.snapshot()["profiles"][0]["runtime"]
+            self.assertEqual("error", runtime["status"])
+            self.assertEqual("Odświeżanie przerwane", runtime["status_label"])
+            self.assertEqual(1700000000, runtime["last_success_at"])
+            self.assertEqual(200, runtime["channel_count"])
 
 
 class GatewayTests(unittest.TestCase):
