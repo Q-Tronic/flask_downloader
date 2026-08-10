@@ -77,6 +77,41 @@ class ConnectionRegistry:
         return self.count()
 
 
+class ReleasingIterable:
+    def __init__(self, iterable, release_callback):
+        self._iterable = iterable
+        self._iterator = iter(iterable)
+        self._release_callback = release_callback
+        self._released = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            return next(self._iterator)
+        except StopIteration:
+            self._release()
+            raise
+        except Exception:
+            self._release()
+            raise
+
+    def close(self):
+        try:
+            close = getattr(self._iterable, "close", None)
+            if callable(close):
+                close()
+        finally:
+            self._release()
+
+    def _release(self):
+        if self._released:
+            return
+        self._released = True
+        self._release_callback()
+
+
 class GatewayContext:
     def __init__(self, store_file=IPTV_FILE, runtime_dir=IPTV_RUNTIME_DIR):
         self.store_file = os.path.abspath(store_file)
@@ -417,6 +452,8 @@ def create_gateway_app(store_file=IPTV_FILE, runtime_dir=IPTV_RUNTIME_DIR):
         channel = next((item for item in filtered_channels(catalog, user) if _to_int(item.get("stream_id")) == stream_id), None)
         if not channel:
             return Response("Nie znaleziono kanału.\n", status=404, mimetype="text/plain")
+        if request.method == "HEAD":
+            return Response(status=200, mimetype="video/mp2t")
         connection_token, error = context.connections.acquire(user, profile, request.remote_addr)
         if not connection_token:
             return Response(error + "\n", status=429, mimetype="text/plain")
@@ -475,11 +512,20 @@ def create_gateway_app(store_file=IPTV_FILE, runtime_dir=IPTV_RUNTIME_DIR):
         path = os.path.abspath(str((movie or {}).get("path") or ""))
         if not movie or not os.path.isfile(path) or not is_stable_video_file(path):
             return Response("Nie znaleziono pliku VOD.\n", status=404, mimetype="text/plain")
+        if request.method == "HEAD":
+            return send_file(path, conditional=True, download_name=os.path.basename(path))
         connection_token, error = context.connections.acquire(user, profile, request.remote_addr)
         if not connection_token:
             return Response(error + "\n", status=429, mimetype="text/plain")
-        response = send_file(path, conditional=True, download_name=os.path.basename(path))
-        response.call_on_close(lambda: context.connections.release(connection_token))
+        try:
+            response = send_file(path, conditional=True, download_name=os.path.basename(path))
+        except Exception:
+            context.connections.release(connection_token)
+            raise
+        response.response = ReleasingIterable(
+            response.response,
+            lambda: context.connections.release(connection_token),
+        )
         return response
 
     return app

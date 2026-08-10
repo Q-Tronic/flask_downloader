@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from flask_downloader.iptv_gateway import ConnectionRegistry, create_gateway_app
+from flask_downloader.iptv_gateway import ConnectionRegistry, ReleasingIterable, create_gateway_app
 from flask_downloader.services.iptv_catalog_service import IptvCatalogRepository, IptvVodScanner
 from flask_downloader.services.iptv_openwebif import (
     OpenWebifClient,
@@ -259,6 +259,7 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(206, movie.status_code)
         self.assertEqual(b"2345", movie.data)
         movie.close()
+        self.assertEqual(0, self.client.get("/healthz").get_json()["active_connections"])
 
     def test_invalid_password_is_rejected(self):
         response = self.client.get("/player_api.php", query_string={"username": "salon-user", "password": "wrong"})
@@ -276,6 +277,23 @@ class GatewayTests(unittest.TestCase):
         self.assertIn("limit", error.lower())
         registry.release(token)
         self.assertEqual(0, registry.total())
+
+    def test_releasing_iterable_releases_once_after_exhaustion_or_close(self):
+        releases = []
+        wrapped = ReleasingIterable(iter([b"a", b"b"]), lambda: releases.append("released"))
+        self.assertEqual([b"a", b"b"], list(wrapped))
+        wrapped.close()
+        self.assertEqual(["released"], releases)
+
+    def test_head_requests_do_not_reserve_connection_slots(self):
+        live = self.client.head("/live/salon-user/Test-pass_123/1001.ts")
+        movie = self.client.head("/movie/salon-user/Test-pass_123/2001.mp4")
+        health = self.client.get("/healthz").get_json()
+        self.assertEqual(200, live.status_code)
+        self.assertEqual(200, movie.status_code)
+        self.assertEqual(0, health["active_connections"])
+        live.close()
+        movie.close()
 
 
 class UpdateFinalizeTests(unittest.TestCase):
