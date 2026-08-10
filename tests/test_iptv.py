@@ -147,6 +147,60 @@ class IptvServiceTests(unittest.TestCase):
             self.assertEqual(1700000000, runtime["last_success_at"])
             self.assertEqual(200, runtime["channel_count"])
 
+    def test_channel_catalog_preserves_decoder_bouquet_and_service_order(self):
+        class FakeDecoderClient:
+            def list_bouquets(self, include_counts=False):
+                return [
+                    {"reference": "bouquet-z", "name": "Z bukiet"},
+                    {"reference": "bouquet-a", "name": "A bukiet"},
+                ]
+
+            def list_services(self, bouquet_reference):
+                if bouquet_reference == "bouquet-z":
+                    return [
+                        {"reference": "1:0:19:10:2:3:4:0:0:0:", "name": "Kanał 10"},
+                        {"reference": "1:0:19:2:2:3:4:0:0:0:", "name": "Kanał 2"},
+                    ]
+                return [
+                    {"reference": "1:0:19:1:2:3:4:0:0:0:", "name": "Kanał 1"},
+                ]
+
+            def get_epg(self, service_reference):
+                return []
+
+        with tempfile.TemporaryDirectory() as directory:
+            store_path = os.path.join(directory, "iptv.json")
+            config_path = os.path.join(directory, "config.json")
+            with open(config_path, "w", encoding="utf-8") as handle:
+                json.dump({}, handle)
+            write_iptv_store(store_path, default_iptv_store())
+            service = IptvService(
+                store_file=store_path,
+                runtime_dir=os.path.join(directory, "runtime"),
+                app_config_file=config_path,
+            )
+            profile = {
+                "id": "salon",
+                "dvb_only": True,
+                # Zapisana kolejność może pochodzić ze starszej, alfabetycznej wersji panelu.
+                "selected_bouquets": [
+                    {"reference": "bouquet-a", "name": "A bukiet"},
+                    {"reference": "bouquet-z", "name": "Z bukiet"},
+                ],
+            }
+            decoder = FakeDecoderClient()
+
+            with mock.patch.object(service, "_update_runtime"), mock.patch.object(
+                service,
+                "_client_for_profile",
+                return_value=decoder,
+            ):
+                categories, channels, _, _ = service._build_channel_catalog(profile, decoder, {"epg": {}})
+
+            self.assertEqual(["Z bukiet", "A bukiet"], [item["category_name"] for item in categories])
+            self.assertEqual(["Kanał 10", "Kanał 2", "Kanał 1"], [item["name"] for item in channels])
+            self.assertEqual([1, 2, 3], [item["num"] for item in channels])
+
 
 class GatewayTests(unittest.TestCase):
     def setUp(self):

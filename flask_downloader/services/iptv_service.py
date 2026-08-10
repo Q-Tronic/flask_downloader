@@ -19,7 +19,6 @@ from werkzeug.security import check_password_hash
 from flask_downloader.services.iptv_catalog_service import (
     IptvCatalogRepository,
     IptvVodScanner,
-    natural_sort_key,
     stable_numeric_id,
     stable_text_id,
 )
@@ -225,12 +224,15 @@ class IptvService:
             except Exception as exc:
                 return {**bouquet, "channel_count": 0, "network_count": 0, "total_count": 0, "error": str(exc)}
 
-        counted = []
+        counted = [None] * len(bouquets)
         with ThreadPoolExecutor(max_workers=6) as executor:
-            futures = [executor.submit(load_counts, bouquet) for bouquet in bouquets]
-            for future in as_completed(futures):
-                counted.append(future.result())
-        counted.sort(key=lambda item: natural_sort_key(item.get("name")))
+            future_indexes = {
+                executor.submit(load_counts, bouquet): index
+                for index, bouquet in enumerate(bouquets)
+            }
+            for future in as_completed(future_indexes):
+                counted[future_indexes[future]] = future.result()
+        counted = [item for item in counted if item is not None]
         return {
             "profile_id": profile_id,
             "about": about,
@@ -427,6 +429,25 @@ class IptvService:
         selected = list(profile.get("selected_bouquets") or [])
         if not selected:
             raise ValueError("W profilu nie wybrano żadnego bukietu kanałów.")
+        decoder_bouquets = client.list_bouquets(include_counts=False)
+        decoder_order = {
+            str(item.get("reference") or "").strip(): index
+            for index, item in enumerate(decoder_bouquets)
+            if str(item.get("reference") or "").strip()
+        }
+        selected = [
+            bouquet
+            for original_index, bouquet in sorted(
+                enumerate(selected),
+                key=lambda pair: (
+                    decoder_order.get(
+                        str(pair[1].get("reference") or "").strip(),
+                        len(decoder_order) + pair[0],
+                    ),
+                    pair[0],
+                ),
+            )
+        ]
         categories = []
         channels = []
         seen_references = set()
@@ -476,7 +497,6 @@ class IptvService:
                 })
                 channels.extend(category_channels)
 
-        channels.sort(key=lambda item: (natural_sort_key(item.get("category_name")), natural_sort_key(item.get("name"))))
         for number, channel in enumerate(channels, start=1):
             channel["num"] = number
 
