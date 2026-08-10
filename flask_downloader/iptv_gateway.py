@@ -485,8 +485,10 @@ def create_gateway_app(store_file=IPTV_FILE, runtime_dir=IPTV_RUNTIME_DIR):
     return app
 
 
+app = create_gateway_app()
+
+
 def main():
-    app = create_gateway_app()
     store = load_iptv_store(IPTV_FILE)
     settings = store.get("settings") or {}
     host = str(os.environ.get("FLASK_DOWNLOADER_IPTV_HOST") or settings.get("bind_host") or "0.0.0.0")

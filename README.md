@@ -110,6 +110,7 @@ http://IP_SERWERA:9999/
 - osobne profile dekoderów i osobne konta dla każdego profilu,
 - automatyczne pobieranie bukietów i EPG przez OpenWebif,
 - zgodność z klientami M3U/XMLTV oraz Xtream, m.in. Ultimate IPTV Playlist Loader i IBO,
+- odseparowana bramka `Gunicorn gthread` na porcie `9988`, odporna na długie połączenia streamingu,
 - opcjonalny katalog VOD z istniejących plików w lokalnym lub sieciowym storage,
 - codzienna aktualizacja list o 02:00 z zachowaniem ostatniego poprawnego katalogu, jeśli dekoder jest offline,
 - ręczne odświeżanie i sterowanie bramką bez przeładowania panelu.

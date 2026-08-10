@@ -192,7 +192,7 @@ main() {
         -e "s|__ENV_FILE__|$env_file|g" \
         -e "s|__PYTHON_BIN__|$APP_DIR/.venv/bin/python|g" \
         "$iptv_template" > "$iptv_unit"
-    if ! grep -q '^FLASK_DOWNLOADER_IPTV_SERVICE_NAME=' "$env_file"; then
+    if [[ ! -f "$env_file" ]] || ! grep -q '^FLASK_DOWNLOADER_IPTV_SERVICE_NAME=' "$env_file"; then
         printf '\nFLASK_DOWNLOADER_IPTV_SERVICE_NAME=%s\n' "$IPTV_SERVICE_NAME" >> "$env_file"
     fi
     chown "$APP_USER:$APP_GROUP" "$env_file" 2>/dev/null || true

@@ -10,7 +10,7 @@ Group=__APP_GROUP__
 WorkingDirectory=__APP_DIR__
 EnvironmentFile=-__ENV_FILE__
 Environment=PYTHONUNBUFFERED=1
-ExecStart=__PYTHON_BIN__ -m flask_downloader.iptv_gateway
+ExecStart=__PYTHON_BIN__ -m gunicorn --config python:flask_downloader.iptv_gunicorn flask_downloader.iptv_gateway:app
 Restart=always
 RestartSec=3
 TimeoutStopSec=20
